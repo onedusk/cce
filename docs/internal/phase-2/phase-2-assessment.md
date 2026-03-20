@@ -1,127 +1,127 @@
 # Phase 2 Assessment
 
-> Synthesized from all internal docs. Captures where we are, what must happen before Phase 2, and how Phase 2 should be structured.
+> Living document. Captures current state, decisions made, and Phase 2 plan.
+>
+> Last updated: 2026-03-20
 
 ---
 
-## 1. Phase 1 Status
+## 1. Phase 1 Status: Complete
 
-**Core loop: proven.** The pipeline runs end-to-end: Discover → Extract → Store → Write → Verify → Gate → Publish.
+**Core loop: proven across 3 wellness dimensions.** 7 live runs, last 4 all PASS on iteration 1.
 
-**Most recent run** (March 19, 2026 — 3rd run, CBT-I topic, `output/run_2bbfadf44ed4/`):
-- Status: `completed` (PASS on iteration 2)
-- 785 evidence excerpts from 15 trusted sources in 2.7s discovery
-- ~4,000-word article with dense inline citations
-- Confidence: 0.986, Coverage: 0.986, Diversity: 1.0
-- Gate 1: FAIL (0.971 confidence, citation density 86% < 90% threshold)
-- Gate 2: PASS (0.986 confidence, density met)
-- Total pipeline time: ~9.5 minutes (write-verify loop dominates)
+| Metric | Range across runs 4-7 |
+|--------|-----------------------|
+| Confidence | 0.81 — 0.97 |
+| Coverage | 0.90 — 0.97 |
+| Diversity | 0.87 — 1.0 |
+| Evidence leakage | 0% (all runs) |
+| Pipeline time | 3.5 — 5 min |
+| Evidence (capped) | 75 per run |
 
-**Test suite: complete.** 147 tests across 11 files, all passing in 0.15s. Covers parsing, models, discovery (unit + integration), quality gate, verifier, writer, SQLite storage, config/policy loading, pipeline orchestration, and output serialization.
+**Topics validated:** CBT-I (emotional/physical), financial literacy (financial), social connectedness (social). See `docs/internal/run-log.md` for full run history.
 
-**What's NOT done from Phase 1:**
-- End-to-end validation on 3-5 real topics (3 runs completed on CBT-I, need additional topics)
-- Two outstanding issues from first-run review (see Section 2)
+**Test suite:** 150 tests, all passing. Covers all pipeline modules.
 
-**Bug fix status** (verified against 3rd run — `output/run_2bbfadf44ed4/`):
+**All P0-P4 bugs resolved:**
+- P0 (JSON parsing): Fixed
+- P1 (evidence volume): Fixed — simple cap shipped (746-1,440 raw → 75 capped)
+- P2 (diversity formula): Fixed
+- P3 (citation density): Manageable — all capped runs pass on iteration 1
+- P4 (stage tracking): Fixed — per-iteration write/verify timing
 
-| Bug | Status | Evidence from 3rd run |
-|-----|--------|----------------------|
-| P0: JSON parsing failure | **FIXED** | Both iterations parsed. Gate 1: 0.971, Gate 2: 0.986. Status: `completed` |
-| P1: Evidence volume | **OPEN** | 785 excerpts (was 794). No capping implemented |
-| P2: Diversity formula | **FIXED** | Diversity = 1.0 (was 0.019) |
-| P3: Citation density | **Manageable** | Still triggers FAIL on iter 1 (86% density < 90% threshold), but iter 2 passes. Loop recovers |
-| P4: Stage tracking | **OPEN** | Stages: discover, write, publish. No per-iteration tracking |
+**First-run-review docs** (`docs/internal/first-run-review/`) have been archived. They described bugs from runs 1-2, all resolved.
 
 ---
 
-## 2. Remaining Work Before Phase 2
+## 2. Decisions Made
 
-Two issues worth addressing before adding Phase 2 abstractions:
+### Evidence Capping Strategy: Two-Stage (decided 2026-03-20)
 
-### P1: Evidence Volume Too High
+**Stage 1 (shipped):** Simple cap in `Discoverer._cap_evidence()` — per-source max (5 excerpts, longest preferred) + global cap (100 total). Config fields on `CrawlConfig`: `max_excerpts_per_source`, `max_evidence_total`.
 
-**Problem:** 785 excerpts from paragraph-level chunking. No relevance filtering between discovery and synthesis. Writer and verifier receive all 785 in prompts.
+**Stage 2 (Phase 2):** Embedding-based relevance ranking — score excerpts against topic query, keep top-K most relevant. Replaces length-based selection with semantic selection.
 
-**Impact:** Higher cost, slower pipeline (~10 min write-verify), scalability risk as topics grow.
+### Embedding Approach: Ollama + sqlite-vec (decided 2026-03-20)
 
-**Fix options:**
-- **Short-term:** Simple cap — dedup by content hash + per-source max (e.g., top 5 excerpts per URL) → ~75 excerpts
-- **Long-term:** Embedding-based relevance ranking — score excerpts against topic, keep top-K
+**Embedding model:** `nomic-embed-text-v2-moe` (MoE architecture, 768 dims, already installed locally via Ollama)
 
-**Decision needed:** Which approach first? Simple cap is faster but less precise. Embedding approach is more robust but adds a dependency.
+**Embedding generation:**
+- Ollama HTTP API (`POST http://localhost:11434/api/embed`) — no SDK needed, `httpx` already available
+- Protocol-based `EmbeddingProvider` (like `LLMProvider`) for swappable backends
 
-**Ref:** project memory `project_evidence_capping.md`
+```
+EmbeddingProvider (protocol)
+  ├── OllamaEmbeddingProvider  (Phase 2 — local dev)
+  └── APIEmbeddingProvider     (Phase 3 — deployment)
+```
 
-### P4: Write-Verify Loop Not Tracked in Stage Records
+**Vector storage & search:** `sqlite-vec` (v0.1.7, 7.2k stars, MIT/Apache-2)
+- SQLite extension that adds vector search to existing SQLite databases
+- `pip install sqlite-vec` — one small dependency, loads via `sqlite_vec.load(db)`
+- `vec0` virtual tables with built-in KNN via `WHERE embedding MATCH :query AND k = N`
+- Built-in `vec_distance_cosine()` — no hand-written cosine similarity needed
+- Metadata filtering during KNN queries (filter by URL, source quality, date)
+- Works with `aiosqlite` — loads into the underlying `sqlite3.Connection`
 
-**Problem:** Stages show only `discover` (2.7s), `write` (9m 36s), `publish` (<1s). No per-iteration breakdown within the write stage.
+**Why sqlite-vec over hand-written cosine:**
+- Eliminates manual vector math — KNN search is a SQL query
+- Metadata columns allow filtering during search (e.g., only peer-reviewed sources)
+- Same DB for evidence + embeddings — no second system
+- Deployment path stays SQLite: Turso and Cloudflare D1 both support sqlite-vec
+- Avoids the eventual need for pgvector/Postgres entirely (unless scale demands it)
 
-**Impact:** No visibility into per-iteration timing. Hard to diagnose performance.
+**Why not pgvector:**
+- We're on SQLite everywhere (evidence store, local dev, planned deployment)
+- Our vector scale is small (~75-1500 per run) — sqlite-vec handles this easily
+- pgvector requires Postgres infrastructure — overkill for Phase 2-3
+- sqlite-vec can be revisited if we outgrow SQLite's limits (unlikely for this use case)
 
-**Fix:** Record `StageRecord` per write-verify iteration in `pipeline.py`.
+**Dependencies:** `sqlite-vec` (PyPI package). Ollama is local infrastructure.
 
-### Resolved / Manageable
-
-- **P0 (JSON parsing):** Fixed. Verifier JSON parsed correctly in all 3 runs since fix.
-- **P2 (diversity formula):** Fixed. Confirmed `1.0` in 3rd run.
-- **P3 (citation density):** Still causes FAIL on iteration 1 when density is 86% (threshold 90%), but the write-verify loop handles it — iteration 2 passes. Could lower `min_citation_density_ratio` from 0.9 to 0.8 if the extra iteration is costly, but the loop is working as designed.
-
-### Note on first-run-review docs
-
-The documents in `docs/internal/first-run-review/` describe bugs from the 1st run (March 17). Most were fixed by the 3rd run (March 19, `output/run_2bbfadf44ed4/`). These docs should be archived or annotated as historical — they no longer reflect current state.
+**Note:** Ollama must be running locally for embedding generation. Pipeline should fall back to length-based cap if embeddings are unavailable.
 
 ---
 
 ## 3. Phase 2 Scope
 
-Phase 2 extracts Thnk Labs-specific logic into pluggable configuration. Three workstreams from `content-curation-engine-next-steps.md`:
+Three workstreams: plugin architecture, embedding ranking, and source policy refinement.
 
 ### 2.1: TaxonomyPlugin Interface
 
-**What:** Formalize the 8 well-being dimensions as a plugin that other products can replace with their own taxonomy (practice areas for legal, product categories for e-commerce, etc.).
+Formalize the 8 well-being dimensions as a plugin. Other products replace with their own taxonomy.
 
 **Protocol exports:**
-- Tag list (the set of valid tags/categories)
+- Tag list (valid tags/categories)
 - Classifier function (given evidence + content, assign tags)
-- Optional hierarchy (parent-child relationships between tags)
+- Optional hierarchy (parent-child relationships)
 
-**Location:** `src/cce/tagging/` (directory already planned in `package-structure.md`)
-
-**Design from `content-curation-engine-generic.md`:**
-```
-TaxonomyConfig:
-  id: str
-  dimensions: list[Dimension]  # tag definitions
-  classifier: ClassifierConfig  # LLM prompt or rules-based
-```
+**Location:** `src/cce/tagging/`
 
 ### 2.2: PathPlugin Interface
 
-**What:** Formalize Learn/Explore/Apply as a plugin. Each path is a different rendering strategy over the same evidence graph, not a separate pipeline.
+Formalize Learn/Explore/Apply as a plugin. Each path is a different rendering strategy over the same evidence graph, not a separate pipeline.
 
 **Protocol exports:**
-- Path list (the set of output paths)
+- Path list (output paths)
 - Rendering strategy per path
 - Writer prompt overrides per path (tone, structure, depth)
 
-**Key principle:** "Treat your output paths as different renderers over the same evidence graph, not separate research pipelines." (from `content-curation-engine.md`)
+### 2.3: Embedding-Based Evidence Ranking
 
-**Design from `content-curation-engine-generic.md`:**
-```
-PathConfig:
-  id: str
-  paths: list[OutputPath]  # path definitions
-  rendering: dict[str, RenderingStrategy]  # per-path writer config
-```
+Replace length-based cap with semantic relevance ranking using sqlite-vec.
 
-### 2.3: Source Policy as Config
+**Components:**
+- `EmbeddingProvider` protocol in `discovery/embeddings.py` + `OllamaEmbeddingProvider`
+- `vec0` virtual table in `SQLiteEvidenceStore` for vector storage + KNN search
+- Ranking integrated into `Discoverer.discover()` after extraction, before cap
+- `sqlite-vec` extension loaded in `SQLiteEvidenceStore.connect()`
 
-**What:** Move any remaining hardcoded source rules to YAML configuration with per-topic overrides.
+### 2.4: Source Policy Refinement
 
-**Status:** Largely done in Phase 1. `policy/loader.py` already loads from YAML. `policies/peer-reviewed.yaml` exists as reference. `TopicOverride` supports per-topic domain/reputation/recency adjustments. The `Discoverer._resolve_overrides()` method applies them.
-
-**Remaining work:** Verify that all policy logic is config-driven, add additional example policies, document the policy authoring format.
+Policy loading is already config-driven. Remaining work:
+- Add example policies for non-medical domains (financial, social, general)
+- Document the policy authoring format
 
 ---
 
@@ -131,47 +131,55 @@ PathConfig:
 
 ```
 src/cce/
-├── tagging/                    ← NEW (Phase 2)
+├── discovery/
+│   └── embeddings.py          ← NEW: EmbeddingProvider protocol + OllamaEmbeddingProvider
+├── evidence/
+│   └── sqlite.py              ← MODIFIED: load sqlite-vec, add vec0 table, embed + KNN search methods
+├── tagging/                   ← NEW
 │   ├── __init__.py
-│   ├── taxonomy.py             ← TaxonomyPlugin protocol + registry
-│   ├── paths.py                ← PathPlugin protocol + registry
-│   └── plugins/                ← Reference implementations
+│   ├── taxonomy.py            ← TaxonomyPlugin protocol + registry
+│   ├── paths.py               ← PathPlugin protocol + registry
+│   └── plugins/               ← Reference implementations
 │       ├── __init__.py
-│       ├── wellbeing.py        ← Thnk Labs: 8 dimensions
+│       ├── wellbeing.py       ← Thnk Labs: 8 dimensions
 │       └── learn_explore_apply.py  ← Thnk Labs: 3 paths
 ├── models/
-│   ├── taxonomy.py             ← NEW: TaxonomyConfig, Dimension, ClassifierConfig
-│   └── path_config.py          ← NEW: PathConfig, OutputPath, RenderingStrategy
+│   ├── taxonomy.py            ← NEW: TaxonomyConfig, Dimension
+│   └── path_config.py         ← NEW: PathConfig, OutputPath, RenderingStrategy
 ```
 
-### Dependency Flow (Extended)
+### Dependency Flow
 
 ```
 config/ + models/ (roots, no deps)
   ↓
 policy/ ← models
   ↓
-discovery/ ← models, policy, config, adapters
+discovery/ ← models, policy, config, adapters, embeddings
 evidence/ ← models, config
   ↓
-tagging/ ← models, evidence, llm, config       ← NEW
-synthesis/ ← models, evidence, llm, config, tagging  ← MODIFIED (receives path config)
+tagging/ ← models, evidence, llm, config
+synthesis/ ← models, evidence, llm, config, tagging (receives path config)
 verification/ ← models, evidence, policy, llm, config
   ↓
-orchestrator/ ← all pipeline modules, config    ← MODIFIED (wires tagging into pipeline)
+orchestrator/ ← all pipeline modules, config (wires tagging + ranking)
 ```
 
-### Pipeline Flow (Extended)
+### Pipeline Flow
 
 ```
 CurationRequest
   ↓
-SourcePolicy → Discoverer → EvidenceStore
+SourcePolicy → Discoverer → extract → simple cap
   ↓
-TaxonomyPlugin.classify(evidence) → tagged evidence    ← NEW
+EmbeddingProvider → embed excerpts → EvidenceStore (sqlite-vec vec0 table)
+  ↓
+KNN query (topic embedding MATCH, k=N) → relevance-ranked evidence
+  ↓
+TaxonomyPlugin.classify(evidence) → tagged evidence
   ↓
 For each path in PathPlugin.paths:
-  PathPlugin.get_writer_config(path) → writer overrides  ← NEW
+  PathPlugin.get_writer_config(path) → writer overrides
   Writer(overrides) → Verifier → QualityGate
   ↓
 PublishPackage (units tagged + path-specific)
@@ -181,86 +189,63 @@ PublishPackage (units tagged + path-specific)
 
 ## 5. Open Design Questions
 
-### Evidence Capping (P1)
+### Where does tagging happen in the pipeline?
 
-| Approach | Pros | Cons |
-|----------|------|------|
-| Simple cap (dedup + per-source max) | Fast to implement, no new deps | Misses relevance — top 5 per source may not be the best 5 |
-| Embedding-based ranking | Precise, topic-aware | Adds embedding model dependency, latency, cost |
-| Two-stage (simple cap first, embeddings later) | Incremental, unblocks Phase 2 | Two implementations to maintain |
+Before synthesis (classify evidence, writer uses tags for context) or after (classify finished content)? Affects how TaxonomyPlugin integrates with the orchestrator.
 
-**Recommendation:** Simple cap first (P1 fix), embedding-based as Phase 2 enhancement when TaxonomyPlugin needs relevance scoring anyway.
+### Does the TaxonomyPlugin need an LLM call?
 
-### Humanization Verifier
+Rules-based classifier (keywords, domain patterns) is cheaper and deterministic. LLM classifier is more flexible but adds cost per run. Which for v1?
 
-From `docs/internal/research/mitigations.md`: a separate LLM critic that checks for AI fingerprints (vocabulary, burstiness, structural rigidity) and sends flagged sections back to the writer.
+### How do PathPlugin writer overrides work?
 
-| Integration point | Pros | Cons |
-|-------------------|------|------|
-| Parallel with citation verifier | Doesn't add iterations | Two LLM calls per verify step |
-| Sequential after citation verifier | Simpler flow | Adds iteration if humanization fails |
-| Quality gate expansion (programmatic only) | No extra LLM cost | Limited to measurable signals (vocab, burstiness) |
+Different system prompt per path? Different temperature/max length? Or a context string appended to the existing prompt?
 
-**Recommendation:** Start with programmatic checks in the quality gate (vocab frequency, sentence length variance). Defer LLM-based humanization critic to Phase 2.5 or Phase 3.
+### Should citation density threshold be lowered?
 
-### Deployment Infrastructure
+All capped runs pass on iteration 1, so this is low urgency. But 90% threshold could still cause unnecessary FAILs on edge cases. Consider lowering to 80%.
 
-From `content-curation-engine-next-steps.md`:
-- Evidence store: SQLite local → Cloudflare D1 for deployment?
-- LLM provider: Anthropic only → OpenAI adapter?
-- Hosting: Fly.io vs. traditional VPS?
+### Is humanization in or out of Phase 2?
 
-**Recommendation:** Defer deployment decisions to Phase 3 (API layer). Phase 2 is about abstractions, not infrastructure. Keep SQLite + Anthropic for now.
+Options: programmatic checks only (vocab, burstiness) in the quality gate, full LLM critic, or defer entirely to Phase 3.
 
 ---
 
-## 6. Sequencing Recommendation
+## 6. Sequencing
 
-### Before Phase 2 (Bug Fixes)
-
-| Priority | Task | Effort | Dependency |
-|----------|------|--------|------------|
-| P0 | Fix verifier JSON parsing | 1-2 hours | None |
-| P1 | Simple evidence cap (dedup + per-source max) | 2-4 hours | None |
-| P3 | Soften citation density (threshold adjustment) | 30 min | None |
-| P4 | Add write-verify stage tracking | 1-2 hours | None |
-| — | Run end-to-end on 2-4 more topics | 2-3 hours | P0 fix |
-
-P2 (diversity formula) is already fixed. These can be parallelized — P0, P1, P3, P4 are independent.
-
-### Phase 2 (Plugin Architecture)
+### Phase 2 Implementation
 
 | Order | Task | Effort | Dependency |
 |-------|------|--------|------------|
-| 2.1a | Define `TaxonomyConfig` + `Dimension` models in `models/` | 1-2 hours | None |
-| 2.1b | Define `TaxonomyPlugin` protocol in `tagging/taxonomy.py` | 1-2 hours | 2.1a |
-| 2.1c | Implement Thnk Labs well-being taxonomy plugin | 2-3 hours | 2.1b |
-| 2.2a | Define `PathConfig` + `OutputPath` models in `models/` | 1-2 hours | None |
-| 2.2b | Define `PathPlugin` protocol in `tagging/paths.py` | 1-2 hours | 2.2a |
-| 2.2c | Implement Learn/Explore/Apply path plugin | 2-3 hours | 2.2b |
-| 2.3 | Wire tagging into pipeline orchestrator | 2-4 hours | 2.1c, 2.2c |
-| 2.4 | Update writer to accept path-specific config | 1-2 hours | 2.2c |
-| 2.5 | Add programmatic humanization checks to gate | 2-3 hours | Independent |
-| 2.6 | Tests for all new code | 4-6 hours | All above |
+| 2.1a | Define `TaxonomyConfig` + `Dimension` models | 1-2h | None |
+| 2.1b | Define `TaxonomyPlugin` protocol | 1-2h | 2.1a |
+| 2.1c | Implement well-being taxonomy plugin | 2-3h | 2.1b |
+| 2.2a | Define `PathConfig` + `OutputPath` models | 1-2h | None |
+| 2.2b | Define `PathPlugin` protocol | 1-2h | 2.2a |
+| 2.2c | Implement Learn/Explore/Apply path plugin | 2-3h | 2.2b |
+| 2.3a | Define `EmbeddingProvider` protocol + Ollama impl | 2-3h | None |
+| 2.3b | Add sqlite-vec to evidence store (vec0 table, embed + KNN methods) | 2-3h | 2.3a |
+| 2.3c | Integrate embedding ranking into discovery pipeline | 1-2h | 2.3b |
+| 2.4 | Wire tagging + ranking into orchestrator | 2-4h | 2.1c, 2.2c, 2.3c |
+| 2.5 | Update writer to accept path-specific config | 1-2h | 2.2c |
+| 2.6 | Tests for all new code | 4-6h | All above |
 
-**Parallelizable:** 2.1 and 2.2 tracks can run in parallel. 2.5 is independent.
-
-**Total estimated effort:** ~20-30 hours for full Phase 2.
+**Parallelizable:** 2.1, 2.2, and 2.3 tracks are independent. 2.4 is the convergence point.
 
 ---
 
-## 7. Explicitly Deferred
+## 7. Explicitly Deferred (Phase 3+)
 
-These are Phase 3+ concerns. Do not scope into Phase 2.
-
-- **REST API layer** — endpoints, job orchestration, stage checkpointing
-- **TypeScript SDK** — remote mode client
-- **Webhook system** — polling is fine for early consumers
-- **Embedded SDK mode** — service deployment first
-- **Plugin CRUD via API** — config files are adequate
-- **Multi-tenant isolation** — single-tenant first
-- **A2A support** — add when second agent needed
-- **LLM-based humanization critic** — start with programmatic checks
+- REST API layer
+- TypeScript SDK
+- Webhook system
+- Embedded SDK mode
+- Plugin CRUD via API
+- Multi-tenant isolation
+- A2A support
+- LLM-based humanization critic
+- Deployment infrastructure (hosting, API-based embeddings)
+- pgvector / Postgres — only if sqlite-vec + Turso/D1 can't handle scale
 
 ---
 
@@ -268,14 +253,12 @@ These are Phase 3+ concerns. Do not scope into Phase 2.
 
 | Document | Key Contribution |
 |----------|-----------------|
-| `content-curation-engine.md` | Thnk Labs-specific architecture, Learn/Explore/Apply paths |
-| `content-curation-engine-generic.md` | Plugin interfaces (TaxonomyPlugin, PathPlugin), configuration-driven design |
+| `content-curation-engine.md` | Thnk Labs architecture, Learn/Explore/Apply paths |
+| `content-curation-engine-generic.md` | Plugin interfaces, configuration-driven design |
 | `content-curation-engine-next-steps.md` | Phase roadmap, sequencing, deferral decisions |
-| `content-curation-engine-landscape.md` | Market validation, gap analysis, competitive positioning |
-| `package-structure.md` | Directory layout, dependency flow, `tagging/` placement |
-| `first-run-review/run-summary.md` | Live execution data (794 excerpts, 64 citations, 0% leakage) |
-| `first-run-review/findings.md` | P0-P5 issues with root causes |
-| `first-run-review/recommendations.md` | Fix prioritization and approaches |
-| `research/ai_writing_vs_human_writing.md` | AI fingerprint science, detection methods |
-| `research/mitigations.md` | Vocabulary suppression, burstiness, humanization verifier design |
-| `tests/test-plan.md` | Test coverage blueprint (147 tests, all implemented) |
+| `content-curation-engine-landscape.md` | Market validation, gap analysis |
+| `package-structure.md` | Directory layout, dependency flow |
+| `run-log.md` | All live run metrics and observations |
+| `research/ai_writing_vs_human_writing.md` | AI fingerprint science |
+| `research/mitigations.md` | Humanization strategies |
+| `tests/test-plan.md` | Test coverage blueprint |

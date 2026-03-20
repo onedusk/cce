@@ -93,8 +93,8 @@ async def main():
 
     # --- Build request ---
     request = CurationRequest(
-        topic="cognitive behavioral therapy for insomnia",
-        subtopics=["efficacy", "protocols", "digital CBT-I"],
+        topic="social connectedness and its impact on health outcomes",
+        subtopics=["loneliness epidemic", "community belonging", "digital vs in-person social bonds"],
         paths=["summary"],
         audience="general",
         policy_id="peer-reviewed",
