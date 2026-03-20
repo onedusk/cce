@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cce"
+version = "0.1.0"
+description = "Evidence-first content curation engine with enforced citations"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+    "anthropic>=0.40",
+    "firecrawl-py>=1.0",
+    "aiosqlite>=0.20",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cce"]
+
+[tool.ruff]
+src = ["src"]
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "unit: Fast tests with no I/O or external dependencies",
+    "integration: Tests using real I/O (SQLite, filesystem) with mocked external services",
+    "slow: Tests that take >1s (multi-iteration pipeline loops)",
+    "e2e: End-to-end tests requiring real ANTHROPIC_API_KEY and FIRECRAWL_API_KEY",
+]
