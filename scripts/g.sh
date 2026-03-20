@@ -1,6 +1,5 @@
 #!/bin/bash
 
-git init;
 git s-p onedusk;
 git add -A;
 git commit -m "first commit";
