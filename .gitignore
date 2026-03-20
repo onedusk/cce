@@ -45,3 +45,6 @@ htmlcov/
 .ruff_cache/
 evidence_live.db-journal
 evidence_live.db
+
+.ctxt/
+.arc/
