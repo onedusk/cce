@@ -1,0 +1,30 @@
+id: peer-reviewed
+name: Peer-Reviewed Sources
+domains_allow: []
+domains_deny:
+  - reddit.com
+  - quora.com
+  - medium.com
+  - pinterest.com
+  - facebook.com
+  - twitter.com
+  - tiktok.com
+  - youtube.com
+  - amazon.com
+reputation:
+  require_peer_reviewed: false
+  require_primary_source: false
+  trusted_institutions:
+    - .gov
+    - .edu
+    - pubmed
+    - nih.gov
+    - who.int
+    - mayoclinic.org
+    - hopkinsmedicine.org
+    - sleepfoundation.org
+  block_marketing: true
+recency:
+  max_age_days: 1825  # 5 years
+  prefer_recent: true
+max_sources_per_run: 15
