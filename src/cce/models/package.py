@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from cce.models.content import ContentScores, ContentUnit
 from cce.models.evidence import Evidence
-from cce.models.job import JobStage, StageRecord
+from cce.models.job import StageRecord
 
 
 class PackageLineage(BaseModel):

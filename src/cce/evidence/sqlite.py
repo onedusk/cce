@@ -8,9 +8,6 @@ version check and ALTER TABLE statements in _ensure_schema().
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 import aiosqlite
 
 from cce.config.types import EvidenceStoreConfig

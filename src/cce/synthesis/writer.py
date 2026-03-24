@@ -73,6 +73,10 @@ def _build_evidence_block(evidence: list[Evidence]) -> str:
             meta_parts.append(f"Published: {ev.published_at.strftime('%Y-%m-%d')}")
         if ev.source_quality and ev.source_quality.domain_reputation:
             meta_parts.append(f"Reputation: {ev.source_quality.domain_reputation}")
+        if ev.source_quality and ev.source_quality.is_peer_reviewed:
+            meta_parts.append("Type: peer-reviewed")
+        if ev.source_quality and ev.source_quality.is_primary_source:
+            meta_parts.append("Type: primary-source")
 
         lines.append(f"--- EVIDENCE [{ev.id}] ---")
         lines.append(" | ".join(meta_parts))
@@ -117,11 +121,15 @@ class Writer:
 
         evidence_block = _build_evidence_block(evidence)
 
+        jurisdiction_line = ""
+        if request.constraints and request.constraints.jurisdiction:
+            jurisdiction_line = f"Jurisdiction/scope: {request.constraints.jurisdiction}\n"
+
         user_prompt = f"""Topic: {request.topic}
 Subtopics: {", ".join(request.subtopics) if request.subtopics else "None specified"}
 Target audience: {request.audience}
 Output path: {path}
-
+{jurisdiction_line}
 You have {len(evidence)} evidence excerpts to work with.
 
 === EVIDENCE START ===

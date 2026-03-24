@@ -112,8 +112,17 @@ class Pipeline:
             all_units: list[ContentUnit] = []
             all_gate_results: list[GateResult] = []
 
-            for path in request.paths:
-                job = self._update_job(job, JobStatus.RUNNING, JobStage.WRITE)
+            total_paths = len(request.paths)
+            for idx, path in enumerate(request.paths):
+                job = self._update_job(
+                    job,
+                    JobStatus.RUNNING,
+                    JobStage.WRITE,
+                    progress=JobProgress(completed=idx, total=total_paths),
+                )
+                logger.info(
+                    "Progress: path %d/%d ('%s')", idx + 1, total_paths, path
+                )
 
                 unit, gate_results = await self._write_verify_loop(
                     request=request,
@@ -282,7 +291,7 @@ class Pipeline:
             )
 
             # Gate decision
-            gate_result = gate.evaluate(unit, report, iteration)
+            gate_result = gate.evaluate(unit, report, iteration, evidence=evidence)
             gate_results.append(gate_result)
 
             if gate_result.should_publish:
@@ -310,6 +319,7 @@ class Pipeline:
         status: JobStatus,
         stage: JobStage | None = None,
         error_msg: str | None = None,
+        progress: JobProgress | None = None,
     ) -> Job:
         """Update job tracking fields."""
         job.status = status
@@ -317,6 +327,9 @@ class Pipeline:
 
         if stage is not None:
             job.stage = stage
+
+        if progress is not None:
+            job.progress = progress
 
         if status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.REVIEW_REQUIRED):
             job.completed_at = datetime.now(timezone.utc)

@@ -14,7 +14,8 @@ from dataclasses import dataclass
 from enum import Enum
 
 from cce.config.types import QualityGateConfig
-from cce.models.content import ContentScores, ContentUnit
+from cce.models.content import ContentUnit
+from cce.models.evidence import Evidence
 from cce.verification.verifier import VerificationReport
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,7 @@ class QualityGate:
         unit: ContentUnit,
         report: VerificationReport,
         iteration: int,
+        evidence: list[Evidence] | None = None,
     ) -> GateResult:
         """Decide whether to pass, fail, or route to review.
 
@@ -110,6 +112,18 @@ class QualityGate:
                 f">= {self._config.min_citations_per_paragraph} citation(s) "
                 f"(need {self._config.min_citation_density_ratio:.0%})."
             )
+
+        if evidence:
+            coi_count = sum(
+                1 for ev in evidence
+                if ev.source_quality and ev.source_quality.conflict_of_interest
+            )
+            if coi_count > 0:
+                logger.warning(
+                    "Gate: %d evidence source(s) flagged as potential conflict of "
+                    "interest (marketing/sponsored content)",
+                    coi_count,
+                )
 
         feedback = "\n".join(feedback_parts) if feedback_parts else "No issues found."
 

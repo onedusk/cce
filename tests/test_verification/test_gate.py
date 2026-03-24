@@ -2,8 +2,9 @@
 
 import pytest
 
+from cce.models.evidence import SourceQuality
 from cce.verification.gate import GateDecision, GateResult, QualityGate
-from tests.conftest import make_content_unit, make_gate_config, make_verification_report
+from tests.conftest import make_content_unit, make_evidence, make_gate_config, make_verification_report
 
 pytestmark = pytest.mark.unit
 
@@ -133,6 +134,43 @@ def test_gate_feedback_no_issues():
         conflicts=0,
     )
     assert result.feedback == "No issues found."
+
+
+def test_gate_coi_logged_not_in_feedback(caplog):
+    """COI is logged as a warning, not mixed into writer feedback."""
+    import logging
+
+    config = make_gate_config()
+    gate = QualityGate(config)
+    unit = make_content_unit(
+        content="A paragraph with enough words and a citation [ev:test_001] for the gate."
+    )
+    report = make_verification_report(confidence_score=0.9)
+    evidence = [
+        make_evidence(id="ev_clean"),
+        make_evidence(
+            id="ev_coi",
+            source_quality=SourceQuality(conflict_of_interest=True),
+        ),
+    ]
+    with caplog.at_level(logging.WARNING):
+        result = gate.evaluate(unit, report, iteration=1, evidence=evidence)
+    # COI should NOT be in writer feedback
+    assert "conflict of interest" not in result.feedback
+    # COI should be logged
+    assert any("conflict of interest" in r.message for r in caplog.records)
+
+
+def test_gate_feedback_no_coi_when_evidence_clean():
+    config = make_gate_config()
+    gate = QualityGate(config)
+    unit = make_content_unit(
+        content="A paragraph with enough words and a citation [ev:test_001] for the gate."
+    )
+    report = make_verification_report(confidence_score=0.95)
+    evidence = [make_evidence(id="ev_clean")]
+    result = gate.evaluate(unit, report, iteration=1, evidence=evidence)
+    assert "conflict of interest" not in result.feedback
 
 
 # ---------------------------------------------------------------------------

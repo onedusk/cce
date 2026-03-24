@@ -5,6 +5,7 @@ import json
 import pytest
 
 from cce.llm.base import LLMResponse
+from cce.models.evidence import SourceQuality
 from cce.verification.verifier import VERIFIER_SYSTEM_PROMPT, Verifier, VerificationReport
 from tests.conftest import MockLLMProvider, make_content_unit, make_evidence
 
@@ -169,6 +170,31 @@ def test_format_evidence():
     assert "[ev_002] (URL: https://b.com)" in result
     assert "Excerpt one." in result
     assert "Excerpt two." in result
+
+
+@pytest.mark.unit
+def test_format_evidence_quality_tags():
+    ev_pr = make_evidence(
+        id="ev_pr",
+        url="https://pubmed.org/123",
+        source_quality=SourceQuality(
+            is_peer_reviewed=True,
+            is_primary_source=True,
+        ),
+    )
+    ev_coi = make_evidence(
+        id="ev_coi",
+        url="https://spam.com/ad",
+        source_quality=SourceQuality(conflict_of_interest=True),
+    )
+    ev_plain = make_evidence(id="ev_plain", url="https://example.com")
+    result = Verifier._format_evidence([ev_pr, ev_coi, ev_plain])
+
+    assert "[peer-reviewed]" in result
+    assert "[primary-source]" in result
+    assert "[potential-COI]" in result
+    # Plain evidence should not have tags
+    assert "[ev_plain] (URL: https://example.com)\n" in result
 
 
 # ---------------------------------------------------------------------------

@@ -6,6 +6,8 @@ import pytest
 
 from cce.llm.base import LLMResponse
 from cce.models.content import ContentLineage
+from cce.models.evidence import SourceQuality
+from cce.models.request import CurationConstraints
 from cce.synthesis.writer import WRITER_SYSTEM_PROMPT, Writer, WriterOutput, _build_evidence_block
 from tests.conftest import MockLLMProvider, make_curation_request, make_evidence
 
@@ -27,6 +29,26 @@ def test_build_evidence_block_formatting():
     assert "Author: Author A" in block
     assert ev1.excerpt in block
     assert ev2.excerpt in block
+
+
+@pytest.mark.unit
+def test_build_evidence_block_peer_reviewed_tag():
+    ev = make_evidence(
+        id="ev_pr",
+        source_quality=SourceQuality(is_peer_reviewed=True),
+    )
+    block = _build_evidence_block([ev])
+    assert "Type: peer-reviewed" in block
+
+
+@pytest.mark.unit
+def test_build_evidence_block_primary_source_tag():
+    ev = make_evidence(
+        id="ev_ps",
+        source_quality=SourceQuality(is_primary_source=True),
+    )
+    block = _build_evidence_block([ev])
+    assert "Type: primary-source" in block
 
 
 @pytest.mark.unit
@@ -250,3 +272,21 @@ async def test_write_temperature():
     await writer.write(make_curation_request(), [ev], "blog")
 
     assert llm.calls[0]["temperature"] == 0.2
+
+
+@pytest.mark.integration
+async def test_write_includes_jurisdiction_in_prompt():
+    ev = make_evidence(id="ev_001")
+    raw_json = _make_writer_json()
+    llm = MockLLMProvider(
+        [LLMResponse(content=raw_json, model="mock", stop_reason="end_turn")]
+    )
+    writer = Writer(llm)
+    request = make_curation_request(
+        constraints=CurationConstraints(jurisdiction="US"),
+    )
+
+    await writer.write(request, [ev], "blog")
+
+    user_msg = llm.calls[0]["messages"][0].content
+    assert "Jurisdiction/scope: US" in user_msg

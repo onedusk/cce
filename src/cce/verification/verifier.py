@@ -256,7 +256,18 @@ traced to the evidence above should be flagged.
         """Format evidence for the verifier prompt."""
         lines: list[str] = []
         for ev in evidence:
-            lines.append(f"[{ev.id}] (URL: {ev.url})")
+            tags: list[str] = []
+            if ev.source_quality:
+                if ev.source_quality.is_peer_reviewed:
+                    tags.append("peer-reviewed")
+                if ev.source_quality.is_primary_source:
+                    tags.append("primary-source")
+                if ev.source_quality.conflict_of_interest:
+                    tags.append("potential-COI")
+            header = f"[{ev.id}] (URL: {ev.url})"
+            if tags:
+                header += " [" + "] [".join(tags) + "]"
+            lines.append(header)
             lines.append(ev.excerpt)
             lines.append("")
         return "\n".join(lines)

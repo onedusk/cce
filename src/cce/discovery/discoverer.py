@@ -18,8 +18,8 @@ from urllib.parse import urlparse
 from cce.config.types import CrawlConfig
 from cce.discovery.adapters.base import CrawlAdapter, CrawlRequest, CrawlResult
 from cce.models.evidence import Evidence, SourceQuality
-from cce.models.request import CurationRequest
-from cce.policy.types import RecencyRule, ReputationRule, SourcePolicy, TopicOverride
+from cce.models.request import CurationConstraints, CurationRequest
+from cce.policy.types import ReputationRule, SourcePolicy
 
 logger = logging.getLogger(__name__)
 
@@ -94,9 +94,11 @@ class Discoverer:
         ]
         crawl_results = await self._adapter.crawl_many(crawl_requests)
 
-        # Step 5: Extract and normalize (with in-run dedup by excerpt hash)
+        # Step 5: Extract, filter, and normalize (with in-run dedup by excerpt hash)
         evidence: list[Evidence] = []
         seen_hashes: set[str] = set()
+        filtered_date = 0
+        filtered_reputation = 0
         for result in crawl_results:
             if result.status_code == 0 or not result.markdown.strip():
                 logger.debug("Skipping empty or failed crawl: %s", result.url)
@@ -104,9 +106,22 @@ class Discoverer:
 
             extracted = self._extract_evidence(result, effective_policy)
             for ev in extracted:
+                if not self._passes_date_filter(ev, effective_policy, request.constraints):
+                    filtered_date += 1
+                    continue
+                if not self._passes_reputation_filter(ev, effective_policy.reputation):
+                    filtered_reputation += 1
+                    continue
                 if ev.excerpt_hash not in seen_hashes:
                     seen_hashes.add(ev.excerpt_hash)
                     evidence.append(ev)
+
+        if filtered_date or filtered_reputation:
+            logger.info(
+                "Discovery filters: %d dropped by date, %d dropped by reputation",
+                filtered_date,
+                filtered_reputation,
+            )
 
         # Step 6: Cap evidence volume
         before_cap = len(evidence)
@@ -114,6 +129,7 @@ class Discoverer:
             evidence,
             max_per_source=self._config.max_excerpts_per_source,
             max_total=self._config.max_evidence_total,
+            prefer_recent=effective_policy.recency.prefer_recent,
         )
 
         logger.info(
@@ -175,6 +191,74 @@ class Discoverer:
             )
             if not matched:
                 return False
+
+        return True
+
+    # -- Post-extraction filters --
+
+    @staticmethod
+    def _passes_date_filter(
+        ev: Evidence,
+        policy: SourcePolicy,
+        constraints: CurationConstraints | None,
+    ) -> bool:
+        """Check if evidence meets date constraints from request + policy.
+
+        Fail-open: evidence with no published_at always passes.
+        """
+        if ev.published_at is None:
+            return True
+
+        # Policy-level: max_age_days relative to retrieval time
+        if policy.recency.max_age_days is not None:
+            age_days = (ev.retrieved_at - ev.published_at).days
+            if age_days > policy.recency.max_age_days:
+                return False
+
+        # Request-level: absolute date bounds
+        if constraints:
+            if constraints.date_from:
+                try:
+                    lower = datetime.fromisoformat(
+                        constraints.date_from.replace("Z", "+00:00")
+                    )
+                    if ev.published_at < lower:
+                        return False
+                except (ValueError, TypeError):
+                    pass  # fail-open on bad/naive date
+
+            if constraints.date_to:
+                try:
+                    upper = datetime.fromisoformat(
+                        constraints.date_to.replace("Z", "+00:00")
+                    )
+                    if ev.published_at > upper:
+                        return False
+                except (ValueError, TypeError):
+                    pass  # fail-open on bad/naive date
+
+        return True
+
+    @staticmethod
+    def _passes_reputation_filter(
+        ev: Evidence,
+        reputation: ReputationRule,
+    ) -> bool:
+        """Check if evidence meets reputation hard filters.
+
+        Fail-open: evidence with no source_quality always passes.
+        """
+        if ev.source_quality is None:
+            return True
+
+        if reputation.require_peer_reviewed and not ev.source_quality.is_peer_reviewed:
+            return False
+
+        if reputation.require_primary_source and not ev.source_quality.is_primary_source:
+            return False
+
+        if reputation.block_marketing and ev.source_quality.conflict_of_interest:
+            return False
 
         return True
 
@@ -274,15 +358,29 @@ class Discoverer:
     # -- Evidence capping --
 
     @staticmethod
+    def _cap_sort_key(
+        ev: Evidence, prefer_recent: bool
+    ) -> tuple[float, int]:
+        """Build a sort key for evidence capping.
+
+        When prefer_recent is True, newer evidence ranks higher.
+        Ties broken by excerpt length (longer = more substantive).
+        """
+        recency = ev.published_at.timestamp() if prefer_recent and ev.published_at else 0.0
+        return (recency, len(ev.excerpt))
+
+    @staticmethod
     def _cap_evidence(
         evidence: list[Evidence],
         max_per_source: int,
         max_total: int,
+        prefer_recent: bool = False,
     ) -> list[Evidence]:
         """Cap evidence volume with per-source and global limits.
 
-        Per-source: keep the longest excerpts (more substantive) up to max_per_source.
+        Per-source: keep the best excerpts up to max_per_source.
         Global: truncate to max_total after per-source filtering.
+        When prefer_recent is True, newer evidence is preferred; ties broken by length.
         """
         if len(evidence) <= max_total:
             # Check if per-source cap is needed
@@ -290,6 +388,12 @@ class Discoverer:
             for ev in evidence:
                 by_url[ev.url].append(ev)
             if all(len(group) <= max_per_source for group in by_url.values()):
+                if prefer_recent:
+                    return sorted(
+                        evidence,
+                        key=lambda e: Discoverer._cap_sort_key(e, True),
+                        reverse=True,
+                    )
                 return evidence  # already within both caps
 
         # Group by source URL
@@ -297,15 +401,18 @@ class Discoverer:
         for ev in evidence:
             by_url[ev.url].append(ev)
 
-        # Per-source cap: keep longest excerpts
+        def _sort_key(e: Evidence) -> tuple[float, int]:
+            return Discoverer._cap_sort_key(e, prefer_recent)
+
+        # Per-source cap: keep best excerpts
         capped: list[Evidence] = []
         for url in by_url:
-            group = sorted(by_url[url], key=lambda e: len(e.excerpt), reverse=True)
+            group = sorted(by_url[url], key=_sort_key, reverse=True)
             capped.extend(group[:max_per_source])
 
         if len(capped) > max_total:
-            # Global cap: keep longest across all sources
-            capped.sort(key=lambda e: len(e.excerpt), reverse=True)
+            # Global cap: keep best across all sources
+            capped.sort(key=_sort_key, reverse=True)
             capped = capped[:max_total]
 
         dropped = len(evidence) - len(capped)

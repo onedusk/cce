@@ -1,12 +1,15 @@
 """Tests for cce.discovery.discoverer — static methods and discovery pipeline."""
 
 import hashlib
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from cce.config.types import CrawlConfig
 from cce.discovery.adapters.base import CrawlResult
 from cce.discovery.discoverer import Discoverer
+from cce.models.evidence import SourceQuality
+from cce.models.request import CurationConstraints
 from cce.policy.types import RecencyRule, ReputationRule, SourcePolicy, TopicOverride
 from tests.conftest import make_crawl_result, make_curation_request, make_evidence, make_source_policy
 
@@ -230,6 +233,174 @@ def test_looks_marketing_negative():
 
 
 # ---------------------------------------------------------------------------
+# _passes_date_filter
+# ---------------------------------------------------------------------------
+
+
+_NOW = datetime(2026, 3, 24, tzinfo=timezone.utc)
+
+
+def test_passes_date_filter_no_published_at_passes():
+    """Fail-open: evidence with no published_at always passes."""
+    ev = make_evidence(published_at=None, retrieved_at=_NOW)
+    policy = make_source_policy(recency=RecencyRule(max_age_days=30))
+    assert Discoverer._passes_date_filter(ev, policy, None) is True
+
+
+def test_passes_date_filter_within_max_age_passes():
+    ev = make_evidence(
+        published_at=_NOW - timedelta(days=10),
+        retrieved_at=_NOW,
+    )
+    policy = make_source_policy(recency=RecencyRule(max_age_days=30))
+    assert Discoverer._passes_date_filter(ev, policy, None) is True
+
+
+def test_passes_date_filter_exceeds_max_age_fails():
+    ev = make_evidence(
+        published_at=_NOW - timedelta(days=60),
+        retrieved_at=_NOW,
+    )
+    policy = make_source_policy(recency=RecencyRule(max_age_days=30))
+    assert Discoverer._passes_date_filter(ev, policy, None) is False
+
+
+def test_passes_date_filter_no_max_age_passes():
+    """max_age_days=None means no age limit."""
+    ev = make_evidence(
+        published_at=_NOW - timedelta(days=9999),
+        retrieved_at=_NOW,
+    )
+    policy = make_source_policy(recency=RecencyRule(max_age_days=None))
+    assert Discoverer._passes_date_filter(ev, policy, None) is True
+
+
+def test_passes_date_filter_date_from_constraint():
+    ev = make_evidence(
+        published_at=datetime(2022, 6, 1, tzinfo=timezone.utc),
+        retrieved_at=_NOW,
+    )
+    policy = make_source_policy(recency=RecencyRule(max_age_days=None))
+    constraints = CurationConstraints(date_from="2023-01-01T00:00:00+00:00")
+    assert Discoverer._passes_date_filter(ev, policy, constraints) is False
+
+    ev_recent = make_evidence(
+        published_at=datetime(2023, 6, 1, tzinfo=timezone.utc),
+        retrieved_at=_NOW,
+    )
+    assert Discoverer._passes_date_filter(ev_recent, policy, constraints) is True
+
+
+def test_passes_date_filter_date_to_constraint():
+    ev = make_evidence(
+        published_at=datetime(2025, 6, 1, tzinfo=timezone.utc),
+        retrieved_at=_NOW,
+    )
+    policy = make_source_policy(recency=RecencyRule(max_age_days=None))
+    constraints = CurationConstraints(date_to="2025-01-01T00:00:00+00:00")
+    assert Discoverer._passes_date_filter(ev, policy, constraints) is False
+
+    ev_older = make_evidence(
+        published_at=datetime(2024, 6, 1, tzinfo=timezone.utc),
+        retrieved_at=_NOW,
+    )
+    assert Discoverer._passes_date_filter(ev_older, policy, constraints) is True
+
+
+def test_passes_date_filter_composes_max_age_and_constraints():
+    """The tighter bound wins: max_age_days=365 vs date_from=2025-09-01."""
+    ev = make_evidence(
+        published_at=datetime(2025, 6, 1, tzinfo=timezone.utc),
+        retrieved_at=_NOW,
+    )
+    # max_age_days=365 → cutoff ~2025-03-24, so 2025-06-01 passes
+    # date_from=2025-09-01 → 2025-06-01 fails
+    policy = make_source_policy(recency=RecencyRule(max_age_days=365))
+    constraints = CurationConstraints(date_from="2025-09-01T00:00:00+00:00")
+    assert Discoverer._passes_date_filter(ev, policy, constraints) is False
+
+
+def test_passes_date_filter_naive_constraint_passes():
+    """Fail-open when constraint date has no timezone (naive vs aware comparison)."""
+    ev = make_evidence(
+        published_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        retrieved_at=_NOW,
+    )
+    policy = make_source_policy(recency=RecencyRule(max_age_days=None))
+    # Bare date with no timezone → naive datetime → TypeError on comparison → fail-open
+    constraints = CurationConstraints(date_from="2025-01-01")
+    assert Discoverer._passes_date_filter(ev, policy, constraints) is True
+
+
+def test_passes_date_filter_invalid_constraint_passes():
+    """Fail-open on unparseable constraint dates."""
+    ev = make_evidence(
+        published_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        retrieved_at=_NOW,
+    )
+    policy = make_source_policy(recency=RecencyRule(max_age_days=None))
+    constraints = CurationConstraints(date_from="not-a-date", date_to="also-bad")
+    assert Discoverer._passes_date_filter(ev, policy, constraints) is True
+
+
+# ---------------------------------------------------------------------------
+# _passes_reputation_filter
+# ---------------------------------------------------------------------------
+
+
+def test_passes_reputation_filter_no_source_quality_passes():
+    """Fail-open: evidence with no source_quality always passes."""
+    ev = make_evidence(source_quality=None)
+    rules = ReputationRule(require_peer_reviewed=True)
+    assert Discoverer._passes_reputation_filter(ev, rules) is True
+
+
+def test_passes_reputation_filter_require_peer_reviewed_blocks():
+    ev = make_evidence(
+        source_quality=SourceQuality(is_peer_reviewed=False),
+    )
+    rules = ReputationRule(require_peer_reviewed=True)
+    assert Discoverer._passes_reputation_filter(ev, rules) is False
+
+
+def test_passes_reputation_filter_require_peer_reviewed_passes():
+    ev = make_evidence(
+        source_quality=SourceQuality(is_peer_reviewed=True),
+    )
+    rules = ReputationRule(require_peer_reviewed=True)
+    assert Discoverer._passes_reputation_filter(ev, rules) is True
+
+
+def test_passes_reputation_filter_require_primary_blocks():
+    ev = make_evidence(
+        source_quality=SourceQuality(is_primary_source=False),
+    )
+    rules = ReputationRule(require_primary_source=True)
+    assert Discoverer._passes_reputation_filter(ev, rules) is False
+
+
+def test_passes_reputation_filter_block_marketing_blocks():
+    ev = make_evidence(
+        source_quality=SourceQuality(conflict_of_interest=True),
+    )
+    rules = ReputationRule(block_marketing=True)
+    assert Discoverer._passes_reputation_filter(ev, rules) is False
+
+
+def test_passes_reputation_filter_defaults_allow_clean():
+    """Default policy (require_*=False, block_marketing=True) passes clean evidence."""
+    ev = make_evidence(
+        source_quality=SourceQuality(
+            is_peer_reviewed=False,
+            is_primary_source=False,
+            conflict_of_interest=False,
+        ),
+    )
+    rules = ReputationRule()  # defaults
+    assert Discoverer._passes_reputation_filter(ev, rules) is True
+
+
+# ---------------------------------------------------------------------------
 # _cap_evidence
 # ---------------------------------------------------------------------------
 
@@ -281,6 +452,69 @@ def test_cap_evidence_no_op():
     capped = Discoverer._cap_evidence(evidence, max_per_source=5, max_total=100)
     assert len(capped) == 3
     assert capped == evidence  # same list, unchanged
+
+
+def test_cap_evidence_prefer_recent_sorts_by_date():
+    """When prefer_recent=True, newer evidence wins over longer excerpts."""
+    old_long = make_evidence(
+        id="ev_old",
+        url="https://source.com/page",
+        excerpt="x" * 500,
+        published_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
+    new_short = make_evidence(
+        id="ev_new",
+        url="https://source.com/page",
+        excerpt="x" * 100,
+        published_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    capped = Discoverer._cap_evidence(
+        [old_long, new_short], max_per_source=1, max_total=10, prefer_recent=True
+    )
+    assert len(capped) == 1
+    assert capped[0].id == "ev_new"
+
+
+def test_cap_evidence_prefer_recent_false_preserves_length():
+    """When prefer_recent=False, longer excerpts still win (existing behavior)."""
+    old_long = make_evidence(
+        id="ev_old",
+        url="https://source.com/page",
+        excerpt="x" * 500,
+        published_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
+    new_short = make_evidence(
+        id="ev_new",
+        url="https://source.com/page",
+        excerpt="x" * 100,
+        published_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    capped = Discoverer._cap_evidence(
+        [old_long, new_short], max_per_source=1, max_total=10, prefer_recent=False
+    )
+    assert len(capped) == 1
+    assert capped[0].id == "ev_old"
+
+
+def test_cap_evidence_prefer_recent_missing_dates_sorted_last():
+    """Evidence with no published_at sorts after dated evidence when prefer_recent=True."""
+    dated = make_evidence(
+        id="ev_dated",
+        url="https://source.com/page",
+        excerpt="x" * 100,
+        published_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+    )
+    undated = make_evidence(
+        id="ev_undated",
+        url="https://source.com/page",
+        excerpt="x" * 500,  # longer but no date
+        published_at=None,
+    )
+    capped = Discoverer._cap_evidence(
+        [undated, dated], max_per_source=1, max_total=10, prefer_recent=True
+    )
+    assert len(capped) == 1
+    assert capped[0].id == "ev_dated"
 
 
 # ---------------------------------------------------------------------------
@@ -477,3 +711,50 @@ async def test_discover_dedup_by_hash():
     # Same content → same hash → deduped to 1
     hashes = [ev.excerpt_hash for ev in evidence]
     assert len(hashes) == len(set(hashes))
+
+
+@pytest.mark.integration
+async def test_discover_filters_old_and_marketing_evidence():
+    """Evidence that is too old or marketing-flagged is filtered out post-extraction."""
+    from tests.conftest import MockCrawlAdapter
+
+    adapter = MockCrawlAdapter(
+        search_map={
+            "test topic": [
+                "https://good.org/page",
+                "https://old.org/page",
+                "https://spammy.com/page",
+            ],
+        },
+        url_map={
+            "https://good.org/page": make_crawl_result(
+                url="https://good.org/page",
+                published_date="2026-01-01T00:00:00Z",
+                markdown="Good recent content with enough words to pass the minimum length check.",
+            ),
+            "https://old.org/page": make_crawl_result(
+                url="https://old.org/page",
+                published_date="2010-01-01T00:00:00Z",
+                markdown="Very old content that should be filtered by the max age days policy.",
+            ),
+            "https://spammy.com/page": make_crawl_result(
+                url="https://spammy.com/page",
+                published_date="2026-01-01T00:00:00Z",
+                markdown="Buy now! Limited time offer on this amazing sponsored product deal!",
+                title="Sponsored Ad",
+            ),
+        },
+    )
+    discoverer = Discoverer(adapter=adapter, config=CrawlConfig(api_key="test"))
+    request = make_curation_request(topic="test topic")
+    policy = make_source_policy(
+        recency=RecencyRule(max_age_days=365),
+        reputation=ReputationRule(block_marketing=True),
+    )
+
+    evidence = await discoverer.discover(request, policy)
+
+    urls = {ev.url for ev in evidence}
+    assert "https://good.org/page" in urls
+    assert "https://old.org/page" not in urls
+    assert "https://spammy.com/page" not in urls
