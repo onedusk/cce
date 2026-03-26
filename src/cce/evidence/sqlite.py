@@ -8,12 +8,17 @@ version check and ALTER TABLE statements in _ensure_schema().
 
 from __future__ import annotations
 
+import logging
+import struct
+
 import aiosqlite
 
 from cce.config.types import EvidenceStoreConfig
 from cce.models.evidence import Evidence, SourceQuality
 
-SCHEMA_VERSION = 1
+logger = logging.getLogger(__name__)
+
+SCHEMA_VERSION = 2
 
 CREATE_EVIDENCE_TABLE = """
 CREATE TABLE IF NOT EXISTS evidence (
@@ -46,12 +51,18 @@ CREATE TABLE IF NOT EXISTS _meta (
 """
 
 
+def _serialize_float32(vec: list[float]) -> bytes:
+    """Serialize a vector to the float32 binary format expected by sqlite-vec."""
+    return struct.pack(f"{len(vec)}f", *vec)
+
+
 class SQLiteEvidenceStore:
     """Async SQLite-backed evidence store."""
 
     def __init__(self, config: EvidenceStoreConfig) -> None:
         self._db_path = config.sqlite_path
         self._db: aiosqlite.Connection | None = None
+        self._vec_available: bool = False
 
     async def connect(self) -> None:
         """Open the database and ensure the schema exists."""
@@ -59,6 +70,20 @@ class SQLiteEvidenceStore:
         self._db = await aiosqlite.connect(str(self._db_path))
         await self._db.execute("PRAGMA journal_mode=WAL;")
         await self._db.execute("PRAGMA foreign_keys=ON;")
+
+        # Load sqlite-vec extension if available
+        try:
+            import sqlite_vec
+
+            raw_conn = self._db._conn  # underlying sqlite3.Connection
+            raw_conn.enable_load_extension(True)
+            sqlite_vec.load(raw_conn)
+            raw_conn.enable_load_extension(False)
+            self._vec_available = True
+        except (ImportError, Exception) as e:
+            logger.warning("sqlite-vec not available: %s", e)
+            self._vec_available = False
+
         await self._ensure_schema()
 
     async def close(self) -> None:
@@ -166,12 +191,70 @@ class SQLiteEvidenceStore:
 
     # -- Internal helpers --
 
+    # -- Vector operations (sqlite-vec) --
+
+    @property
+    def vec_available(self) -> bool:
+        """Whether sqlite-vec is loaded and the vector table exists."""
+        return self._vec_available
+
+    async def put_embedding(self, evidence_id: str, embedding: list[float]) -> bool:
+        """Store an embedding vector for an evidence object."""
+        if not self._vec_available:
+            return False
+        assert self._db is not None
+        try:
+            await self._db.execute(
+                "INSERT OR REPLACE INTO evidence_vec (evidence_id, embedding) VALUES (?, ?)",
+                (evidence_id, _serialize_float32(embedding)),
+            )
+            await self._db.commit()
+            return True
+        except Exception as e:
+            logger.warning("Failed to store embedding for %s: %s", evidence_id, e)
+            return False
+
+    async def search_by_embedding(
+        self,
+        query_embedding: list[float],
+        *,
+        k: int = 20,
+    ) -> list[tuple[str, float]]:
+        """KNN search against stored embeddings.
+
+        Returns list of (evidence_id, distance) pairs, closest first.
+        """
+        if not self._vec_available:
+            return []
+        assert self._db is not None
+        async with self._db.execute(
+            """
+            SELECT evidence_id, distance
+            FROM evidence_vec
+            WHERE embedding MATCH ? AND k = ?
+            ORDER BY distance
+            """,
+            (_serialize_float32(query_embedding), k),
+        ) as cursor:
+            return [(row[0], row[1]) for row in await cursor.fetchall()]
+
+    # -- Internal helpers --
+
     async def _ensure_schema(self) -> None:
         assert self._db is not None
         await self._db.execute(CREATE_META_TABLE)
         await self._db.execute(CREATE_EVIDENCE_TABLE)
         for idx_sql in CREATE_INDEXES:
             await self._db.execute(idx_sql)
+
+        # Add vector table if sqlite-vec is available
+        if self._vec_available:
+            await self._db.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS evidence_vec USING vec0(
+                    evidence_id TEXT PRIMARY KEY,
+                    embedding FLOAT[768]
+                );
+            """)
 
         # Store schema version for future migrations
         await self._db.execute(

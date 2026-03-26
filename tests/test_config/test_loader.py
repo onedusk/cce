@@ -128,3 +128,32 @@ def test_load_config_type_coercion(monkeypatch):
     assert config.llm.temperature == 0.5
     assert isinstance(config.llm.max_tokens, int)
     assert config.llm.max_tokens == 8192
+
+
+def test_load_embedding_config_defaults(monkeypatch):
+    _clear_env(monkeypatch)
+    config = load_config()
+    emb = config.embedding
+
+    assert emb.enabled is True
+    assert emb.provider == "ollama"
+    assert emb.model == "nomic-embed-text-v2-moe"
+    assert emb.dimensions == 768
+    assert emb.base_url == "http://localhost:11434"
+    assert emb.batch_size == 64
+
+
+def test_load_embedding_config_env_overrides(monkeypatch):
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("CCE_EMBEDDING_ENABLED", "false")
+    monkeypatch.setenv("CCE_EMBEDDING_MODEL", "custom-model")
+    monkeypatch.setenv("CCE_EMBEDDING_BASE_URL", "http://remote:8080")
+    monkeypatch.setenv("CCE_EMBEDDING_DIMENSIONS", "384")
+
+    config = load_config()
+    emb = config.embedding
+
+    assert emb.enabled is False
+    assert emb.model == "custom-model"
+    assert emb.base_url == "http://remote:8080"
+    assert emb.dimensions == 384

@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from cce.config.types import EngineConfig, QualityGateConfig
 from cce.discovery.adapters.base import CrawlAdapter
 from cce.discovery.discoverer import Discoverer
+from cce.discovery.embeddings import EmbeddingProvider
 from cce.evidence.store import EvidenceStore
 from cce.llm.base import LLMProvider
 from cce.models.content import ContentLineage, ContentScores, ContentUnit
@@ -37,9 +38,14 @@ class Pipeline:
         crawl_adapter: CrawlAdapter,
         evidence_store: EvidenceStore,
         llm: LLMProvider,
+        embedding_provider: EmbeddingProvider | None = None,
     ) -> None:
         self._config = config
-        self._discoverer = Discoverer(adapter=crawl_adapter, config=config.crawl)
+        self._discoverer = Discoverer(
+            adapter=crawl_adapter,
+            config=config.crawl,
+            embedding_provider=embedding_provider,
+        )
         self._evidence_store = evidence_store
         self._writer = Writer(llm=llm)
         self._verifier = Verifier(llm=llm)

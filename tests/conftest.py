@@ -13,12 +13,14 @@ import pytest
 
 from cce.config.types import (
     CrawlConfig,
+    EmbeddingConfig,
     EngineConfig,
     EvidenceStoreConfig,
     LLMConfig,
     QualityGateConfig,
 )
 from cce.discovery.adapters.base import CrawlAdapter, CrawlRequest, CrawlResult
+from cce.discovery.embeddings import EmbeddingResult, EmbeddingUnavailableError
 from cce.evidence.sqlite import SQLiteEvidenceStore
 from cce.llm.base import LLMMessage, LLMProvider, LLMResponse
 from cce.models.content import (
@@ -105,6 +107,41 @@ class MockCrawlAdapter:
         if query in self._search_map:
             return self._search_map[query][:limit]
         raise NotImplementedError("MockCrawlAdapter: no search results configured")
+
+
+# ---------------------------------------------------------------------------
+# Mock: EmbeddingProvider
+# ---------------------------------------------------------------------------
+
+
+class MockEmbeddingProvider:
+    """Protocol-compliant embedding mock with deterministic vectors.
+
+    Satisfies: cce.discovery.embeddings.EmbeddingProvider
+    """
+
+    def __init__(
+        self,
+        dimension: int = 768,
+        fail: bool = False,
+    ) -> None:
+        self._dimension = dimension
+        self._fail = fail
+        self.calls: list[list[str]] = []
+
+    async def embed(self, texts: list[str]) -> EmbeddingResult:
+        self.calls.append(texts)
+        if self._fail:
+            raise EmbeddingUnavailableError("Mock embedding failure")
+        # Generate deterministic vectors based on text hash
+        vectors = []
+        for text in texts:
+            h = hashlib.sha256(text.encode()).digest()
+            vec = [float(b) / 255.0 for b in h] * (self._dimension // 32 + 1)
+            vectors.append(vec[: self._dimension])
+        return EmbeddingResult(
+            vectors=vectors, model="mock", dimensions=self._dimension
+        )
 
 
 # ---------------------------------------------------------------------------

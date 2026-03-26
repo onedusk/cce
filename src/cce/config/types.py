@@ -45,6 +45,40 @@ class EvidenceStoreConfig(BaseModel):
     )
 
 
+class EmbeddingConfig(BaseModel):
+    """Configuration for the embedding provider."""
+
+    enabled: bool = Field(
+        default=True,
+        description="Enable embedding-based evidence ranking. Falls back to length-based if False or unavailable.",
+    )
+    provider: str = Field(
+        default="ollama",
+        description="Embedding provider: ollama (Phase 2)",
+    )
+    model: str = Field(
+        default="nomic-embed-text-v2-moe",
+        description="Embedding model identifier",
+    )
+    dimensions: int = Field(
+        default=768,
+        description="Embedding vector dimensions (must match model output)",
+    )
+    base_url: str = Field(
+        default="http://localhost:11434",
+        description="Ollama server URL",
+    )
+    timeout_seconds: int = Field(
+        default=30,
+        description="Timeout for embedding API calls",
+    )
+    batch_size: int = Field(
+        default=64,
+        ge=1,
+        description="Max texts per embedding API call",
+    )
+
+
 class CrawlConfig(BaseModel):
     """Configuration for the crawl adapter."""
 
@@ -98,6 +132,7 @@ class EngineConfig(BaseModel):
     llm: LLMConfig
     evidence_store: EvidenceStoreConfig = Field(default_factory=EvidenceStoreConfig)
     crawl: CrawlConfig = Field(default_factory=CrawlConfig)
+    embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     quality_gate: dict[str, QualityGateConfig] = Field(
         default_factory=lambda: {
             "low": QualityGateConfig(

@@ -24,12 +24,15 @@ if env_path.exists():
 from cce.output import write_output
 from cce.config.types import (
     CrawlConfig,
+    EmbeddingConfig,
     EngineConfig,
     EvidenceStoreConfig,
     LLMConfig,
     QualityGateConfig,
 )
 from cce.discovery.adapters.firecrawl import FirecrawlAdapter
+from cce.discovery.embeddings import EmbeddingUnavailableError
+from cce.discovery.ollama import OllamaEmbeddingProvider
 from cce.evidence.sqlite import SQLiteEvidenceStore
 from cce.llm.anthropic import AnthropicProvider
 from cce.models.request import CurationRequest
@@ -84,18 +87,30 @@ async def main():
     crawl_adapter = FirecrawlAdapter(config.crawl)
     llm = AnthropicProvider(config.llm)
 
+    # --- Build embedding provider (optional — falls back to length-based ranking) ---
+    embedding_provider = None
+    if config.embedding.enabled:
+        try:
+            provider = OllamaEmbeddingProvider(config.embedding)
+            await provider.embed(["health check"])
+            embedding_provider = provider
+            logger.info("Embedding provider ready: %s", config.embedding.model)
+        except (EmbeddingUnavailableError, Exception) as e:
+            logger.warning("Embedding provider unavailable, using length-based ranking: %s", e)
+
     pipeline = Pipeline(
         config=config,
         crawl_adapter=crawl_adapter,
         evidence_store=evidence_store,
         llm=llm,
+        embedding_provider=embedding_provider,
     )
 
     # --- Build request ---
     request = CurationRequest(
-        topic="social connectedness and its impact on health outcomes",
-        subtopics=["loneliness epidemic", "community belonging", "digital vs in-person social bonds"],
-        paths=["summary"],
+        topic="the science and practice of restorative sleep",
+        subtopics=["sleep cycles and stages", "chronotypes and individual variation", "sleep hygiene practices"],
+        paths=["learn", "explore", "apply"],
         audience="general",
         policy_id="peer-reviewed",
         risk_profile="medium",

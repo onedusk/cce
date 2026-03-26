@@ -19,6 +19,7 @@ import yaml
 
 from cce.config.types import (
     CrawlConfig,
+    EmbeddingConfig,
     EngineConfig,
     EvidenceStoreConfig,
     LLMConfig,
@@ -55,6 +56,7 @@ def load_config(config_path: str | Path | None = None) -> EngineConfig:
         llm=_load_llm_config(file_data.get("llm", {})),
         evidence_store=_load_evidence_config(file_data.get("evidence_store", {})),
         crawl=_load_crawl_config(file_data.get("crawl", {})),
+        embedding=_load_embedding_config(file_data.get("embedding", {})),
         quality_gate=_load_gate_config(file_data.get("quality_gate", {})),
         engine_version=file_data.get("engine_version", "0.1.0"),
     )
@@ -101,6 +103,27 @@ def _load_crawl_config(file: dict) -> CrawlConfig:
         ),
         max_evidence_total=int(
             os.getenv("CCE_CRAWL_MAX_EVIDENCE", file.get("max_evidence_total", 100))
+        ),
+    )
+
+
+def _load_embedding_config(file: dict) -> EmbeddingConfig:
+    enabled_raw = os.getenv("CCE_EMBEDDING_ENABLED", file.get("enabled", True))
+    if isinstance(enabled_raw, str):
+        enabled_raw = enabled_raw.lower() not in ("false", "0", "no")
+    return EmbeddingConfig(
+        enabled=bool(enabled_raw),
+        provider=os.getenv("CCE_EMBEDDING_PROVIDER", file.get("provider", "ollama")),
+        model=os.getenv("CCE_EMBEDDING_MODEL", file.get("model", "nomic-embed-text-v2-moe")),
+        dimensions=int(
+            os.getenv("CCE_EMBEDDING_DIMENSIONS", file.get("dimensions", 768))
+        ),
+        base_url=os.getenv("CCE_EMBEDDING_BASE_URL", file.get("base_url", "http://localhost:11434")),
+        timeout_seconds=int(
+            os.getenv("CCE_EMBEDDING_TIMEOUT", file.get("timeout_seconds", 30))
+        ),
+        batch_size=int(
+            os.getenv("CCE_EMBEDDING_BATCH_SIZE", file.get("batch_size", 64))
         ),
     )
 

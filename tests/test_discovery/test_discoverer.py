@@ -332,6 +332,16 @@ def test_passes_date_filter_naive_constraint_passes():
     assert Discoverer._passes_date_filter(ev, policy, constraints) is True
 
 
+def test_passes_date_filter_naive_published_at_with_max_age_passes():
+    """Fail-open when published_at is naive but retrieved_at is aware (max_age_days check)."""
+    ev = make_evidence(
+        published_at=datetime(2024, 1, 1),  # naive — no tzinfo
+        retrieved_at=_NOW,  # aware — has timezone.utc
+    )
+    policy = make_source_policy(recency=RecencyRule(max_age_days=30))
+    assert Discoverer._passes_date_filter(ev, policy, None) is True
+
+
 def test_passes_date_filter_invalid_constraint_passes():
     """Fail-open on unparseable constraint dates."""
     ev = make_evidence(
@@ -758,3 +768,180 @@ async def test_discover_filters_old_and_marketing_evidence():
     assert "https://good.org/page" in urls
     assert "https://old.org/page" not in urls
     assert "https://spammy.com/page" not in urls
+
+
+# ===========================================================================
+# Embedding relevance ranking
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# _cap_sort_key with relevance
+# ---------------------------------------------------------------------------
+
+
+def test_cap_sort_key_relevance_beats_recency():
+    """High relevance + old date should beat low relevance + new date."""
+    old_ev = make_evidence(
+        id="ev_old",
+        published_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        excerpt="x" * 100,
+    )
+    new_ev = make_evidence(
+        id="ev_new",
+        published_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        excerpt="x" * 100,
+    )
+    scores = {"ev_old": 0.95, "ev_new": 0.3}
+    key_old = Discoverer._cap_sort_key(old_ev, prefer_recent=True, relevance_scores=scores)
+    key_new = Discoverer._cap_sort_key(new_ev, prefer_recent=True, relevance_scores=scores)
+    # old_ev has higher relevance → should sort higher
+    assert key_old > key_new
+
+
+def test_cap_sort_key_without_relevance_matches_old_behavior():
+    """When relevance_scores=None, relevance is 0.0 — recency and length decide."""
+    ev = make_evidence(
+        id="ev_1",
+        published_at=datetime(2025, 6, 1, tzinfo=timezone.utc),
+        excerpt="x" * 200,
+    )
+    key = Discoverer._cap_sort_key(ev, prefer_recent=True, relevance_scores=None)
+    assert key[0] == 0.0  # relevance
+    assert key[1] > 0  # recency (timestamp)
+    assert key[2] == 200  # length
+
+
+# ---------------------------------------------------------------------------
+# _cap_evidence with relevance_scores
+# ---------------------------------------------------------------------------
+
+
+def test_cap_evidence_with_relevance_scores():
+    """Top relevance evidence should be kept over longer but less relevant."""
+    evidence = [
+        make_evidence(id=f"ev_{i}", url="https://source.com/page", excerpt="x" * (100 + i * 50))
+        for i in range(5)
+    ]
+    # Give the shortest excerpt the highest relevance
+    scores = {f"ev_{i}": float(4 - i) / 4.0 for i in range(5)}
+    capped = Discoverer._cap_evidence(
+        evidence, max_per_source=2, max_total=10, relevance_scores=scores
+    )
+    assert len(capped) == 2
+    # ev_0 has highest relevance (1.0), ev_1 has second (0.75)
+    assert capped[0].id == "ev_0"
+    assert capped[1].id == "ev_1"
+
+
+def test_cap_evidence_relevance_scores_none_backward_compat():
+    """relevance_scores=None preserves existing length-based behavior."""
+    short = make_evidence(id="ev_short", url="https://s.com/p", excerpt="x" * 50)
+    long = make_evidence(id="ev_long", url="https://s.com/p", excerpt="x" * 500)
+    capped = Discoverer._cap_evidence(
+        [short, long], max_per_source=1, max_total=10, relevance_scores=None
+    )
+    assert len(capped) == 1
+    assert capped[0].id == "ev_long"
+
+
+def test_cap_evidence_empty_relevance_scores_degrades():
+    """Empty dict should degrade to length-based (all relevance = 0.0)."""
+    short = make_evidence(id="ev_short", url="https://s.com/p", excerpt="x" * 50)
+    long = make_evidence(id="ev_long", url="https://s.com/p", excerpt="x" * 500)
+    capped = Discoverer._cap_evidence(
+        [short, long], max_per_source=1, max_total=10, relevance_scores={}
+    )
+    assert len(capped) == 1
+    assert capped[0].id == "ev_long"
+
+
+# ---------------------------------------------------------------------------
+# discover() with embedding provider
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_discover_with_embedding_provider():
+    """discover() calls embed and uses relevance scores for ranking."""
+    from tests.conftest import MockCrawlAdapter, MockEmbeddingProvider
+
+    adapter = MockCrawlAdapter(
+        search_map={"test topic": ["https://example.com/page"]},
+        url_map={
+            "https://example.com/page": make_crawl_result(
+                url="https://example.com/page",
+                markdown="Content about the test topic with enough words for extraction purposes.",
+            ),
+        },
+    )
+    embedding = MockEmbeddingProvider(dimension=8)
+    discoverer = Discoverer(
+        adapter=adapter,
+        config=CrawlConfig(api_key="test"),
+        embedding_provider=embedding,
+    )
+    request = make_curation_request(topic="test topic")
+    policy = make_source_policy()
+
+    evidence = await discoverer.discover(request, policy)
+
+    assert len(evidence) >= 1
+    # Embedding provider should have been called once
+    assert len(embedding.calls) == 1
+    # First text in the call should be the query (topic)
+    assert embedding.calls[0][0] == "test topic"
+
+
+@pytest.mark.integration
+async def test_discover_embedding_fallback_on_failure():
+    """discover() falls back to length-based ranking when embeddings fail."""
+    from tests.conftest import MockCrawlAdapter, MockEmbeddingProvider
+
+    adapter = MockCrawlAdapter(
+        search_map={"test topic": ["https://example.com/page"]},
+        url_map={
+            "https://example.com/page": make_crawl_result(
+                url="https://example.com/page",
+                markdown="Content about the test topic with enough words for extraction purposes.",
+            ),
+        },
+    )
+    embedding = MockEmbeddingProvider(fail=True)
+    discoverer = Discoverer(
+        adapter=adapter,
+        config=CrawlConfig(api_key="test"),
+        embedding_provider=embedding,
+    )
+    request = make_curation_request(topic="test topic")
+    policy = make_source_policy()
+
+    # Should not raise — falls back gracefully
+    evidence = await discoverer.discover(request, policy)
+    assert len(evidence) >= 1
+
+
+@pytest.mark.integration
+async def test_discover_no_embedding_provider():
+    """discover() with embedding_provider=None behaves identically to before."""
+    from tests.conftest import MockCrawlAdapter
+
+    adapter = MockCrawlAdapter(
+        search_map={"test topic": ["https://example.com/page"]},
+        url_map={
+            "https://example.com/page": make_crawl_result(
+                url="https://example.com/page",
+                markdown="Content about the test topic with enough words for extraction purposes.",
+            ),
+        },
+    )
+    discoverer = Discoverer(
+        adapter=adapter,
+        config=CrawlConfig(api_key="test"),
+        embedding_provider=None,
+    )
+    request = make_curation_request(topic="test topic")
+    policy = make_source_policy()
+
+    evidence = await discoverer.discover(request, policy)
+    assert len(evidence) >= 1

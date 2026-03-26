@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 import re
 import uuid
 from collections import defaultdict
@@ -17,11 +18,22 @@ from urllib.parse import urlparse
 
 from cce.config.types import CrawlConfig
 from cce.discovery.adapters.base import CrawlAdapter, CrawlRequest, CrawlResult
+from cce.discovery.embeddings import EmbeddingProvider, EmbeddingUnavailableError
 from cce.models.evidence import Evidence, SourceQuality
 from cce.models.request import CurationConstraints, CurationRequest
 from cce.policy.types import ReputationRule, SourcePolicy
 
 logger = logging.getLogger(__name__)
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Compute cosine similarity between two vectors. Returns 0.0 on degenerate input."""
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
 
 
 class Discoverer:
@@ -31,9 +43,11 @@ class Discoverer:
         self,
         adapter: CrawlAdapter,
         config: CrawlConfig,
+        embedding_provider: EmbeddingProvider | None = None,
     ) -> None:
         self._adapter = adapter
         self._config = config
+        self._embedding = embedding_provider
 
     async def discover(
         self,
@@ -123,6 +137,23 @@ class Discoverer:
                 filtered_reputation,
             )
 
+        # Step 5.5: Compute embedding relevance scores (if available)
+        relevance_scores: dict[str, float] | None = None
+        if self._embedding is not None and evidence:
+            try:
+                relevance_scores = await self._compute_relevance_scores(
+                    evidence, request.topic, request.subtopics,
+                )
+                logger.info(
+                    "Embedding ranking: scored %d evidence objects",
+                    len(relevance_scores),
+                )
+            except EmbeddingUnavailableError as e:
+                logger.warning(
+                    "Embedding unavailable, falling back to length-based ranking: %s", e
+                )
+                relevance_scores = None
+
         # Step 6: Cap evidence volume
         before_cap = len(evidence)
         evidence = self._cap_evidence(
@@ -130,6 +161,7 @@ class Discoverer:
             max_per_source=self._config.max_excerpts_per_source,
             max_total=self._config.max_evidence_total,
             prefer_recent=effective_policy.recency.prefer_recent,
+            relevance_scores=relevance_scores,
         )
 
         logger.info(
@@ -211,7 +243,10 @@ class Discoverer:
 
         # Policy-level: max_age_days relative to retrieval time
         if policy.recency.max_age_days is not None:
-            age_days = (ev.retrieved_at - ev.published_at).days
+            try:
+                age_days = (ev.retrieved_at - ev.published_at).days
+            except TypeError:
+                return True  # fail-open on naive/aware mismatch
             if age_days > policy.recency.max_age_days:
                 return False
 
@@ -261,6 +296,37 @@ class Discoverer:
             return False
 
         return True
+
+    # -- Embedding relevance --
+
+    async def _compute_relevance_scores(
+        self,
+        evidence: list[Evidence],
+        topic: str,
+        subtopics: list[str],
+    ) -> dict[str, float]:
+        """Compute embedding-based relevance scores for evidence against the topic.
+
+        Returns a mapping of evidence.id -> relevance score (0.0-1.0).
+        Raises EmbeddingUnavailableError if embedding fails.
+        """
+        if not evidence or self._embedding is None:
+            return {}
+
+        query_text = topic
+        if subtopics:
+            query_text += " " + " ".join(subtopics)
+
+        # Embed everything in one call: [query, excerpt_0, excerpt_1, ...]
+        texts = [query_text] + [ev.excerpt for ev in evidence]
+        result = await self._embedding.embed(texts)
+
+        query_vec = result.vectors[0]
+        scores: dict[str, float] = {}
+        for ev, vec in zip(evidence, result.vectors[1:]):
+            scores[ev.id] = _cosine_similarity(query_vec, vec)
+
+        return scores
 
     # -- Extraction --
 
@@ -359,15 +425,20 @@ class Discoverer:
 
     @staticmethod
     def _cap_sort_key(
-        ev: Evidence, prefer_recent: bool
-    ) -> tuple[float, int]:
+        ev: Evidence,
+        prefer_recent: bool,
+        relevance_scores: dict[str, float] | None = None,
+    ) -> tuple[float, float, int]:
         """Build a sort key for evidence capping.
 
-        When prefer_recent is True, newer evidence ranks higher.
-        Ties broken by excerpt length (longer = more substantive).
+        Dimensions (highest priority first):
+        1. Relevance score (embedding similarity to topic, 0.0 if unavailable)
+        2. Recency (timestamp if prefer_recent, 0.0 otherwise)
+        3. Length (longer = more substantive, tiebreaker)
         """
+        relevance = relevance_scores.get(ev.id, 0.0) if relevance_scores else 0.0
         recency = ev.published_at.timestamp() if prefer_recent and ev.published_at else 0.0
-        return (recency, len(ev.excerpt))
+        return (relevance, recency, len(ev.excerpt))
 
     @staticmethod
     def _cap_evidence(
@@ -375,23 +446,29 @@ class Discoverer:
         max_per_source: int,
         max_total: int,
         prefer_recent: bool = False,
+        relevance_scores: dict[str, float] | None = None,
     ) -> list[Evidence]:
         """Cap evidence volume with per-source and global limits.
 
         Per-source: keep the best excerpts up to max_per_source.
         Global: truncate to max_total after per-source filtering.
-        When prefer_recent is True, newer evidence is preferred; ties broken by length.
+        When relevance_scores is provided, evidence is ranked by semantic similarity.
+        When prefer_recent is True, recency breaks ties among equal relevance.
         """
+        has_ranking = bool(relevance_scores) or prefer_recent
+
         if len(evidence) <= max_total:
             # Check if per-source cap is needed
             by_url: dict[str, list[Evidence]] = defaultdict(list)
             for ev in evidence:
                 by_url[ev.url].append(ev)
             if all(len(group) <= max_per_source for group in by_url.values()):
-                if prefer_recent:
+                if has_ranking:
                     return sorted(
                         evidence,
-                        key=lambda e: Discoverer._cap_sort_key(e, True),
+                        key=lambda e: Discoverer._cap_sort_key(
+                            e, prefer_recent, relevance_scores
+                        ),
                         reverse=True,
                     )
                 return evidence  # already within both caps
@@ -401,8 +478,8 @@ class Discoverer:
         for ev in evidence:
             by_url[ev.url].append(ev)
 
-        def _sort_key(e: Evidence) -> tuple[float, int]:
-            return Discoverer._cap_sort_key(e, prefer_recent)
+        def _sort_key(e: Evidence) -> tuple[float, float, int]:
+            return Discoverer._cap_sort_key(e, prefer_recent, relevance_scores)
 
         # Per-source cap: keep best excerpts
         capped: list[Evidence] = []

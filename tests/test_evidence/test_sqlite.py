@@ -37,7 +37,7 @@ async def test_connect_creates_schema(sqlite_store):
     ) as cursor:
         row = await cursor.fetchone()
         assert row is not None
-        assert row[0] == "1"
+        assert row[0] == "2"
 
 
 # ---------------------------------------------------------------------------
@@ -274,3 +274,45 @@ async def test_serialization_nullable_fields(sqlite_store):
     assert retrieved.author is None
     assert retrieved.published_at is None
     assert retrieved.source_quality is None
+
+
+# ---------------------------------------------------------------------------
+# sqlite-vec integration
+# ---------------------------------------------------------------------------
+
+
+async def test_vec_table_created_when_available(sqlite_store):
+    """The evidence_vec virtual table should exist if sqlite-vec loaded."""
+    if not sqlite_store.vec_available:
+        pytest.skip("sqlite-vec not available in this environment")
+    db = sqlite_store._db
+    async with db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='evidence_vec'"
+    ) as cursor:
+        row = await cursor.fetchone()
+        assert row is not None
+
+
+async def test_put_and_search_embedding(sqlite_store):
+    """Store and retrieve an embedding via KNN search."""
+    if not sqlite_store.vec_available:
+        pytest.skip("sqlite-vec not available in this environment")
+    ev = make_evidence(id="ev_vec_test")
+    await sqlite_store.put(ev)
+
+    embedding = [1.0] * 768
+    stored = await sqlite_store.put_embedding("ev_vec_test", embedding)
+    assert stored is True
+
+    results = await sqlite_store.search_by_embedding(embedding, k=5)
+    assert len(results) >= 1
+    ids = [r[0] for r in results]
+    assert "ev_vec_test" in ids
+
+
+async def test_search_by_embedding_empty_store(sqlite_store):
+    """Searching an empty vec store returns empty results."""
+    if not sqlite_store.vec_available:
+        pytest.skip("sqlite-vec not available in this environment")
+    results = await sqlite_store.search_by_embedding([0.0] * 768, k=5)
+    assert results == []
