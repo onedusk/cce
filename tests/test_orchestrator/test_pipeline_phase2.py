@@ -186,3 +186,36 @@ async def test_pipeline_jurisdiction_passthrough(sqlite_store):
     # Verifier is the second LLM call (calls[1])
     verifier_user_msg = llm.calls[1]["messages"][0].content
     assert "Jurisdiction/scope: United States" in verifier_user_msg
+
+
+@pytest.mark.integration
+async def test_pipeline_max_evidence_caps_writer_input(sqlite_store):
+    """max_evidence on PathConfig limits evidence passed to writer."""
+    llm = _llm(_writer_json(), _verifier_json(supported=1, total=1, gaps=0))
+    adapter = _make_adapter()
+    config = make_engine_config()
+
+    path_configs = {
+        "blog": PathConfig(
+            id="blog",
+            name="Blog",
+            max_evidence=1,
+        ),
+    }
+
+    pipeline = Pipeline(
+        config=config,
+        crawl_adapter=adapter,
+        evidence_store=sqlite_store,
+        llm=llm,
+        path_configs=path_configs,
+    )
+
+    request = make_curation_request(paths=["blog"])
+    policy = make_source_policy()
+    result = await pipeline.run(request, policy)
+
+    assert result.succeeded
+    # Writer prompt should mention 1 evidence excerpt (capped from full set)
+    writer_user_msg = llm.calls[0]["messages"][0].content
+    assert "1 evidence excerpts" in writer_user_msg

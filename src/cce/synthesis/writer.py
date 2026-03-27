@@ -130,12 +130,17 @@ class Writer:
         if path_config is not None and path_config.audience_override:
             audience = path_config.audience_override
 
+        # Resolve subtopics: path config can limit scope
+        subtopics = request.subtopics
+        if path_config and path_config.subtopic_limit:
+            subtopics = request.subtopics[: path_config.subtopic_limit]
+
         jurisdiction_line = ""
         if request.constraints and request.constraints.jurisdiction:
             jurisdiction_line = f"Jurisdiction/scope: {request.constraints.jurisdiction}\n"
 
         user_prompt = f"""Topic: {request.topic}
-Subtopics: {", ".join(request.subtopics) if request.subtopics else "None specified"}
+Subtopics: {", ".join(subtopics) if subtopics else "None specified"}
 Target audience: {audience}
 Output path: {path}
 {jurisdiction_line}
@@ -193,6 +198,10 @@ exists, and mark remaining gaps as [INSUFFICIENT EVIDENCE].
             )
         if path_config.max_words:
             parts.append(f"Target length: ~{path_config.max_words} words")
+        if path_config.max_paragraphs:
+            parts.append(
+                f"Structure: ~{path_config.max_paragraphs} substantive paragraphs"
+            )
         if path_config.prompt_addendum:
             parts.append(path_config.prompt_addendum)
 

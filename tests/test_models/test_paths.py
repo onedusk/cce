@@ -16,6 +16,9 @@ class TestPathConfig:
         assert pc.section_requirements == []
         assert pc.max_words is None
         assert pc.prompt_addendum is None
+        assert pc.max_evidence is None
+        assert pc.max_paragraphs is None
+        assert pc.subtopic_limit is None
 
     def test_all_fields(self):
         pc = PathConfig(
@@ -46,3 +49,15 @@ class TestPathConfig:
         pc1 = PathConfig(id="a", name="A")
         pc2 = PathConfig(id="b", name="B")
         assert pc1.section_requirements is not pc2.section_requirements
+
+    def test_tuning_fields(self):
+        pc = PathConfig(
+            id="learn",
+            name="Learn",
+            max_evidence=30,
+            max_paragraphs=10,
+            subtopic_limit=2,
+        )
+        assert pc.max_evidence == 30
+        assert pc.max_paragraphs == 10
+        assert pc.subtopic_limit == 2

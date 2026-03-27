@@ -274,6 +274,11 @@ class Pipeline:
         path_config = self._path_configs.get(path)
         ev_lookup = {ev.id: ev for ev in evidence}
 
+        # Per-path evidence cap (keeps full list for tag aggregation)
+        path_evidence = evidence
+        if path_config and path_config.max_evidence:
+            path_evidence = evidence[: path_config.max_evidence]
+
         for iteration in range(1, max_iters + 1):
             logger.info(
                 "Path '%s': write-verify iteration %d/%d", path, iteration, max_iters
@@ -283,7 +288,7 @@ class Pipeline:
             write_start = datetime.now(timezone.utc)
             writer_output = await self._writer.write(
                 request=request,
-                evidence=evidence,
+                evidence=path_evidence,
                 path=path,
                 path_config=path_config,
                 feedback=feedback,
@@ -311,7 +316,7 @@ class Pipeline:
                 request.constraints.jurisdiction if request.constraints else None
             )
             report = await self._verifier.verify(
-                unit, evidence, jurisdiction=jurisdiction
+                unit, path_evidence, jurisdiction=jurisdiction
             )
 
             if job is not None:
@@ -351,7 +356,7 @@ class Pipeline:
             )
 
             # Gate decision
-            gate_result = gate.evaluate(unit, report, iteration, evidence=evidence)
+            gate_result = gate.evaluate(unit, report, iteration, evidence=path_evidence)
             gate_results.append(gate_result)
 
             if gate_result.should_publish:

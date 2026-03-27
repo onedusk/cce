@@ -75,6 +75,16 @@ class TestBuildPathAddendum:
         assert "Required sections" not in addendum
         assert "Target length" not in addendum
 
+    def test_max_paragraphs_in_addendum(self):
+        pc = _make_learn_config(max_paragraphs=10)
+        addendum = Writer._build_path_addendum(pc)
+        assert "~10 substantive paragraphs" in addendum
+
+    def test_max_paragraphs_absent_when_none(self):
+        pc = _make_learn_config(max_paragraphs=None)
+        addendum = Writer._build_path_addendum(pc)
+        assert "paragraphs" not in addendum
+
 
 @pytest.mark.integration
 class TestWriteWithPathConfig:
@@ -123,3 +133,42 @@ class TestWriteWithPathConfig:
 
         user_msg = llm.calls[0]["messages"][0].content
         assert "Target audience: general" in user_msg
+
+    async def test_subtopic_limit(self):
+        ev = make_evidence(id="ev_001")
+        llm = MockLLMProvider(
+            [LLMResponse(content=_make_writer_json(), model="mock", stop_reason="end_turn")]
+        )
+        writer = Writer(llm)
+        pc = _make_learn_config(subtopic_limit=1)
+
+        await writer.write(
+            make_curation_request(subtopics=["sub1", "sub2", "sub3"]),
+            [ev],
+            "learn",
+            path_config=pc,
+        )
+
+        user_msg = llm.calls[0]["messages"][0].content
+        assert "sub1" in user_msg
+        assert "sub2" not in user_msg
+        assert "sub3" not in user_msg
+
+    async def test_subtopic_limit_none_uses_all(self):
+        ev = make_evidence(id="ev_001")
+        llm = MockLLMProvider(
+            [LLMResponse(content=_make_writer_json(), model="mock", stop_reason="end_turn")]
+        )
+        writer = Writer(llm)
+        pc = _make_learn_config(subtopic_limit=None)
+
+        await writer.write(
+            make_curation_request(subtopics=["sub1", "sub2"]),
+            [ev],
+            "learn",
+            path_config=pc,
+        )
+
+        user_msg = llm.calls[0]["messages"][0].content
+        assert "sub1" in user_msg
+        assert "sub2" in user_msg

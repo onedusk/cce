@@ -49,4 +49,18 @@ class PathConfig(BaseModel):
         description="Additional writer instruction appended to system prompt",
     )
 
+    # Per-path tuning (optional — leave None to use pipeline defaults)
+    max_evidence: Optional[int] = Field(
+        default=None,
+        description="Cap evidence objects for this path (None = use all)",
+    )
+    max_paragraphs: Optional[int] = Field(
+        default=None,
+        description="Target max substantive paragraphs (None = no limit)",
+    )
+    subtopic_limit: Optional[int] = Field(
+        default=None,
+        description="Use only the first N subtopics for this path (None = all)",
+    )
+
     model_config = {"frozen": True}
