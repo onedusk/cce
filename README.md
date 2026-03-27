@@ -8,14 +8,16 @@ The engine discovers sources, extracts verbatim evidence with provenance, synthe
 
 ```
 CurationRequest
-  → Source Policy (filter bad inputs early)
-  → Discover + Extract (crawl, normalize, store evidence)
-  → Evidence Store (verbatim excerpts + provenance)
-  → Structure & Tag (pluggable taxonomy)
-  → Writer (draft from evidence only)
-  → Verifier (check every claim against evidence)
-  → Quality Gate (pass / fix gaps / human review)
-  → Publish Package (content + evidence map + scores + lineage)
+  -> Source Policy (filter bad inputs early)
+  -> Discover + Extract (crawl, normalize, store evidence)
+  -> Embedding Ranking (semantic relevance scoring via Ollama + sqlite-vec)
+  -> Date + Reputation Filters (recency, peer-review, COI enforcement)
+  -> Taxonomy Tagging (classify evidence by domain dimensions)
+  -> Evidence Store (verbatim excerpts + provenance + tags)
+  -> Per-Path Synthesis (writer adapts tone/structure/depth per output path)
+  -> Verifier (check every claim against evidence, trust-weighted)
+  -> Quality Gate (pass / fix gaps / human review)
+  -> Publish Package (content + evidence map + scores + lineage)
 ```
 
 **Core invariant:** the writer produces drafts _only_ from stored evidence objects. The verifier is a separate role that checks every claim. The quality gate enforces "no citation, no ship."
@@ -24,20 +26,18 @@ CurationRequest
 
 ```
 src/cce/
-├── config/         # Engine configuration (env vars, YAML → typed objects)
-├── models/         # Pydantic data contracts (shared across all modules)
-├── policy/         # Source policy (domain rules, reputation, recency)
-├── discovery/      # Source discovery + extraction + crawl adapters
-├── evidence/       # Evidence store (persistence, dedup, retrieval)
-├── synthesis/      # Writer agent (evidence-constrained drafts)
-├── verification/   # Verifier agent + quality gate
-├── orchestrator/   # Pipeline execution, writer-verifier loop
-├── llm/            # LLM provider adapters
-├── tagging/        # Taxonomy + path plugins (Phase 2)
-└── api/            # REST API via FastAPI (Phase 3)
+  config/         # Engine configuration (env vars, YAML -> typed objects)
+  models/         # Pydantic data contracts (shared across all modules)
+  policy/         # Source policy (domain rules, reputation, recency)
+  discovery/      # Source discovery + extraction + crawl adapters + embeddings
+  evidence/       # Evidence store (SQLite + sqlite-vec, dedup, retrieval)
+  tagging/        # Taxonomy plugin protocol + YAML loaders
+  synthesis/      # Writer agent (evidence-constrained, path-aware drafts)
+  verification/   # Verifier agent (trust-weighted) + quality gate
+  orchestrator/   # Pipeline execution, writer-verifier loop
+  llm/            # LLM provider adapters (Anthropic)
+  api/            # REST API via FastAPI (Phase 3)
 ```
-
-See [`docs/internal/package-structure.md`](docs/internal/package-structure.md) for module responsibilities, dependency flow, and design decisions.
 
 ## Key Design Points
 
@@ -46,29 +46,52 @@ See [`docs/internal/package-structure.md`](docs/internal/package-structure.md) f
 - **Writer/critic separation** -- synthesis and verification are distinct roles
 - **No citation, no ship** -- the quality gate that prevents misinformation at scale
 - **Plugin boundaries** -- taxonomy, output paths, and platform integration are extension points
-- **Adapters, not abstractions** -- external deps (crawlers, LLMs, MCP) are behind adapter interfaces that live next to their consumers
+- **Adapters, not abstractions** -- external deps (crawlers, LLMs, embeddings) are behind Protocol interfaces next to their consumers
+- **Config-driven** -- policies, taxonomies, and path configs are YAML; no hardcoded domain logic
 
-## Implementation Phases
+## Implementation Status
 
-| Phase | Focus                                                             | Status      |
-|-------|-------------------------------------------------------------------|-------------|
-| 1     | Core loop -- discover, extract, store, write, verify, gate        | Not started |
-| 2     | Plugin extraction -- TaxonomyPlugin, PathPlugin, policy config    | --          |
-| 3     | API layer -- REST endpoints, job orchestration, SDK               | --          |
-| 4     | Platform integration -- storage adapter, feedback loop, rendering | --          |
+| Phase | Focus | Status |
+|-------|-------|--------|
+| 1 | Core loop -- discover, extract, store, write, verify, gate | Complete |
+| 2 | Embedding ranking, taxonomy tagging, path-aware writer, policy enforcement | Complete |
+| 3 | API layer -- REST endpoints, job orchestration, SDK | Not started |
+| 4 | Platform integration -- storage adapter, feedback loop, rendering | Not started |
+
+**Phase 1** delivered the full pipeline loop across 8 live runs. **Phase 2** added semantic evidence ranking (Ollama + sqlite-vec), rules-based taxonomy classification, per-path writer modulation, verifier trust weighting, jurisdiction pass-through, and domain policy templates.
 
 ## Tech Stack
 
-- **Python** -- core engine and pipeline
-- **FastAPI** -- REST API (Phase 3)
-- **Pydantic** -- data contracts and configuration
-- **SQLite** -- evidence store (Phase 1 local dev)
-- **Firecrawl** -- crawl adapter (Phase 1 default)
+- **Python >= 3.11** -- managed with uv, linted with ruff, built with hatchling
+- **Pydantic v2** -- frozen data contracts and configuration
+- **SQLite + sqlite-vec** -- evidence store with vector search
+- **Ollama** -- local embedding generation (nomic-embed-text-v2-moe)
+- **Anthropic Claude** -- LLM provider for writer and verifier
+- **Firecrawl** -- crawl adapter for source discovery
+- **pytest** -- async test suite (256 tests)
 
-## Internal Docs
+## Quick Start
 
-- [`content-curation-engine.md`](docs/internal/content-curation-engine.md) -- original architecture (Thnk Labs-specific)
-- [`content-curation-engine-generic.md`](docs/internal/content-curation-engine-generic.md) -- reusable framework spec, API design, data contracts
-- [`content-curation-engine-landscape.md`](docs/internal/content-curation-engine-landscape.md) -- landscape research (STORM, Perplexity, Elicit, Loki, etc.)
-- [`content-curation-engine-next-steps.md`](docs/internal/content-curation-engine-next-steps.md) -- phased implementation plan
-- [`package-structure.md`](docs/internal/package-structure.md) -- module layout, dependency flow, design decisions
+```bash
+# Install dependencies
+uv sync --all-extras
+
+# Set up environment
+cp .env.example .env  # add ANTHROPIC_API_KEY and FIRECRAWL_API_KEY
+
+# Run tests
+uv run pytest
+
+# Lint
+uv run ruff check src/
+
+# Run a live pipeline
+PYTHONPATH=src uv run python run_live.py
+```
+
+## Configuration
+
+- **Policies:** `policies/` -- YAML source policies (domain rules, reputation, recency). See `docs/internal/policy-authoring.md`.
+- **Taxonomies:** `taxonomies/` -- YAML taxonomy definitions for evidence classification.
+- **Path configs:** `path_configs/` -- YAML output path definitions (tone, structure, depth per path).
+- **Engine config:** Environment variables or `config.yaml`. See `src/cce/config/types.py`.

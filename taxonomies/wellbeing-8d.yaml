@@ -1,0 +1,35 @@
+id: wellbeing-8d
+name: "8 Dimensions of Well-Being"
+dimensions:
+  - id: intellectual
+    name: "Intellectual Well-Being"
+    description: "How we think — cognition, attention, learning, decision-making"
+    values: ["primary", "secondary", "none"]
+  - id: emotional
+    name: "Emotional Well-Being"
+    description: "How we feel — mood, stress, resilience, emotional regulation"
+    values: ["primary", "secondary", "none"]
+  - id: physical
+    name: "Physical Well-Being"
+    description: "How the body responds — sleep, movement, health, fatigue"
+    values: ["primary", "secondary", "none"]
+  - id: environmental
+    name: "Environmental Well-Being"
+    description: "Where and how we live — noise, light, space, design"
+    values: ["primary", "secondary", "none"]
+  - id: financial
+    name: "Financial Well-Being"
+    description: "Security and uncertainty — money, budgeting, scarcity"
+    values: ["primary", "secondary", "none"]
+  - id: social
+    name: "Social Well-Being"
+    description: "How we relate — relationships, belonging, community"
+    values: ["primary", "secondary", "none"]
+  - id: spiritual
+    name: "Spiritual Well-Being"
+    description: "Meaning and perspective — purpose, values, gratitude"
+    values: ["primary", "secondary", "none"]
+  - id: vocational
+    name: "Vocational Well-Being"
+    description: "Work and contribution — career, productivity, burnout"
+    values: ["primary", "secondary", "none"]

@@ -1,0 +1,25 @@
+# General-purpose policy template.
+# Broad acceptance, minimal filtering. Good starting point for new domains.
+#
+# Copy this file and tighten rules as you learn what sources matter
+# for your specific domain. See docs/internal/policy-authoring.md for guidance.
+
+id: general-permissive
+name: "General — Permissive"
+domains_allow: []
+domains_deny:
+  - pinterest.com
+  - facebook.com
+  - twitter.com
+  - tiktok.com
+reputation:
+  require_peer_reviewed: false
+  require_primary_source: false
+  trusted_institutions:
+    - .gov
+    - .edu
+  block_marketing: true
+recency:
+  max_age_days: 2555  # 7 years
+  prefer_recent: true
+max_sources_per_run: 20

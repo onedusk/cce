@@ -49,3 +49,9 @@ evidence_live.db
 .ctxt/
 .arc/
 .firecrawl/
+
+# Client-specific files (NDA)
+*thnklabs*
+*thnk*
+docs/decompose/
+docs/internal/

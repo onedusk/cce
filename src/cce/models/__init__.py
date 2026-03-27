@@ -14,7 +14,9 @@ from cce.models.content import (
 from cce.models.evidence import Evidence, SourceQuality
 from cce.models.job import Job, JobError, JobProgress, JobStage, JobStatus, StageRecord
 from cce.models.package import PackageLineage, PublishPackage
+from cce.models.paths import PathConfig
 from cce.models.request import CurationConstraints, CurationRequest
+from cce.models.taxonomy import Dimension, TaxonomyConfig
 
 __all__ = [
     # evidence
@@ -39,4 +41,9 @@ __all__ = [
     # package
     "PublishPackage",
     "PackageLineage",
+    # taxonomy (Phase 2)
+    "Dimension",
+    "TaxonomyConfig",
+    # paths (Phase 2)
+    "PathConfig",
 ]

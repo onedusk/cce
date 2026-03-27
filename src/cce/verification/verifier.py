@@ -78,6 +78,21 @@ it MUST be supported by the evidence. General framing and transitions do not \
 count as factual claims and do not need citations.\
 """
 
+TRUST_WEIGHTING_ADDENDUM = """
+
+SOURCE TRUST WEIGHTING:
+When evaluating claim support, apply these weighting rules:
+- Claims supported by [peer-reviewed] evidence carry stronger weight.
+- Claims supported by [primary-source] evidence carry stronger weight.
+- Claims supported ONLY by [potential-COI] sources should be flagged as lower confidence.
+- When a claim has mixed source quality, note this in your explanation.
+- If all supporting evidence for a claim comes from COI-flagged sources, \
+assess it as "unsupported" regardless of apparent match.\
+"""
+
+# Pre-computed full system prompt (base + trust weighting)
+_VERIFIER_FULL_PROMPT = VERIFIER_SYSTEM_PROMPT + TRUST_WEIGHTING_ADDENDUM
+
 
 @dataclass
 class ClaimVerification:
@@ -134,12 +149,15 @@ class Verifier:
         self,
         unit: ContentUnit,
         evidence: list[Evidence],
+        *,
+        jurisdiction: str | None = None,
     ) -> VerificationReport:
         """Verify a content unit against its evidence.
 
         Args:
             unit: The draft content to verify.
             evidence: All evidence objects available for this curation run.
+            jurisdiction: Optional regulatory/geographic scope for claim validation.
         """
         if not unit.content:
             return VerificationReport(
@@ -149,6 +167,13 @@ class Verifier:
         # Build evidence reference for the verifier
         evidence_block = self._format_evidence(evidence)
 
+        jurisdiction_line = ""
+        if jurisdiction:
+            jurisdiction_line = (
+                f"\nJurisdiction/scope: {jurisdiction}. "
+                "Validate claims within this regulatory and geographic context.\n"
+            )
+
         user_prompt = f"""=== DRAFT CONTENT TO VERIFY ===
 {unit.content}
 === END DRAFT ===
@@ -156,7 +181,7 @@ class Verifier:
 === EVIDENCE AVAILABLE (the ONLY acceptable sources) ===
 {evidence_block}
 === END EVIDENCE ===
-
+{jurisdiction_line}
 Verify every factual claim in the draft against the evidence provided. \
 Any claim containing specific facts, data, or assertions that cannot be \
 traced to the evidence above should be flagged.
@@ -172,7 +197,7 @@ traced to the evidence above should be flagged.
 
         response = await self._llm.complete(
             messages,
-            system=VERIFIER_SYSTEM_PROMPT,
+            system=_VERIFIER_FULL_PROMPT,
             temperature=0.1,  # very low temp for consistent judgment
             max_tokens=16384,
         )

@@ -37,7 +37,7 @@ async def test_connect_creates_schema(sqlite_store):
     ) as cursor:
         row = await cursor.fetchone()
         assert row is not None
-        assert row[0] == "2"
+        assert row[0] == "3"
 
 
 # ---------------------------------------------------------------------------
@@ -316,3 +316,39 @@ async def test_search_by_embedding_empty_store(sqlite_store):
         pytest.skip("sqlite-vec not available in this environment")
     results = await sqlite_store.search_by_embedding([0.0] * 768, k=5)
     assert results == []
+
+
+# -- Schema v3: taxonomy columns --
+
+
+async def test_schema_v3_columns_exist(sqlite_store):
+    """Fresh DB should have tags and dimension_signals columns."""
+    db = sqlite_store._db
+    async with db.execute("PRAGMA table_info(evidence)") as cursor:
+        columns = {row[1] for row in await cursor.fetchall()}
+    assert "tags" in columns
+    assert "dimension_signals" in columns
+
+
+async def test_evidence_roundtrip_with_tags(sqlite_store):
+    """Evidence with tags and dimension_signals survives put/get."""
+    ev = make_evidence(
+        id="ev_tagged",
+        tags=["emotional", "physical"],
+        dimension_signals={"emotional": "primary", "physical": "secondary"},
+    )
+    await sqlite_store.put(ev)
+    loaded = await sqlite_store.get("ev_tagged")
+    assert loaded is not None
+    assert loaded.tags == ["emotional", "physical"]
+    assert loaded.dimension_signals == {"emotional": "primary", "physical": "secondary"}
+
+
+async def test_evidence_roundtrip_without_tags(sqlite_store):
+    """Evidence without tags returns empty defaults after roundtrip."""
+    ev = make_evidence(id="ev_no_tags")
+    await sqlite_store.put(ev)
+    loaded = await sqlite_store.get("ev_no_tags")
+    assert loaded is not None
+    assert loaded.tags == []
+    assert loaded.dimension_signals == {}

@@ -24,6 +24,7 @@ from cce.models.content import (
     ContentUnit,
 )
 from cce.models.evidence import Evidence
+from cce.models.paths import PathConfig
 from cce.models.request import CurationRequest
 from cce.parsing import extract_json
 
@@ -98,6 +99,7 @@ class Writer:
         evidence: list[Evidence],
         path: str,
         *,
+        path_config: PathConfig | None = None,
         feedback: Optional[str] = None,
         lineage: Optional[ContentLineage] = None,
     ) -> WriterOutput:
@@ -107,6 +109,8 @@ class Writer:
             request: The original curation request.
             evidence: Evidence objects to synthesize from.
             path: Which output path to write for.
+            path_config: Optional path-specific overrides for tone, structure,
+                         depth, and audience.
             feedback: Optional verifier feedback from a previous iteration
                       (gaps to fill, claims to fix).
             lineage: Provenance metadata to attach to the content unit.
@@ -121,13 +125,18 @@ class Writer:
 
         evidence_block = _build_evidence_block(evidence)
 
+        # Resolve audience: path config can override the request default
+        audience = request.audience
+        if path_config is not None and path_config.audience_override:
+            audience = path_config.audience_override
+
         jurisdiction_line = ""
         if request.constraints and request.constraints.jurisdiction:
             jurisdiction_line = f"Jurisdiction/scope: {request.constraints.jurisdiction}\n"
 
         user_prompt = f"""Topic: {request.topic}
 Subtopics: {", ".join(request.subtopics) if request.subtopics else "None specified"}
-Target audience: {request.audience}
+Target audience: {audience}
 Output path: {path}
 {jurisdiction_line}
 You have {len(evidence)} evidence excerpts to work with.
@@ -155,13 +164,40 @@ exists, and mark remaining gaps as [INSUFFICIENT EVIDENCE].
             len(evidence),
         )
 
+        # Compose system prompt: base + optional path-specific addendum
+        system_prompt = WRITER_SYSTEM_PROMPT
+        if path_config is not None:
+            system_prompt += self._build_path_addendum(path_config)
+
         response = await self._llm.complete(
             messages,
-            system=WRITER_SYSTEM_PROMPT,
+            system=system_prompt,
             temperature=0.2,  # low temp for factual consistency
         )
 
         return self._parse_response(response, evidence, path, lineage)
+
+    @staticmethod
+    def _build_path_addendum(path_config: PathConfig) -> str:
+        """Build supplemental writer instructions from PathConfig."""
+        parts: list[str] = []
+
+        parts.append(f"\n--- PATH-SPECIFIC GUIDANCE (path: {path_config.id}) ---")
+        parts.append(f"Tone: {path_config.tone}")
+        parts.append(f"Structure: {path_config.structure}")
+        parts.append(f"Depth: {path_config.depth}")
+
+        if path_config.section_requirements:
+            parts.append(
+                f"Required sections: {', '.join(path_config.section_requirements)}"
+            )
+        if path_config.max_words:
+            parts.append(f"Target length: ~{path_config.max_words} words")
+        if path_config.prompt_addendum:
+            parts.append(path_config.prompt_addendum)
+
+        parts.append("--- END PATH GUIDANCE ---")
+        return "\n".join(parts)
 
     def _parse_response(
         self,

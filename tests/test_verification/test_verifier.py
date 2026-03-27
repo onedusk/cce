@@ -6,7 +6,12 @@ import pytest
 
 from cce.llm.base import LLMResponse
 from cce.models.evidence import SourceQuality
-from cce.verification.verifier import VERIFIER_SYSTEM_PROMPT, Verifier, VerificationReport
+from cce.verification.verifier import (
+    VERIFIER_SYSTEM_PROMPT,
+    Verifier,
+    VerificationReport,
+    _VERIFIER_FULL_PROMPT,
+)
 from tests.conftest import MockLLMProvider, make_content_unit, make_evidence
 
 
@@ -217,7 +222,7 @@ async def test_verify_sends_correct_prompt():
 
     assert len(llm.calls) == 1
     call = llm.calls[0]
-    assert call["system"] == VERIFIER_SYSTEM_PROMPT
+    assert call["system"] == _VERIFIER_FULL_PROMPT
     assert call["temperature"] == 0.1
     assert call["max_tokens"] == 16384
     user_msg = call["messages"][0].content

@@ -8,6 +8,7 @@ version check and ALTER TABLE statements in _ensure_schema().
 
 from __future__ import annotations
 
+import json
 import logging
 import struct
 
@@ -18,7 +19,7 @@ from cce.models.evidence import Evidence, SourceQuality
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 CREATE_EVIDENCE_TABLE = """
 CREATE TABLE IF NOT EXISTS evidence (
@@ -32,6 +33,8 @@ CREATE TABLE IF NOT EXISTS evidence (
     excerpt_hash    TEXT NOT NULL,
     locator         TEXT,
     source_quality  TEXT,       -- JSON blob, nullable
+    tags            TEXT,       -- JSON array, nullable (v3)
+    dimension_signals TEXT,     -- JSON object, nullable (v3)
 
     UNIQUE(excerpt_hash)       -- dedup on verbatim content
 );
@@ -100,8 +103,9 @@ class SQLiteEvidenceStore:
                 """
                 INSERT INTO evidence
                     (id, url, title, author, published_at, retrieved_at,
-                     excerpt, excerpt_hash, locator, source_quality)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     excerpt, excerpt_hash, locator, source_quality,
+                     tags, dimension_signals)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 self._to_row(evidence),
             )
@@ -119,8 +123,9 @@ class SQLiteEvidenceStore:
                     """
                     INSERT INTO evidence
                         (id, url, title, author, published_at, retrieved_at,
-                         excerpt, excerpt_hash, locator, source_quality)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         excerpt, excerpt_hash, locator, source_quality,
+                         tags, dimension_signals)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     self._to_row(ev),
                 )
@@ -256,12 +261,38 @@ class SQLiteEvidenceStore:
                 );
             """)
 
-        # Store schema version for future migrations
-        await self._db.execute(
-            "INSERT OR REPLACE INTO _meta (key, value) VALUES (?, ?)",
-            ("schema_version", str(SCHEMA_VERSION)),
-        )
+        # Check stored version and run migrations if needed
+        stored_version = 0
+        async with self._db.execute(
+            "SELECT value FROM _meta WHERE key = 'schema_version'"
+        ) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                stored_version = int(row[0])
+
+        if stored_version < 3:
+            await self._migrate_to_v3()
+
+        if stored_version != SCHEMA_VERSION:
+            await self._db.execute(
+                "INSERT OR REPLACE INTO _meta (key, value) VALUES (?, ?)",
+                ("schema_version", str(SCHEMA_VERSION)),
+            )
+
         await self._db.commit()
+
+    async def _migrate_to_v3(self) -> None:
+        """Add tags and dimension_signals columns if missing."""
+        assert self._db is not None
+        async with self._db.execute("PRAGMA table_info(evidence)") as cursor:
+            columns = {row[1] for row in await cursor.fetchall()}
+
+        if "tags" not in columns:
+            await self._db.execute("ALTER TABLE evidence ADD COLUMN tags TEXT;")
+        if "dimension_signals" not in columns:
+            await self._db.execute(
+                "ALTER TABLE evidence ADD COLUMN dimension_signals TEXT;"
+            )
 
     @staticmethod
     def _to_row(ev: Evidence) -> tuple:
@@ -276,6 +307,8 @@ class SQLiteEvidenceStore:
             ev.excerpt_hash,
             ev.locator,
             ev.source_quality.model_dump_json() if ev.source_quality else None,
+            json.dumps(ev.tags),
+            json.dumps(ev.dimension_signals),
         )
 
     @staticmethod
@@ -285,6 +318,9 @@ class SQLiteEvidenceStore:
         source_quality = None
         if row[9]:
             source_quality = SourceQuality.model_validate_json(row[9])
+
+        tags = json.loads(row[10]) if row[10] else []
+        dimension_signals = json.loads(row[11]) if row[11] else {}
 
         return Evidence(
             id=row[0],
@@ -297,4 +333,6 @@ class SQLiteEvidenceStore:
             excerpt_hash=row[7],
             locator=row[8],
             source_quality=source_quality,
+            tags=tags,
+            dimension_signals=dimension_signals,
         )

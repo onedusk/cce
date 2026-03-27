@@ -53,5 +53,13 @@ class Evidence(BaseModel):
         default=None,
         description="Quality metadata assigned during discovery",
     )
+    tags: list[str] = Field(
+        default_factory=list,
+        description="Taxonomy tags assigned during discovery (Phase 2)",
+    )
+    dimension_signals: dict[str, str] = Field(
+        default_factory=dict,
+        description="Taxonomy dimension_id -> assigned value (Phase 2)",
+    )
 
     model_config = {"frozen": True}

@@ -1,0 +1,38 @@
+# Financial domain policy template.
+# Copy and customize for your specific financial content needs.
+#
+# Tuned for: personal finance, economic literacy, financial wellness.
+# For investment advice or regulatory content, tighten reputation rules
+# (e.g., require_peer_reviewed: true, add SEC/FINRA to trusted list).
+
+id: financial-balanced
+name: "Financial — Balanced Sources"
+domains_allow: []
+domains_deny:
+  - reddit.com
+  - quora.com
+  - medium.com
+  - pinterest.com
+  - facebook.com
+  - twitter.com
+  - tiktok.com
+  - youtube.com
+  - amazon.com
+reputation:
+  require_peer_reviewed: false
+  require_primary_source: false
+  trusted_institutions:
+    - .gov
+    - .edu
+    - federalreserve.gov
+    - sec.gov
+    - consumerfinance.gov
+    - bls.gov
+    - nber.org
+    - imf.org
+    - worldbank.org
+  block_marketing: true
+recency:
+  max_age_days: 1095  # 3 years — financial data ages faster
+  prefer_recent: true
+max_sources_per_run: 15

@@ -290,3 +290,18 @@ async def test_write_includes_jurisdiction_in_prompt():
 
     user_msg = llm.calls[0]["messages"][0].content
     assert "Jurisdiction/scope: US" in user_msg
+
+
+@pytest.mark.integration
+async def test_write_without_path_config_uses_base_prompt():
+    """Backward compat: no path_config means system prompt is exactly WRITER_SYSTEM_PROMPT."""
+    ev = make_evidence(id="ev_001")
+    raw_json = _make_writer_json()
+    llm = MockLLMProvider(
+        [LLMResponse(content=raw_json, model="mock", stop_reason="end_turn")]
+    )
+    writer = Writer(llm)
+
+    await writer.write(make_curation_request(), [ev], "blog")
+
+    assert llm.calls[0]["system"] == WRITER_SYSTEM_PROMPT

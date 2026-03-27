@@ -1,0 +1,34 @@
+# Technology domain policy template.
+# Copy and customize for your specific tech content needs.
+#
+# Tuned for: software engineering, AI/ML, web standards, computer science.
+# For security-focused content, add CVE databases and NIST to trusted list.
+
+id: technology-current
+name: "Technology — Current Sources"
+domains_allow: []
+domains_deny:
+  - reddit.com
+  - quora.com
+  - pinterest.com
+  - facebook.com
+  - twitter.com
+  - tiktok.com
+  - amazon.com
+reputation:
+  require_peer_reviewed: false
+  require_primary_source: false
+  trusted_institutions:
+    - .edu
+    - acm.org
+    - ieee.org
+    - arxiv.org
+    - nature.com
+    - science.org
+    - w3.org
+    - ietf.org
+  block_marketing: true
+recency:
+  max_age_days: 730  # 2 years — tech moves fast
+  prefer_recent: true
+max_sources_per_run: 15

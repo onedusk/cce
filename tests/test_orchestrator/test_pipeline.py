@@ -1,100 +1,22 @@
 """Tests for cce.orchestrator.pipeline — full pipeline orchestration."""
 
-import json
-
 import pytest
 
-from cce.llm.base import LLMResponse
 from cce.models.job import Job, JobStatus
 from cce.orchestrator.pipeline import Pipeline, PipelineResult
 from cce.verification.gate import GateDecision
 from tests.conftest import (
     MockCrawlAdapter,
-    MockLLMProvider,
-    make_crawl_result,
     make_curation_request,
     make_engine_config,
     make_source_policy,
 )
-
-
-# ---------------------------------------------------------------------------
-# Helpers — scripted LLM JSON responses
-# ---------------------------------------------------------------------------
-
-
-def _writer_json(*, content: str = "Draft with citation [ev:ev_001].") -> str:
-    return json.dumps(
-        {
-            "content": content,
-            "citations_used": ["ev_001"],
-            "evidence_map": [
-                {"claim": "Draft claim", "evidence_ids": ["ev_001"]}
-            ],
-            "gaps": [],
-        }
-    )
-
-
-def _verifier_json(
-    *,
-    supported: int = 8,
-    total: int = 10,
-    leakage: int = 0,
-    conflicts: int = 0,
-    unsupported: int = 0,
-    uncited: int = 0,
-    gaps: int = 2,
-) -> str:
-    return json.dumps(
-        {
-            "claims": [
-                {
-                    "claim": f"Claim {i}",
-                    "citation_ids": ["ev_001"],
-                    "assessment": "supported",
-                    "explanation": "OK",
-                    "suggestion": "",
-                }
-                for i in range(supported)
-            ],
-            "summary": {
-                "total_claims": total,
-                "supported": supported,
-                "unsupported": unsupported,
-                "uncited": uncited,
-                "leakage": leakage,
-                "conflicts": conflicts,
-                "gaps_acknowledged": gaps,
-            },
-            "overall_feedback": "All good.",
-            "contradictions": [],
-        }
-    )
-
-
-def _make_adapter():
-    """Standard adapter with one search result and one crawl result."""
-    return MockCrawlAdapter(
-        search_map={
-            "test topic": ["https://example.com/article"],
-        },
-        url_map={
-            "https://example.com/article": make_crawl_result(
-                url="https://example.com/article",
-                markdown=(
-                    "This is a substantial paragraph with real content that exceeds "
-                    "the fifty character minimum for evidence extraction in tests."
-                ),
-            ),
-        },
-    )
-
-
-def _llm(*json_strings: str) -> MockLLMProvider:
-    return MockLLMProvider(
-        [LLMResponse(content=s, model="mock", stop_reason="end_turn") for s in json_strings]
-    )
+from tests.test_orchestrator.conftest import (
+    llm as _llm,
+    make_adapter as _make_adapter,
+    verifier_json as _verifier_json,
+    writer_json as _writer_json,
+)
 
 
 # ---------------------------------------------------------------------------

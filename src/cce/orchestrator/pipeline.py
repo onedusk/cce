@@ -20,8 +20,10 @@ from cce.models.content import ContentLineage, ContentScores, ContentUnit
 from cce.models.evidence import Evidence
 from cce.models.job import Job, JobProgress, JobStage, JobStatus, StageRecord
 from cce.models.package import PackageLineage, PublishPackage
+from cce.models.paths import PathConfig
 from cce.models.request import CurationRequest
 from cce.policy.types import SourcePolicy
+from cce.tagging.base import TaxonomyPlugin, TaxonomyUnavailableError
 from cce.synthesis.writer import Writer
 from cce.verification.gate import GateDecision, GateResult, QualityGate
 from cce.verification.verifier import Verifier
@@ -39,8 +41,12 @@ class Pipeline:
         evidence_store: EvidenceStore,
         llm: LLMProvider,
         embedding_provider: EmbeddingProvider | None = None,
+        taxonomy_plugin: TaxonomyPlugin | None = None,
+        path_configs: dict[str, PathConfig] | None = None,
     ) -> None:
         self._config = config
+        self._taxonomy_plugin = taxonomy_plugin
+        self._path_configs = path_configs or {}
         self._discoverer = Discoverer(
             adapter=crawl_adapter,
             config=config.crawl,
@@ -104,6 +110,34 @@ class Pipeline:
                     ),
                     gate_results=[],
                 )
+
+            # --- Stage 1.5: Tag evidence (optional) ---
+            if self._taxonomy_plugin is not None:
+                try:
+                    results = await self._taxonomy_plugin.tag_many(evidence)
+                    tagged: list[Evidence] = []
+                    for ev, result in zip(evidence, results):
+                        tagged.append(
+                            ev.model_copy(
+                                update={
+                                    "tags": result.tags,
+                                    "dimension_signals": result.signals,
+                                }
+                            )
+                        )
+                    evidence = tagged
+                    logger.info(
+                        "Tagged %d evidence objects with taxonomy", len(evidence)
+                    )
+                except TaxonomyUnavailableError:
+                    logger.warning(
+                        "Taxonomy plugin unavailable, proceeding without tags"
+                    )
+                except Exception:
+                    logger.warning(
+                        "Taxonomy plugin raised unexpected error, proceeding without tags",
+                        exc_info=True,
+                    )
 
             # --- Stage 2: Store evidence ---
             stage_start = datetime.now(timezone.utc)
@@ -237,6 +271,9 @@ class Pipeline:
         gate_config = gate._config
         max_iters = gate_config.max_writer_iterations
 
+        path_config = self._path_configs.get(path)
+        ev_lookup = {ev.id: ev for ev in evidence}
+
         for iteration in range(1, max_iters + 1):
             logger.info(
                 "Path '%s': write-verify iteration %d/%d", path, iteration, max_iters
@@ -248,6 +285,7 @@ class Pipeline:
                 request=request,
                 evidence=evidence,
                 path=path,
+                path_config=path_config,
                 feedback=feedback,
                 lineage=lineage,
             )
@@ -269,7 +307,12 @@ class Pipeline:
 
             # Verify
             verify_start = datetime.now(timezone.utc)
-            report = await self._verifier.verify(unit, evidence)
+            jurisdiction = (
+                request.constraints.jurisdiction if request.constraints else None
+            )
+            report = await self._verifier.verify(
+                unit, evidence, jurisdiction=jurisdiction
+            )
 
             if job is not None:
                 job.stages.append(
@@ -280,11 +323,22 @@ class Pipeline:
                     )
                 )
 
+            # Aggregate tags from cited evidence
+            cited_ids = {c.evidence_id for c in unit.citations}
+            aggregated_tags = sorted(
+                {
+                    tag
+                    for eid in cited_ids
+                    if eid in ev_lookup
+                    for tag in ev_lookup[eid].tags
+                }
+            )
+
             # Update unit scores from verification
             unit = ContentUnit(
                 id=unit.id,
                 path=unit.path,
-                tags=unit.tags,
+                tags=aggregated_tags,
                 content=unit.content,
                 citations=unit.citations,
                 evidence_map=unit.evidence_map,
