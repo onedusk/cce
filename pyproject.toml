@@ -15,7 +15,14 @@ dependencies = [
     "aiosqlite>=0.20",
     "httpx>=0.27",
     "sqlite-vec>=0.1.7",
+    "fastapi>=0.135.2",
+    "uvicorn>=0.42.0",
+    "pynacl>=1.6.2",
+    "typer>=0.24.1",
 ]
+
+[project.scripts]
+cce = "cce.cli:app"
 
 [project.optional-dependencies]
 dev = [

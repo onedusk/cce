@@ -23,6 +23,11 @@ _ENV_VARS = [
     "FIRECRAWL_API_KEY",
     "CCE_CRAWL_RATE_LIMIT",
     "CCE_CRAWL_TIMEOUT",
+    "CCE_API_HOST",
+    "CCE_API_PORT",
+    "CCE_API_REQUIRE_AUTH",
+    "CCE_API_CORS_ORIGINS",
+    "CCE_API_MAX_CONCURRENT_JOBS",
 ]
 
 
@@ -157,3 +162,56 @@ def test_load_embedding_config_env_overrides(monkeypatch):
     assert emb.model == "custom-model"
     assert emb.base_url == "http://remote:8080"
     assert emb.dimensions == 384
+
+
+# ---------------------------------------------------------------------------
+# API config (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+def test_load_api_config_defaults(monkeypatch):
+    _clear_env(monkeypatch)
+    config = load_config()
+    api = config.api
+
+    assert api.host == "0.0.0.0"
+    assert api.port == 8000
+    assert api.require_auth is True
+    assert api.cors_origins == ["*"]
+    assert api.max_concurrent_jobs == 2
+
+
+def test_load_api_config_env_overrides(monkeypatch):
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("CCE_API_PORT", "9000")
+    monkeypatch.setenv("CCE_API_REQUIRE_AUTH", "false")
+    monkeypatch.setenv("CCE_API_MAX_CONCURRENT_JOBS", "5")
+    monkeypatch.setenv("CCE_API_HOST", "127.0.0.1")
+
+    config = load_config()
+    api = config.api
+
+    assert api.host == "127.0.0.1"
+    assert api.port == 9000
+    assert api.require_auth is False
+    assert api.max_concurrent_jobs == 5
+
+
+def test_load_api_config_cors_env(monkeypatch):
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("CCE_API_CORS_ORIGINS", "http://localhost:3000, https://app.example.com")
+
+    config = load_config()
+    assert config.api.cors_origins == ["http://localhost:3000", "https://app.example.com"]
+
+
+def test_load_api_config_from_yaml(monkeypatch, tmp_path):
+    _clear_env(monkeypatch)
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        yaml.dump({"api": {"port": 9999, "require_auth": False, "host": "0.0.0.0"}})
+    )
+    config = load_config(config_file)
+
+    assert config.api.port == 9999
+    assert config.api.require_auth is False

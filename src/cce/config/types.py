@@ -126,6 +126,23 @@ class QualityGateConfig(BaseModel):
     )
 
 
+class APIConfig(BaseModel):
+    """API server configuration (Phase 3)."""
+
+    host: str = Field(default="0.0.0.0", description="Bind address")
+    port: int = Field(default=8000, description="Bind port")
+    require_auth: bool = Field(
+        default=True, description="Enable API key authentication"
+    )
+    cors_origins: list[str] = Field(
+        default_factory=lambda: ["*"],
+        description="CORS allowed origins",
+    )
+    max_concurrent_jobs: int = Field(
+        default=2, ge=1, description="Max simultaneous pipeline runs"
+    )
+
+
 class EngineConfig(BaseModel):
     """Top-level engine configuration. Constructed by config/loader.py."""
 
@@ -153,4 +170,5 @@ class EngineConfig(BaseModel):
         },
         description="Quality gate thresholds keyed by risk profile name",
     )
+    api: APIConfig = Field(default_factory=APIConfig)
     engine_version: str = Field(default="0.1.0")

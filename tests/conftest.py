@@ -22,6 +22,7 @@ from cce.config.types import (
 from cce.discovery.adapters.base import CrawlAdapter, CrawlRequest, CrawlResult
 from cce.discovery.embeddings import EmbeddingResult, EmbeddingUnavailableError
 from cce.evidence.sqlite import SQLiteEvidenceStore
+from cce.jobs.store import JobStore
 from cce.llm.base import LLMMessage, LLMProvider, LLMResponse
 from cce.models.content import (
     ContentLineage,
@@ -29,6 +30,8 @@ from cce.models.content import (
     ContentUnit,
 )
 from cce.models.evidence import Evidence, SourceQuality
+from cce.models.job import Job
+from cce.models.package import PackageLineage, PublishPackage
 from cce.models.request import CurationRequest
 from cce.policy.types import RecencyRule, ReputationRule, SourcePolicy
 from cce.verification.verifier import VerificationReport
@@ -386,6 +389,22 @@ async def sqlite_store(
 
 
 # ---------------------------------------------------------------------------
+# Fixture: JobStore (real DB via tmp_path)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def job_store(
+    tmp_path: Path,
+) -> AsyncGenerator[JobStore, None]:
+    """Isolated JobStore per test."""
+    store = JobStore(db_path=tmp_path / "test_jobs.db")
+    await store.connect()
+    yield store
+    await store.close()
+
+
+# ---------------------------------------------------------------------------
 # Fixture: MockLLMProvider convenience
 # ---------------------------------------------------------------------------
 
@@ -406,3 +425,44 @@ def mock_llm() -> Callable[..., MockLLMProvider]:
         return MockLLMProvider(responses=responses)
 
     return _factory
+
+
+# ---------------------------------------------------------------------------
+# Factory: Job
+# ---------------------------------------------------------------------------
+
+
+def make_job(**overrides: Any) -> Job:
+    """Build a Job with sensible defaults."""
+    defaults: dict[str, Any] = {
+        "id": f"job_{uuid.uuid4().hex[:12]}",
+        "request": make_curation_request(),
+    }
+    defaults.update(overrides)
+    return Job(**defaults)
+
+
+# ---------------------------------------------------------------------------
+# Factory: PublishPackage
+# ---------------------------------------------------------------------------
+
+
+def make_publish_package(**overrides: Any) -> PublishPackage:
+    """Build a minimal PublishPackage with sensible defaults."""
+    defaults: dict[str, Any] = {
+        "job_id": f"job_{uuid.uuid4().hex[:12]}",
+        "units": [make_content_unit()],
+        "evidence": [make_evidence()],
+        "scores": ContentScores(
+            confidence=0.9,
+            coverage=0.9,
+            source_diversity=0.8,
+        ),
+        "lineage": PackageLineage(
+            policy_id="test-policy",
+            run_id=f"run_{uuid.uuid4().hex[:8]}",
+            engine_version="0.1.0-test",
+        ),
+    }
+    defaults.update(overrides)
+    return PublishPackage(**defaults)
