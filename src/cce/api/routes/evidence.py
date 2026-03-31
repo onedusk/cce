@@ -9,12 +9,12 @@ from __future__ import annotations
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
-from cce.api.schemas import envelope
+from cce.api.schemas import APIEnvelope, envelope
 
 router = APIRouter(prefix="/v1/curate/evidence", tags=["evidence"])
 
 
-@router.get("/{evidence_id}")
+@router.get("/{evidence_id}", response_model=APIEnvelope[dict])
 async def get_evidence(evidence_id: str, request: Request) -> JSONResponse:
     """Get a single evidence object by ID."""
     evidence = await request.app.state.evidence_store.get(evidence_id)
@@ -30,7 +30,7 @@ async def get_evidence(evidence_id: str, request: Request) -> JSONResponse:
     )
 
 
-@router.get("")
+@router.get("", response_model=APIEnvelope[list])
 async def search_evidence(
     request: Request,
     url: str | None = Query(default=None),

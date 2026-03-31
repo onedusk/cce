@@ -20,8 +20,10 @@ from fastapi.security import HTTPAuthorizationCredentials
 
 from cce.api.auth import security as _security
 from cce.api.schemas import (
+    APIEnvelope,
     JobCreateRequest,
     JobListResponse,
+    JobResponse,
     envelope,
     job_to_response,
 )
@@ -51,7 +53,7 @@ async def _auth_dependency(
 # ---------------------------------------------------------------------------
 
 
-@router.post("", status_code=202)
+@router.post("", status_code=202, response_model=APIEnvelope[JobResponse])
 async def create_job(
     body: JobCreateRequest,
     request: Request,
@@ -116,7 +118,7 @@ async def create_job(
     )
 
 
-@router.get("/{job_id}")
+@router.get("/{job_id}", response_model=APIEnvelope[JobResponse])
 async def get_job(job_id: str, request: Request) -> JSONResponse:
     """Get job status."""
     job = await request.app.state.job_store.get_job(job_id)
@@ -132,7 +134,7 @@ async def get_job(job_id: str, request: Request) -> JSONResponse:
     )
 
 
-@router.get("")
+@router.get("", response_model=APIEnvelope[JobListResponse])
 async def list_jobs(
     request: Request,
     status: str | None = Query(default=None),
@@ -173,7 +175,7 @@ async def list_jobs(
     )
 
 
-@router.delete("/{job_id}")
+@router.delete("/{job_id}", response_model=APIEnvelope[dict])
 async def delete_job(
     job_id: str,
     request: Request,
@@ -203,7 +205,7 @@ async def delete_job(
     )
 
 
-@router.post("/{job_id}/retry", status_code=202)
+@router.post("/{job_id}/retry", status_code=202, response_model=APIEnvelope[JobResponse])
 async def retry_job(
     job_id: str,
     request: Request,
@@ -265,7 +267,7 @@ async def retry_job(
     )
 
 
-@router.get("/{job_id}/package")
+@router.get("/{job_id}/package", response_model=APIEnvelope[dict])
 async def get_package(job_id: str, request: Request) -> JSONResponse:
     """Get the completed pipeline output for a job."""
     package = await request.app.state.job_store.get_package(job_id)

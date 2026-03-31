@@ -7,11 +7,13 @@ are serialized through these schemas, not exposed directly.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, Field
 
 from cce.models.job import Job
+
+T = TypeVar("T")
 
 
 # ---------------------------------------------------------------------------
@@ -19,10 +21,14 @@ from cce.models.job import Job
 # ---------------------------------------------------------------------------
 
 
-class APIEnvelope(BaseModel):
-    """Standard response wrapper."""
+class APIEnvelope(BaseModel, Generic[T]):
+    """Standard response wrapper.
 
-    data: Any = None
+    Generic over T so that ``APIEnvelope[JobResponse]`` produces a typed
+    ``data`` field in the OpenAPI schema.
+    """
+
+    data: T | None = None
     error: str | None = None
     meta: dict[str, Any] = Field(default_factory=dict)
 

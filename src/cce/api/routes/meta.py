@@ -11,14 +11,14 @@ import logging
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from cce.api.schemas import HealthResponse, MetaResponse, envelope
+from cce.api.schemas import APIEnvelope, HealthResponse, MetaResponse, envelope
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/curate", tags=["meta"])
 
 
-@router.get("/health")
+@router.get("/health", response_model=APIEnvelope[HealthResponse])
 async def health(request: Request) -> JSONResponse:
     """Service health check. No auth required."""
     state = request.app.state
@@ -36,7 +36,7 @@ async def health(request: Request) -> JSONResponse:
     )
 
 
-@router.get("/meta")
+@router.get("/meta", response_model=APIEnvelope[MetaResponse])
 async def meta(request: Request) -> JSONResponse:
     """Service metadata — loaded config, policies, queue depth."""
     state = request.app.state
