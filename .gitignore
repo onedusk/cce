@@ -29,8 +29,8 @@ venv/
 *.sqlite
 *.sqlite3
 
-# Pipeline output
-output/
+# Pipeline output (top-level only, not src/cce/output/)
+/output/
 
 # OS
 .DS_Store
@@ -55,3 +55,4 @@ evidence_live.db
 *thnk*
 docs/decompose/
 docs/internal/
+.decompose/

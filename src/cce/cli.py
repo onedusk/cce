@@ -4,6 +4,7 @@ cce api start              — run the FastAPI server
 cce api key generate       — generate and print a new API key
 cce api key list           — list active keys
 cce api key revoke <hash>  — delete a key
+cce emit-mdx               — emit MDX files from completed jobs
 """
 
 from __future__ import annotations
@@ -16,9 +17,11 @@ import typer
 app = typer.Typer(name="cce", help="Content Curation Engine CLI")
 api_app = typer.Typer(name="api", help="API server management")
 key_app = typer.Typer(name="key", help="API key management")
+emit_app = typer.Typer(name="emit-mdx", help="Emit MDX files from completed jobs")
 
 app.add_typer(api_app)
 api_app.add_typer(key_app)
+app.add_typer(emit_app, name="emit-mdx")
 
 
 @api_app.command("start")
@@ -126,6 +129,106 @@ def revoke_key(
             await store.close()
 
     asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# emit-mdx
+# ---------------------------------------------------------------------------
+
+
+@emit_app.callback(invoke_without_command=True)
+def emit_mdx_command(
+    job: Optional[str] = typer.Option(None, help="Job ID to emit"),
+    topic: Optional[str] = typer.Option(None, help="Topic name (emits latest completed job)"),
+    all_jobs: bool = typer.Option(False, "--all", help="Emit all completed jobs"),
+    target: str = typer.Option(..., help="Target content directory"),
+    config: Optional[str] = typer.Option(None, help="Path to config YAML"),
+) -> None:
+    """Emit MDX files from a completed curation job."""
+    if sum([bool(job), bool(topic), all_jobs]) > 1:
+        typer.echo("Error: --job, --topic, and --all are mutually exclusive", err=True)
+        raise typer.Exit(1)
+    if not job and not topic and not all_jobs:
+        typer.echo("Error: provide --job, --topic, or --all", err=True)
+        raise typer.Exit(1)
+
+    from pathlib import Path
+
+    from cce.models.job import JobStatus
+    from cce.output.mdx import EmitResult, emit_mdx
+
+    target_path = Path(target)
+    if not target_path.is_dir():
+        typer.echo(f"Error: target directory does not exist: {target}", err=True)
+        raise typer.Exit(1)
+
+    async def _run() -> list[EmitResult]:
+        store = await _get_job_store(config)
+        try:
+            if all_jobs:
+                jobs = await store.list_jobs(status=JobStatus.COMPLETED, limit=1000)
+                if not jobs:
+                    typer.echo("Error: no completed jobs found", err=True)
+                    raise typer.Exit(1)
+                results: list[EmitResult] = []
+                for j in jobs:
+                    package = await store.get_package(j.id)
+                    if package is None:
+                        continue
+                    results.append(emit_mdx(
+                        package=package,
+                        target_dir=target_path,
+                        topic_name=j.request.topic,
+                    ))
+                if not results:
+                    typer.echo("Error: completed jobs found but none have packages", err=True)
+                    raise typer.Exit(1)
+                return results
+
+            if job:
+                package = await store.get_package(job)
+                if package is None:
+                    typer.echo(f"Error: no package found for job {job}", err=True)
+                    raise typer.Exit(1)
+                job_obj = await store.get_job(job)
+                if job_obj is None:
+                    typer.echo(f"Error: job record not found for {job}", err=True)
+                    raise typer.Exit(1)
+                topic_name = job_obj.request.topic
+            else:
+                # Find latest completed job for topic
+                jobs = await store.list_jobs(
+                    status=JobStatus.COMPLETED, topic=topic, limit=1
+                )
+                if not jobs:
+                    typer.echo(f"Error: no completed jobs for topic '{topic}'", err=True)
+                    raise typer.Exit(1)
+                package = await store.get_package(jobs[0].id)
+                if package is None:
+                    typer.echo(f"Error: no package for job {jobs[0].id}", err=True)
+                    raise typer.Exit(1)
+                topic_name = jobs[0].request.topic
+
+            return [emit_mdx(
+                package=package,
+                target_dir=target_path,
+                topic_slug=topic if topic else None,
+                topic_name=topic_name,
+            )]
+        finally:
+            await store.close()
+
+    results = asyncio.run(_run())
+
+    for result in results:
+        typer.echo(f"Emitted: {result.topic_slug}/")
+        for p in result.paths_written:
+            typer.echo(f"  {p}/page.mdx")
+        typer.echo("  _evidence.json")
+        typer.echo("  meta.json")
+
+    total_files = sum(r.files_written for r in results)
+    typer.echo(f"Total: {total_files} files, {len(results)} topic(s) → {target_path}")
 
 
 # ---------------------------------------------------------------------------

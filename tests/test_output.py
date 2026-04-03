@@ -126,7 +126,7 @@ def test_serialize_handles_enums():
 
 @pytest.mark.unit
 def test_serialize_handles_paths():
-    from cce.output import _convert_value
+    from cce.output.writer import _convert_value
 
     assert _convert_value(Path("evidence.db")) == "evidence.db"
     assert _convert_value(Path("/tmp/test/file.json")) == "/tmp/test/file.json"
