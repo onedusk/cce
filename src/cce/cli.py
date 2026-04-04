@@ -139,7 +139,9 @@ def revoke_key(
 @emit_app.callback(invoke_without_command=True)
 def emit_mdx_command(
     job: Optional[str] = typer.Option(None, help="Job ID to emit"),
-    topic: Optional[str] = typer.Option(None, help="Topic name (emits latest completed job)"),
+    topic: Optional[str] = typer.Option(
+        None, help="Topic name (emits latest completed job)"
+    ),
     all_jobs: bool = typer.Option(False, "--all", help="Emit all completed jobs"),
     target: str = typer.Option(..., help="Target content directory"),
     config: Optional[str] = typer.Option(None, help="Path to config YAML"),
@@ -175,13 +177,17 @@ def emit_mdx_command(
                     package = await store.get_package(j.id)
                     if package is None:
                         continue
-                    results.append(emit_mdx(
-                        package=package,
-                        target_dir=target_path,
-                        topic_name=j.request.topic,
-                    ))
+                    results.append(
+                        emit_mdx(
+                            package=package,
+                            target_dir=target_path,
+                            topic_name=j.request.topic,
+                        )
+                    )
                 if not results:
-                    typer.echo("Error: completed jobs found but none have packages", err=True)
+                    typer.echo(
+                        "Error: completed jobs found but none have packages", err=True
+                    )
                     raise typer.Exit(1)
                 return results
 
@@ -201,7 +207,9 @@ def emit_mdx_command(
                     status=JobStatus.COMPLETED, topic=topic, limit=1
                 )
                 if not jobs:
-                    typer.echo(f"Error: no completed jobs for topic '{topic}'", err=True)
+                    typer.echo(
+                        f"Error: no completed jobs for topic '{topic}'", err=True
+                    )
                     raise typer.Exit(1)
                 package = await store.get_package(jobs[0].id)
                 if package is None:
@@ -209,12 +217,14 @@ def emit_mdx_command(
                     raise typer.Exit(1)
                 topic_name = jobs[0].request.topic
 
-            return [emit_mdx(
-                package=package,
-                target_dir=target_path,
-                topic_slug=topic if topic else None,
-                topic_name=topic_name,
-            )]
+            return [
+                emit_mdx(
+                    package=package,
+                    target_dir=target_path,
+                    topic_slug=topic if topic else None,
+                    topic_name=topic_name,
+                )
+            ]
         finally:
             await store.close()
 

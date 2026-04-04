@@ -102,6 +102,58 @@ async def test_put_many_dedup(sqlite_store):
     assert count == 4  # 3 unique + 1 of the 2 shared
 
 
+async def test_put_many_batch_insert(sqlite_store):
+    """Batch insert 50 unique evidence objects, verify all stored and retrievable."""
+    evidence = [
+        make_evidence(id=f"ev_batch_{i}", excerpt=f"Unique batch excerpt number {i} for large insert test.")
+        for i in range(50)
+    ]
+    count = await sqlite_store.put_many(evidence)
+    assert count == 50
+
+    for ev in evidence:
+        retrieved = await sqlite_store.get(ev.id)
+        assert retrieved is not None, f"Missing evidence {ev.id}"
+        assert retrieved.id == ev.id
+
+
+async def test_put_many_batch_all_duplicates(sqlite_store):
+    """Insert 10 evidence objects, then re-insert the same 10 — returns 0."""
+    evidence = [
+        make_evidence(id=f"ev_dup_{i}", excerpt=f"Duplicate batch excerpt number {i} for dedup test.")
+        for i in range(10)
+    ]
+    first = await sqlite_store.put_many(evidence)
+    assert first == 10
+
+    second = await sqlite_store.put_many(evidence)
+    assert second == 0
+
+
+async def test_put_many_batch_mixed(sqlite_store):
+    """Insert 10 unique, then re-insert those 10 plus 5 new — returns 5."""
+    original = [
+        make_evidence(id=f"ev_orig_{i}", excerpt=f"Original batch excerpt number {i} for mixed test.")
+        for i in range(10)
+    ]
+    first = await sqlite_store.put_many(original)
+    assert first == 10
+
+    new_ones = [
+        make_evidence(id=f"ev_new_{i}", excerpt=f"Brand new batch excerpt number {i} for mixed test.")
+        for i in range(5)
+    ]
+    combined = original + new_ones
+    second = await sqlite_store.put_many(combined)
+    assert second == 5
+
+
+async def test_put_many_empty_list(sqlite_store):
+    """put_many with an empty list returns 0 immediately."""
+    count = await sqlite_store.put_many([])
+    assert count == 0
+
+
 # ---------------------------------------------------------------------------
 # get / get_many
 # ---------------------------------------------------------------------------

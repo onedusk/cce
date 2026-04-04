@@ -14,13 +14,15 @@ from cce.models.content import ContentScores
 from cce.models.package import PackageLineage
 
 # Fields that CCE owns and will overwrite on every emit.
-CCE_FIELDS = frozenset({
-    "scores",
-    "lastCuratedAt",
-    "jobId",
-    "policyId",
-    "engineVersion",
-})
+CCE_FIELDS = frozenset(
+    {
+        "scores",
+        "lastCuratedAt",
+        "jobId",
+        "policyId",
+        "engineVersion",
+    }
+)
 
 
 def merge_topic_meta(

@@ -37,8 +37,8 @@ def slugify(text: str) -> str:
     """
     s = text.lower().strip()
     s = re.sub(r"[^\w\s-]", "", s)  # strip non-word chars (except hyphen)
-    s = re.sub(r"[\s_]+", "-", s)   # collapse whitespace/underscore to hyphen
-    s = re.sub(r"-+", "-", s)       # collapse multiple hyphens
+    s = re.sub(r"[\s_]+", "-", s)  # collapse whitespace/underscore to hyphen
+    s = re.sub(r"-+", "-", s)  # collapse multiple hyphens
     return s.strip("-")
 
 
@@ -83,7 +83,9 @@ def emit_mdx(
         path_dir.mkdir(parents=True, exist_ok=True)
 
         mdx_content = format_mdx_page(
-            unit, evidence_by_id, package.job_id,
+            unit,
+            evidence_by_id,
+            package.job_id,
             topic_slug=topic_slug,
             curated_at=curated_at,
         )

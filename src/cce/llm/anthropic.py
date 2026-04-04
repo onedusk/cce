@@ -41,7 +41,9 @@ class AnthropicProvider:
         kwargs: dict = {
             "model": self._config.model,
             "messages": api_messages,
-            "temperature": temperature if temperature is not None else self._config.temperature,
+            "temperature": temperature
+            if temperature is not None
+            else self._config.temperature,
             "max_tokens": max_tokens or self._config.max_tokens,
         }
 

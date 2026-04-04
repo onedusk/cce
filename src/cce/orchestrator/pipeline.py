@@ -31,6 +31,49 @@ from cce.verification.verifier import Verifier
 logger = logging.getLogger(__name__)
 
 
+def _terminal_decisions(
+    gate_results: list[GateResult],
+    paths: list[str],
+) -> list[GateDecision]:
+    """Extract the terminal (last) gate decision for each output path.
+
+    The write-verify loop may produce multiple intermediate FAIL results
+    before reaching a terminal PASS or REVIEW.  For final-status
+    determination we only care about the last decision per path — the one
+    that actually ended the loop.
+
+    When there are *N* paths, the gate_results list is partitioned into *N*
+    consecutive groups (one per path, in order).  Within each group the last
+    entry is the terminal decision.
+    """
+    if not gate_results:
+        return []
+
+    # Partition results into per-path groups.  Gate results are appended in
+    # path order, with each path contributing >=1 result.  We split by
+    # counting how many results belong to each path: the total for a path
+    # equals the number of write-verify iterations it ran.
+    n_paths = len(paths)
+
+    if n_paths <= 1:
+        # Single path — terminal decision is simply the last one.
+        return [gate_results[-1].decision]
+
+    # Multiple paths: partition evenly when possible, otherwise split by
+    # tracking iteration numbering (iteration resets to 1 per path).
+    groups: list[list[GateResult]] = []
+    current_group: list[GateResult] = []
+    for gr in gate_results:
+        if gr.iteration == 1 and current_group:
+            groups.append(current_group)
+            current_group = []
+        current_group.append(gr)
+    if current_group:
+        groups.append(current_group)
+
+    return [group[-1].decision for group in groups]
+
+
 class Pipeline:
     """Orchestrates the full curation pipeline."""
 
@@ -160,9 +203,7 @@ class Pipeline:
                     JobStage.WRITE,
                     progress=JobProgress(completed=idx, total=total_paths),
                 )
-                logger.info(
-                    "Progress: path %d/%d ('%s')", idx + 1, total_paths, path
-                )
+                logger.info("Progress: path %d/%d ('%s')", idx + 1, total_paths, path)
 
                 unit, gate_results = await self._write_verify_loop(
                     request=request,
@@ -182,15 +223,19 @@ class Pipeline:
             job = self._update_job(job, JobStatus.RUNNING, JobStage.PUBLISH)
             stage_start = datetime.now(timezone.utc)
 
-            # Determine final status based on gate results
-            final_decisions = [gr.decision for gr in all_gate_results]
+            # Determine final status based on the *terminal* gate decision
+            # for each output path.  Intermediate FAIL decisions (which
+            # triggered rewrites) are not terminal — only the last result
+            # per path matters.
+            final_decisions = _terminal_decisions(all_gate_results, request.paths)
 
             if all(d == GateDecision.PASS for d in final_decisions):
                 final_status = JobStatus.COMPLETED
             elif any(d == GateDecision.REVIEW for d in final_decisions):
                 final_status = JobStatus.REVIEW_REQUIRED
             else:
-                final_status = JobStatus.COMPLETED  # best-effort with what we have
+                # Gate returned FAIL after max iterations — content needs human review
+                final_status = JobStatus.REVIEW_REQUIRED
 
             # Aggregate scores
             if all_units:

@@ -16,6 +16,7 @@ import uuid
 from typing import Optional
 
 from cce.llm.base import LLMMessage, LLMProvider, LLMResponse
+from cce.llm.retry import with_llm_retry
 from cce.models.content import (
     Citation,
     ClaimMapping,
@@ -137,7 +138,9 @@ class Writer:
 
         jurisdiction_line = ""
         if request.constraints and request.constraints.jurisdiction:
-            jurisdiction_line = f"Jurisdiction/scope: {request.constraints.jurisdiction}\n"
+            jurisdiction_line = (
+                f"Jurisdiction/scope: {request.constraints.jurisdiction}\n"
+            )
 
         user_prompt = f"""Topic: {request.topic}
 Subtopics: {", ".join(subtopics) if subtopics else "None specified"}
@@ -174,13 +177,15 @@ exists, and mark remaining gaps as [INSUFFICIENT EVIDENCE].
         if path_config is not None:
             system_prompt += self._build_path_addendum(path_config)
 
-        response = await self._llm.complete(
-            messages,
-            system=system_prompt,
-            temperature=0.2,  # low temp for factual consistency
-        )
+        async def _attempt() -> WriterOutput:
+            response = await self._llm.complete(
+                messages,
+                system=system_prompt,
+                temperature=0.2,  # low temp for factual consistency
+            )
+            return self._parse_response(response, evidence, path, lineage)
 
-        return self._parse_response(response, evidence, path, lineage)
+        return await with_llm_retry(_attempt)
 
     @staticmethod
     def _build_path_addendum(path_config: PathConfig) -> str:

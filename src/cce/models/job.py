@@ -16,7 +16,9 @@ else:
 
     class StrEnum(str, Enum):
         pass
-from typing import Optional
+
+
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
@@ -66,6 +68,10 @@ class StageRecord(BaseModel):
     stage: JobStage
     started_at: datetime
     completed_at: datetime
+    metrics: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional per-stage metrics (evidence_count, iteration_count, etc.)",
+    )
 
     model_config = {"frozen": True}
 

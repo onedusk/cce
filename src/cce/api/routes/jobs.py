@@ -205,7 +205,9 @@ async def delete_job(
     )
 
 
-@router.post("/{job_id}/retry", status_code=202, response_model=APIEnvelope[JobResponse])
+@router.post(
+    "/{job_id}/retry", status_code=202, response_model=APIEnvelope[JobResponse]
+)
 async def retry_job(
     job_id: str,
     request: Request,

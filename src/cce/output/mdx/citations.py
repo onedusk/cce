@@ -78,9 +78,7 @@ def build_citation_index(
                 title=evidence.title,
                 author=evidence.author,
                 published_at=(
-                    evidence.published_at.isoformat()
-                    if evidence.published_at
-                    else None
+                    evidence.published_at.isoformat() if evidence.published_at else None
                 ),
             )
         )

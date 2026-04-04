@@ -36,9 +36,7 @@ class ContentScores(BaseModel):
     confidence: float = Field(
         ge=0.0, le=1.0, description="Overall confidence in the content"
     )
-    coverage: float = Field(
-        ge=0.0, le=1.0, description="How well the topic is covered"
-    )
+    coverage: float = Field(ge=0.0, le=1.0, description="How well the topic is covered")
     source_diversity: float = Field(
         ge=0.0, le=1.0, description="Variety of independent sources used"
     )

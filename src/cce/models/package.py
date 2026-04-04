@@ -33,15 +33,11 @@ class PublishPackage(BaseModel):
     """The engine's complete output for a curation run."""
 
     job_id: str
-    units: list[ContentUnit] = Field(
-        description="One ContentUnit per output path"
-    )
+    units: list[ContentUnit] = Field(description="One ContentUnit per output path")
     evidence: list[Evidence] = Field(
         description="All evidence objects used across all units"
     )
-    scores: ContentScores = Field(
-        description="Aggregate scores across all units"
-    )
+    scores: ContentScores = Field(description="Aggregate scores across all units")
     lineage: PackageLineage
 
     model_config = {"frozen": True}

@@ -91,7 +91,9 @@ def _parse_policy(data: dict) -> SourcePolicy:
         name=data.get("name", data["id"]),
         domains_allow=data.get("domains_allow", []),
         domains_deny=data.get("domains_deny", []),
-        reputation=ReputationRule(**reputation_data) if reputation_data else ReputationRule(),
+        reputation=ReputationRule(**reputation_data)
+        if reputation_data
+        else ReputationRule(),
         recency=RecencyRule(**recency_data) if recency_data else RecencyRule(),
         max_sources_per_run=data.get("max_sources_per_run", 50),
         topic_overrides=overrides,

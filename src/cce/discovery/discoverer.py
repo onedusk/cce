@@ -64,7 +64,9 @@ class Discoverer:
         """
         # Step 1: Build search queries
         queries = self._build_queries(request)
-        logger.info("Discovery: %d search queries for topic '%s'", len(queries), request.topic)
+        logger.info(
+            "Discovery: %d search queries for topic '%s'", len(queries), request.topic
+        )
 
         # Step 2: Search for candidate URLs
         candidate_urls: list[str] = []
@@ -73,7 +75,9 @@ class Discoverer:
                 urls = await self._adapter.search(query, limit=20)
                 candidate_urls.extend(urls)
             except NotImplementedError:
-                logger.info("Adapter does not support search, skipping query: %s", query)
+                logger.info(
+                    "Adapter does not support search, skipping query: %s", query
+                )
 
         # Add any seed domains from constraints as fallback
         if request.constraints and request.constraints.domains_allow:
@@ -82,7 +86,9 @@ class Discoverer:
 
         # Deduplicate
         candidate_urls = list(dict.fromkeys(candidate_urls))
-        logger.info("Discovery: %d candidate URLs before policy filter", len(candidate_urls))
+        logger.info(
+            "Discovery: %d candidate URLs before policy filter", len(candidate_urls)
+        )
 
         # Step 3: Filter against policy
         effective_policy = self._resolve_overrides(request.topic, policy)
@@ -120,7 +126,9 @@ class Discoverer:
 
             extracted = self._extract_evidence(result, effective_policy)
             for ev in extracted:
-                if not self._passes_date_filter(ev, effective_policy, request.constraints):
+                if not self._passes_date_filter(
+                    ev, effective_policy, request.constraints
+                ):
                     filtered_date += 1
                     continue
                 if not self._passes_reputation_filter(ev, effective_policy.reputation):
@@ -142,7 +150,9 @@ class Discoverer:
         if self._embedding is not None and evidence:
             try:
                 relevance_scores = await self._compute_relevance_scores(
-                    evidence, request.topic, request.subtopics,
+                    evidence,
+                    request.topic,
+                    request.subtopics,
                 )
                 logger.info(
                     "Embedding ranking: scored %d evidence objects",
@@ -218,9 +228,7 @@ class Discoverer:
 
         # If allow list is non-empty, URL must match
         if policy.domains_allow:
-            matched = any(
-                allowed.lower() in domain for allowed in policy.domains_allow
-            )
+            matched = any(allowed.lower() in domain for allowed in policy.domains_allow)
             if not matched:
                 return False
 
@@ -289,7 +297,10 @@ class Discoverer:
         if reputation.require_peer_reviewed and not ev.source_quality.is_peer_reviewed:
             return False
 
-        if reputation.require_primary_source and not ev.source_quality.is_primary_source:
+        if (
+            reputation.require_primary_source
+            and not ev.source_quality.is_primary_source
+        ):
             return False
 
         if reputation.block_marketing and ev.source_quality.conflict_of_interest:
@@ -367,8 +378,20 @@ class Discoverer:
                     pass
 
             # Coerce metadata fields — adapters may return lists instead of strings
-            title = result.title if isinstance(result.title, str) else ", ".join(result.title) if result.title else None
-            author = result.author if isinstance(result.author, str) else ", ".join(result.author) if result.author else None
+            title = (
+                result.title
+                if isinstance(result.title, str)
+                else ", ".join(result.title)
+                if result.title
+                else None
+            )
+            author = (
+                result.author
+                if isinstance(result.author, str)
+                else ", ".join(result.author)
+                if result.author
+                else None
+            )
 
             evidence.append(
                 Evidence(
@@ -437,7 +460,9 @@ class Discoverer:
         3. Length (longer = more substantive, tiebreaker)
         """
         relevance = relevance_scores.get(ev.id, 0.0) if relevance_scores else 0.0
-        recency = ev.published_at.timestamp() if prefer_recent and ev.published_at else 0.0
+        recency = (
+            ev.published_at.timestamp() if prefer_recent and ev.published_at else 0.0
+        )
         return (relevance, recency, len(ev.excerpt))
 
     @staticmethod
@@ -510,7 +535,13 @@ class Discoverer:
     def _looks_peer_reviewed(result: CrawlResult) -> bool:
         """Basic heuristic: DOI in metadata or URL patterns."""
         url_lower = result.url.lower()
-        indicators = ["doi.org", "pubmed", "ncbi.nlm.nih.gov", "arxiv.org", "scholar.google"]
+        indicators = [
+            "doi.org",
+            "pubmed",
+            "ncbi.nlm.nih.gov",
+            "arxiv.org",
+            "scholar.google",
+        ]
         return any(ind in url_lower for ind in indicators)
 
     @staticmethod
@@ -534,8 +565,13 @@ class Discoverer:
     def _looks_marketing(result: CrawlResult) -> bool:
         """Basic heuristic for marketing/sponsored content."""
         indicators = [
-            "sponsored", "advertisement", "promoted", "affiliate",
-            "buy now", "sign up free", "limited time offer",
+            "sponsored",
+            "advertisement",
+            "promoted",
+            "affiliate",
+            "buy now",
+            "sign up free",
+            "limited time offer",
         ]
         text_lower = (result.markdown[:2000] + result.title).lower()
         return any(ind in text_lower for ind in indicators)

@@ -115,7 +115,8 @@ class QualityGate:
 
         if evidence:
             coi_count = sum(
-                1 for ev in evidence
+                1
+                for ev in evidence
                 if ev.source_quality and ev.source_quality.conflict_of_interest
             )
             if coi_count > 0:

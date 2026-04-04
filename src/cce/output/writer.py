@@ -88,9 +88,7 @@ def write_output(result: PipelineResult, output_dir: Path) -> Path:
     full = serialize_result(result)
 
     # result.json -- everything
-    (run_dir / "result.json").write_text(
-        json.dumps(full, indent=2, ensure_ascii=False)
-    )
+    (run_dir / "result.json").write_text(json.dumps(full, indent=2, ensure_ascii=False))
 
     # content.md -- just the readable content
     content_parts: list[str] = []

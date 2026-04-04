@@ -115,25 +115,24 @@ class SQLiteEvidenceStore:
             return False  # duplicate excerpt_hash
 
     async def put_many(self, evidence: list[Evidence]) -> int:
+        """Insert multiple evidence objects, skipping duplicates."""
         assert self._db is not None
-        inserted = 0
-        for ev in evidence:
-            try:
-                await self._db.execute(
-                    """
-                    INSERT INTO evidence
-                        (id, url, title, author, published_at, retrieved_at,
-                         excerpt, excerpt_hash, locator, source_quality,
-                         tags, dimension_signals)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    self._to_row(ev),
-                )
-                inserted += 1
-            except aiosqlite.IntegrityError:
-                continue  # skip duplicates
+        if not evidence:
+            return 0
+
+        rows = [self._to_row(ev) for ev in evidence]
+        cursor = await self._db.executemany(
+            """
+            INSERT OR IGNORE INTO evidence
+                (id, url, title, author, published_at, retrieved_at,
+                 excerpt, excerpt_hash, locator, source_quality,
+                 tags, dimension_signals)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
         await self._db.commit()
-        return inserted
+        return cursor.rowcount
 
     async def get(self, evidence_id: str) -> Evidence | None:
         assert self._db is not None

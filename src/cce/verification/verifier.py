@@ -19,6 +19,7 @@ import logging
 from dataclasses import dataclass, field
 
 from cce.llm.base import LLMMessage, LLMProvider
+from cce.llm.retry import with_llm_retry
 from cce.models.content import ContentUnit
 from cce.models.evidence import Evidence
 from cce.parsing import extract_json
@@ -195,14 +196,16 @@ traced to the evidence above should be flagged.
             len(evidence),
         )
 
-        response = await self._llm.complete(
-            messages,
-            system=_VERIFIER_FULL_PROMPT,
-            temperature=0.1,  # very low temp for consistent judgment
-            max_tokens=16384,
-        )
+        async def _attempt() -> VerificationReport:
+            response = await self._llm.complete(
+                messages,
+                system=_VERIFIER_FULL_PROMPT,
+                temperature=0.1,  # very low temp for consistent judgment
+                max_tokens=16384,
+            )
+            return self._parse_response(response.content)
 
-        return self._parse_response(response.content)
+        return await with_llm_retry(_attempt)
 
     def _parse_response(self, raw: str) -> VerificationReport:
         """Parse verifier LLM response into a structured report."""
