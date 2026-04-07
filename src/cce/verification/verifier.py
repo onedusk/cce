@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
+from cce.evidence.formatting import format_evidence_for_prompt
 from cce.llm.base import LLMMessage, LLMProvider
 from cce.llm.retry import with_llm_retry
 from cce.models.content import ContentUnit
@@ -169,7 +170,7 @@ class Verifier:
             )
 
         # Build evidence reference for the verifier
-        evidence_block = self._format_evidence(evidence)
+        evidence_block = format_evidence_for_prompt(evidence, style="verifier")
 
         jurisdiction_line = ""
         if jurisdiction:
@@ -284,23 +285,3 @@ traced to the evidence above should be flagged.
             raw_response=raw,
         )
 
-    @staticmethod
-    def _format_evidence(evidence: list[Evidence]) -> str:
-        """Format evidence for the verifier prompt."""
-        lines: list[str] = []
-        for ev in evidence:
-            tags: list[str] = []
-            if ev.source_quality:
-                if ev.source_quality.is_peer_reviewed:
-                    tags.append("peer-reviewed")
-                if ev.source_quality.is_primary_source:
-                    tags.append("primary-source")
-                if ev.source_quality.conflict_of_interest:
-                    tags.append("potential-COI")
-            header = f"[{ev.id}] (URL: {ev.url})"
-            if tags:
-                header += " [" + "] [".join(tags) + "]"
-            lines.append(header)
-            lines.append(ev.excerpt)
-            lines.append("")
-        return "\n".join(lines)

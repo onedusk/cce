@@ -162,15 +162,18 @@ class TestConfidence:
 
 
 # ---------------------------------------------------------------------------
-# _format_evidence
+# format_evidence_for_prompt (verifier style) — moved to cce.evidence.formatting
+# Tests remain here for backward compatibility verification.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.unit
 def test_format_evidence():
+    from cce.evidence.formatting import format_evidence_for_prompt
+
     ev1 = make_evidence(id="ev_001", url="https://a.com", excerpt="Excerpt one.")
     ev2 = make_evidence(id="ev_002", url="https://b.com", excerpt="Excerpt two.")
-    result = Verifier._format_evidence([ev1, ev2])
+    result = format_evidence_for_prompt([ev1, ev2], style="verifier")
     assert "[ev_001] (URL: https://a.com)" in result
     assert "[ev_002] (URL: https://b.com)" in result
     assert "Excerpt one." in result
@@ -179,6 +182,8 @@ def test_format_evidence():
 
 @pytest.mark.unit
 def test_format_evidence_quality_tags():
+    from cce.evidence.formatting import format_evidence_for_prompt
+
     ev_pr = make_evidence(
         id="ev_pr",
         url="https://pubmed.org/123",
@@ -193,7 +198,7 @@ def test_format_evidence_quality_tags():
         source_quality=SourceQuality(conflict_of_interest=True),
     )
     ev_plain = make_evidence(id="ev_plain", url="https://example.com")
-    result = Verifier._format_evidence([ev_pr, ev_coi, ev_plain])
+    result = format_evidence_for_prompt([ev_pr, ev_coi, ev_plain], style="verifier")
 
     assert "[peer-reviewed]" in result
     assert "[primary-source]" in result

@@ -8,20 +8,21 @@ from cce.llm.base import LLMResponse
 from cce.models.content import ContentLineage
 from cce.models.evidence import SourceQuality
 from cce.models.request import CurationConstraints
-from cce.synthesis.writer import WRITER_SYSTEM_PROMPT, Writer, WriterOutput, _build_evidence_block
+from cce.evidence.formatting import format_evidence_for_prompt
+from cce.synthesis.writer import WRITER_SYSTEM_PROMPT, Writer, WriterOutput
 from tests.conftest import MockLLMProvider, make_curation_request, make_evidence
 
 
 # ---------------------------------------------------------------------------
-# _build_evidence_block
+# format_evidence_for_prompt
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.unit
-def test_build_evidence_block_formatting():
+def testformat_evidence_for_prompt_formatting():
     ev1 = make_evidence(id="ev_001", url="https://a.com", title="Title A", author="Author A")
     ev2 = make_evidence(id="ev_002", url="https://b.com", title="Title B", author="Author B")
-    block = _build_evidence_block([ev1, ev2])
+    block = format_evidence_for_prompt([ev1, ev2])
     assert "--- EVIDENCE [ev_001] ---" in block
     assert "--- EVIDENCE [ev_002] ---" in block
     assert "URL: https://a.com" in block
@@ -32,27 +33,27 @@ def test_build_evidence_block_formatting():
 
 
 @pytest.mark.unit
-def test_build_evidence_block_peer_reviewed_tag():
+def testformat_evidence_for_prompt_peer_reviewed_tag():
     ev = make_evidence(
         id="ev_pr",
         source_quality=SourceQuality(is_peer_reviewed=True),
     )
-    block = _build_evidence_block([ev])
+    block = format_evidence_for_prompt([ev])
     assert "Type: peer-reviewed" in block
 
 
 @pytest.mark.unit
-def test_build_evidence_block_primary_source_tag():
+def testformat_evidence_for_prompt_primary_source_tag():
     ev = make_evidence(
         id="ev_ps",
         source_quality=SourceQuality(is_primary_source=True),
     )
-    block = _build_evidence_block([ev])
+    block = format_evidence_for_prompt([ev])
     assert "Type: primary-source" in block
 
 
 @pytest.mark.unit
-def test_build_evidence_block_optional_fields():
+def testformat_evidence_for_prompt_optional_fields():
     ev = make_evidence(
         id="ev_bare",
         title=None,
@@ -60,7 +61,7 @@ def test_build_evidence_block_optional_fields():
         published_at=None,
         source_quality=None,
     )
-    block = _build_evidence_block([ev])
+    block = format_evidence_for_prompt([ev])
     assert "--- EVIDENCE [ev_bare] ---" in block
     assert "URL:" in block
     # Optional fields should not appear
