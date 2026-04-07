@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from cce.api.auth import make_auth_dependency
+from cce.models.job import JobError, JobStage, JobStatus
 from cce.api.middleware import RequestLoggingMiddleware
 from cce.api.schemas import envelope
 from cce.config.loader import load_config
@@ -80,13 +81,39 @@ async def lifespan(app: FastAPI):
     yield
 
     # -- Shutdown --
-    # Cancel any running background tasks
-    for task_id, task in list(app.state.running_tasks.items()):
-        task.cancel()
-        try:
-            await task
-        except (asyncio.CancelledError, Exception):
-            pass
+    SHUTDOWN_TIMEOUT_S = 10
+
+    # 1. Give running tasks time to finish, then hard-cancel stragglers
+    tasks = list(app.state.running_tasks.values())
+    if tasks:
+        logger.info(
+            "Shutting down: waiting %ds for %d running task(s)",
+            SHUTDOWN_TIMEOUT_S,
+            len(tasks),
+        )
+        done, pending = await asyncio.wait(tasks, timeout=SHUTDOWN_TIMEOUT_S)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+    # 2. Mark orphaned RUNNING jobs as FAILED
+    if hasattr(app.state, "job_store") and app.state.job_store is not None:
+        running_jobs = await app.state.job_store.list_jobs(
+            status=JobStatus.RUNNING, limit=1000
+        )
+        for job in running_jobs:
+            job.status = JobStatus.FAILED
+            job.error = JobError(
+                code="server_shutdown",
+                message="Server shut down while job was running",
+                stage=job.stage or JobStage.DISCOVER,
+            )
+            await app.state.job_store.update_job(job)
+        if running_jobs:
+            logger.info(
+                "Marked %d orphaned RUNNING job(s) as FAILED", len(running_jobs)
+            )
 
     if "evidence_store" in locally_created:
         await evidence_store.close()
