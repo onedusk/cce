@@ -148,6 +148,7 @@ class Pipeline:
                     stage=JobStage.DISCOVER,
                     started_at=stage_start,
                     completed_at=datetime.now(timezone.utc),
+                    metrics=self._discoverer.last_discover_metrics or None,
                 )
             )
 
@@ -162,6 +163,8 @@ class Pipeline:
 
             # --- Stage 1.5: Tag evidence (optional) ---
             if self._taxonomy_plugin is not None:
+                tag_start = datetime.now(timezone.utc)
+                tags_available = False
                 try:
                     results = await self._taxonomy_plugin.tag_many(evidence)
                     tagged: list[Evidence] = []
@@ -175,6 +178,7 @@ class Pipeline:
                             )
                         )
                     evidence = tagged
+                    tags_available = True
                     job_logger.info(
                         "Tagged %d evidence objects with taxonomy", len(evidence)
                     )
@@ -186,6 +190,19 @@ class Pipeline:
                     job_logger.warning(
                         "Taxonomy plugin raised unexpected error, proceeding without tags",
                         exc_info=True,
+                    )
+
+                job.stages.append(
+                    StageRecord(
+                        stage=JobStage.TAG,
+                        started_at=tag_start,
+                        completed_at=datetime.now(timezone.utc),
+                        metrics={"tags_available": tags_available},
+                    )
+                )
+                if not tags_available:
+                    job_logger.warning(
+                        "Quality gate running without taxonomy tags — conflict detection may be limited"
                     )
 
             # --- Stage 2: Store evidence ---

@@ -36,6 +36,9 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
     return dot / (norm_a * norm_b)
 
 
+_CRAWL_FAILURE_WARN_THRESHOLD = 0.3
+
+
 class Discoverer:
     """Discovers sources, applies policy filters, extracts evidence."""
 
@@ -50,6 +53,7 @@ class Discoverer:
         self._config = config
         self._embedding = embedding_provider
         self._embedding_batch_size = embedding_batch_size
+        self.last_discover_metrics: dict = {}  # Metrics from most recent discover() call
 
     async def discover(
         self,
@@ -104,6 +108,11 @@ class Discoverer:
 
         if not filtered_urls:
             logger.warning("Discovery: no URLs survived policy filter")
+            self.last_discover_metrics = {
+                "crawl_success": 0,
+                "crawl_failed": 0,
+                "crawl_failure_rate": 0.0,
+            }
             return []
 
         # Step 4: Crawl
@@ -121,11 +130,15 @@ class Discoverer:
         seen_hashes: set[str] = set()
         filtered_date = 0
         filtered_reputation = 0
+        crawl_success = 0
+        crawl_failed = 0
         for result in crawl_results:
             if result.status_code == 0 or not result.markdown.strip():
+                crawl_failed += 1
                 logger.debug("Skipping empty or failed crawl: %s", result.url)
                 continue
 
+            crawl_success += 1
             extracted = self._extract_evidence(result, effective_policy)
             for ev in extracted:
                 if not self._passes_date_filter(
@@ -139,6 +152,22 @@ class Discoverer:
                 if ev.excerpt_hash not in seen_hashes:
                     seen_hashes.add(ev.excerpt_hash)
                     evidence.append(ev)
+
+        # Track crawl success/failure metrics
+        total_crawls = crawl_success + crawl_failed
+        failure_rate = crawl_failed / total_crawls if total_crawls else 0.0
+        if failure_rate > _CRAWL_FAILURE_WARN_THRESHOLD:
+            logger.warning(
+                "High crawl failure rate: %d/%d (%.0f%%) URLs failed",
+                crawl_failed,
+                total_crawls,
+                failure_rate * 100,
+            )
+        self.last_discover_metrics = {
+            "crawl_success": crawl_success,
+            "crawl_failed": crawl_failed,
+            "crawl_failure_rate": round(failure_rate, 2),
+        }
 
         if filtered_date or filtered_reputation:
             logger.info(
