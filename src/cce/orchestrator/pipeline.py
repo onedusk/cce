@@ -118,7 +118,12 @@ class Pipeline:
         job_logger.info("Pipeline run %s started for topic '%s'", run_id, request.topic)
 
         # Token accumulator — summed across all writer + verifier calls
-        token_usage = {"input_tokens": 0, "output_tokens": 0}
+        token_usage = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        }
 
         # Resolve quality gate config for the risk profile
         gate_config = self._config.quality_gate.get(
@@ -375,12 +380,8 @@ class Pipeline:
 
             # Accumulate token usage from writer
             if _tokens and writer_output.token_usage:
-                _tokens["input_tokens"] += writer_output.token_usage.get(
-                    "input_tokens", 0
-                )
-                _tokens["output_tokens"] += writer_output.token_usage.get(
-                    "output_tokens", 0
-                )
+                for key in _tokens:
+                    _tokens[key] += writer_output.token_usage.get(key, 0)
 
             if not writer_output.has_content:
                 _log.warning("Writer produced no content for path '%s'", path)
@@ -408,8 +409,8 @@ class Pipeline:
 
             # Accumulate token usage from verifier
             if _tokens and report.token_usage:
-                _tokens["input_tokens"] += report.token_usage.get("input_tokens", 0)
-                _tokens["output_tokens"] += report.token_usage.get("output_tokens", 0)
+                for key in _tokens:
+                    _tokens[key] += report.token_usage.get(key, 0)
 
             if job is not None:
                 job.stages.append(

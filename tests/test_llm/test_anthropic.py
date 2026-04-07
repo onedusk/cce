@@ -34,6 +34,8 @@ def _mock_response(
     input_tokens: int = 10,
     output_tokens: int = 20,
     stop_reason: str = "end_turn",
+    cache_creation_input_tokens: int = 0,
+    cache_read_input_tokens: int = 0,
 ) -> MagicMock:
     """Build a mock Anthropic Message response object."""
     block = MagicMock()
@@ -42,6 +44,8 @@ def _mock_response(
     usage = MagicMock()
     usage.input_tokens = input_tokens
     usage.output_tokens = output_tokens
+    usage.cache_creation_input_tokens = cache_creation_input_tokens
+    usage.cache_read_input_tokens = cache_read_input_tokens
 
     response = MagicMock()
     response.content = [block]
@@ -77,7 +81,10 @@ async def test_complete_success(mock_cls: MagicMock) -> None:
 
     assert result.content == "Test output"
     assert result.model == "claude-sonnet-4-6"
-    assert result.usage == {"input_tokens": 15, "output_tokens": 25}
+    assert result.usage["input_tokens"] == 15
+    assert result.usage["output_tokens"] == 25
+    assert result.usage["cache_creation_input_tokens"] == 0
+    assert result.usage["cache_read_input_tokens"] == 0
     assert result.stop_reason == "end_turn"
 
 
@@ -95,7 +102,11 @@ async def test_system_prompt_passed(mock_cls: MagicMock) -> None:
     )
 
     call_kwargs = mock_client.messages.create.call_args[1]
-    assert call_kwargs["system"] == "You are a helpful assistant."
+    # System prompt is now a list of content blocks with cache_control
+    assert isinstance(call_kwargs["system"], list)
+    assert len(call_kwargs["system"]) == 1
+    assert call_kwargs["system"][0]["text"] == "You are a helpful assistant."
+    assert call_kwargs["system"][0]["cache_control"] == {"type": "ephemeral"}
 
 
 @patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
@@ -167,10 +178,91 @@ async def test_system_message_extracted_from_list(mock_cls: MagicMock) -> None:
     )
 
     call_kwargs = mock_client.messages.create.call_args[1]
-    # System message extracted into the system kwarg
-    assert call_kwargs["system"] == "Be concise."
+    # System message extracted into the system kwarg as cached content block
+    assert isinstance(call_kwargs["system"], list)
+    assert call_kwargs["system"][0]["text"] == "Be concise."
+    assert call_kwargs["system"][0]["cache_control"] == {"type": "ephemeral"}
     # System message excluded from the messages list
     api_messages = call_kwargs["messages"]
     assert len(api_messages) == 1
     assert api_messages[0]["role"] == "user"
-    assert api_messages[0]["content"] == "What is 2+2?"
+    # Content is now a list of content blocks
+    assert isinstance(api_messages[0]["content"], list)
+    assert api_messages[0]["content"][0]["text"] == "What is 2+2?"
+
+
+# ---------------------------------------------------------------------------
+# Prompt caching: _split_for_cache
+# ---------------------------------------------------------------------------
+
+
+def test_split_for_cache_no_marker() -> None:
+    """Content without evidence markers returns a single uncached block."""
+    blocks = AnthropicProvider._split_for_cache("Just a plain message.")
+    assert len(blocks) == 1
+    assert blocks[0]["text"] == "Just a plain message."
+    assert "cache_control" not in blocks[0]
+
+
+def test_split_for_cache_writer_marker() -> None:
+    """Writer-style evidence end marker splits into cached prefix + uncached suffix."""
+    content = (
+        "Topic: sleep\n"
+        "=== EVIDENCE START ===\n"
+        "[ev_001] Some evidence\n"
+        "=== EVIDENCE END ===\n"
+        "\n"
+        "=== VERIFIER FEEDBACK ===\nFix claim 3.\n=== END FEEDBACK ==="
+    )
+    blocks = AnthropicProvider._split_for_cache(content)
+    assert len(blocks) == 2
+    # Prefix: everything up to and including the evidence end marker
+    assert blocks[0]["text"].endswith("=== EVIDENCE END ===")
+    assert blocks[0]["cache_control"] == {"type": "ephemeral"}
+    # Suffix: feedback portion, no cache_control
+    assert "VERIFIER FEEDBACK" in blocks[1]["text"]
+    assert "cache_control" not in blocks[1]
+
+
+def test_split_for_cache_verifier_marker() -> None:
+    """Verifier-style evidence end marker also splits correctly."""
+    content = (
+        "=== DRAFT CONTENT ===\nSome draft\n=== END DRAFT ===\n\n"
+        "=== EVIDENCE AVAILABLE ===\n[ev_001] Evidence\n=== END EVIDENCE ===\n\n"
+        "Verify every factual claim."
+    )
+    blocks = AnthropicProvider._split_for_cache(content)
+    assert len(blocks) == 2
+    assert blocks[0]["text"].endswith("=== END EVIDENCE ===")
+    assert blocks[0]["cache_control"] == {"type": "ephemeral"}
+    assert "Verify every factual claim" in blocks[1]["text"]
+    assert "cache_control" not in blocks[1]
+
+
+def test_split_for_cache_no_suffix() -> None:
+    """When evidence marker is at the end, only one cached block is returned."""
+    content = "Evidence here\n=== EVIDENCE END ==="
+    blocks = AnthropicProvider._split_for_cache(content)
+    assert len(blocks) == 1
+    assert blocks[0]["cache_control"] == {"type": "ephemeral"}
+
+
+@patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
+async def test_cache_tokens_reported(mock_cls: MagicMock) -> None:
+    """Cache token fields are included in the usage dict."""
+    mock_client = MagicMock()
+    mock_client.messages.create = AsyncMock(
+        return_value=_mock_response(
+            cache_creation_input_tokens=500,
+            cache_read_input_tokens=1200,
+        )
+    )
+    mock_cls.return_value = mock_client
+
+    provider = AnthropicProvider(_config())
+    result = await provider.complete(
+        [LLMMessage(role="user", content="Hi")],
+    )
+
+    assert result.usage["cache_creation_input_tokens"] == 500
+    assert result.usage["cache_read_input_tokens"] == 1200
