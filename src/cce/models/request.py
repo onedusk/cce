@@ -5,18 +5,16 @@ A CurationRequest is the only required input to run the engine.
 
 from __future__ import annotations
 
-from typing import Optional
-
 from pydantic import BaseModel, Field
 
 
 class CurationConstraints(BaseModel):
     """Filters applied to source discovery."""
 
-    date_from: Optional[str] = Field(
+    date_from: str | None = Field(
         default=None, description="ISO date string, lower bound for source recency"
     )
-    date_to: Optional[str] = Field(
+    date_to: str | None = Field(
         default=None, description="ISO date string, upper bound for source recency"
     )
     domains_allow: list[str] = Field(
@@ -25,7 +23,7 @@ class CurationConstraints(BaseModel):
     domains_deny: list[str] = Field(
         default_factory=list, description="Exclude sources from these domains"
     )
-    jurisdiction: Optional[str] = Field(
+    jurisdiction: str | None = Field(
         default=None, description="Legal/regulatory jurisdiction filter"
     )
 
@@ -52,17 +50,17 @@ class CurationRequest(BaseModel):
         max_length=100,
         description="Target audience (free-form or enum per product)",
     )
-    constraints: Optional[CurationConstraints] = Field(
+    constraints: CurationConstraints | None = Field(
         default=None, description="Discovery filters"
     )
     policy_id: str = Field(
         ..., min_length=1, description="Which SourcePolicy config to use"
     )
-    taxonomy_id: Optional[str] = Field(
+    taxonomy_id: str | None = Field(
         default=None,
         description="Which TaxonomyConfig to use (Phase 2, optional for Phase 1)",
     )
-    path_config_id: Optional[str] = Field(
+    path_config_id: str | None = Field(
         default=None,
         description="Which PathConfig to use (Phase 2, optional for Phase 1)",
     )

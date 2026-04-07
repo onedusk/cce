@@ -13,7 +13,7 @@ import math
 import re
 import uuid
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from urllib.parse import urlparse
 
 from cce.config.types import CrawlConfig
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
     """Compute cosine similarity between two vectors. Returns 0.0 on degenerate input."""
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
     norm_a = math.sqrt(sum(x * x for x in a))
     norm_b = math.sqrt(sum(x * x for x in b))
     if norm_a == 0 or norm_b == 0:
@@ -374,7 +374,7 @@ class Discoverer:
 
         query_vec = all_vectors[0]
         scores: dict[str, float] = {}
-        for ev, vec in zip(evidence, all_vectors[1:]):
+        for ev, vec in zip(evidence, all_vectors[1:], strict=False):
             scores[ev.id] = _cosine_similarity(query_vec, vec)
 
         return scores
@@ -391,7 +391,7 @@ class Discoverer:
         is a verbatim excerpt with full provenance.
         """
         chunks = self._chunk_content(result.markdown)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         quality = SourceQuality(
             is_peer_reviewed=self._looks_peer_reviewed(result),

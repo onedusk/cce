@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import base64
 import hashlib
-from typing import Callable, Coroutine, Any
-
-from fastapi import HTTPException
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from collections.abc import Callable, Coroutine
+from typing import Any
 
 import nacl.utils
+from fastapi import HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from cce.jobs.store import JobStore
 

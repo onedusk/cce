@@ -15,7 +15,9 @@ logger = logging.getLogger(__name__)
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
     """Log method, path, status code, and duration for every request."""
 
-    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+    async def dispatch(
+        self, request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
         start = time.monotonic()
         status_code = 500
         try:

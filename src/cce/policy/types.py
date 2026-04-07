@@ -6,8 +6,6 @@ It feeds both Discovery (what to crawl) and Verification (what to trust).
 
 from __future__ import annotations
 
-from typing import Optional
-
 from pydantic import BaseModel, Field
 
 
@@ -33,7 +31,7 @@ class ReputationRule(BaseModel):
 class RecencyRule(BaseModel):
     """Controls how source freshness affects acceptance."""
 
-    max_age_days: Optional[int] = Field(
+    max_age_days: int | None = Field(
         default=None,
         description="Reject sources older than this many days. None = no limit.",
     )
@@ -51,8 +49,8 @@ class TopicOverride(BaseModel):
     )
     domains_allow: list[str] = Field(default_factory=list)
     domains_deny: list[str] = Field(default_factory=list)
-    reputation: Optional[ReputationRule] = None
-    recency: Optional[RecencyRule] = None
+    reputation: ReputationRule | None = None
+    recency: RecencyRule | None = None
 
 
 class SourcePolicy(BaseModel):

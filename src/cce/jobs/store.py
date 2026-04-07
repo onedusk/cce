@@ -8,7 +8,7 @@ connection. Schema is version-managed independently via the
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import aiosqlite
@@ -100,7 +100,7 @@ class JobStore:
     async def create_job(self, job: Job) -> None:
         """Insert a new job."""
         assert self._db is not None
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         await self._db.execute(
             """
             INSERT INTO jobs
@@ -136,7 +136,7 @@ class JobStore:
     async def update_job(self, job: Job) -> None:
         """Update an existing job (status, timestamps, error, stages)."""
         assert self._db is not None
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         await self._db.execute(
             """
             UPDATE jobs
@@ -219,7 +219,7 @@ class JobStore:
     async def store_package(self, job_id: str, package: PublishPackage) -> None:
         """Store a completed pipeline output."""
         assert self._db is not None
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         await self._db.execute(
             """
             INSERT OR REPLACE INTO packages (job_id, package_json, created_at)
@@ -245,7 +245,7 @@ class JobStore:
     async def store_api_key(self, key_hash: str, label: str | None = None) -> None:
         """Store a hashed API key."""
         assert self._db is not None
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         await self._db.execute(
             "INSERT INTO api_keys (key_hash, label, created_at) VALUES (?, ?, ?)",
             (key_hash, label, now),

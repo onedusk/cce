@@ -42,7 +42,7 @@ router = APIRouter(prefix="/v1/curate/jobs", tags=["jobs"])
 
 async def _auth_dependency(
     request: Request,
-    credentials: HTTPAuthorizationCredentials | None = Depends(_security),
+    credentials: HTTPAuthorizationCredentials | None = Depends(_security),  # noqa: B008
 ) -> str | None:
     """Delegates to the app's configured auth dependency."""
     return await request.app.state.auth_dependency(credentials=credentials)

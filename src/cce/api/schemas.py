@@ -6,7 +6,7 @@ are serialized through these schemas, not exposed directly.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, Field
@@ -41,7 +41,7 @@ def envelope(
 ) -> APIEnvelope:
     """Build an APIEnvelope with an auto-generated timestamp."""
     meta_dict: dict[str, Any] = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
     }
     meta_dict.update(meta)
     return APIEnvelope(data=data, error=error, meta=meta_dict)

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Optional
 
 from cce.llm.base import LLMMessage, LLMProvider, LLMResponse
 from cce.llm.retry import with_llm_retry
@@ -101,8 +100,8 @@ class Writer:
         path: str,
         *,
         path_config: PathConfig | None = None,
-        feedback: Optional[str] = None,
-        lineage: Optional[ContentLineage] = None,
+        feedback: str | None = None,
+        lineage: ContentLineage | None = None,
     ) -> WriterOutput:
         """Produce a draft for one output path from the given evidence.
 
@@ -220,7 +219,7 @@ exists, and mark remaining gaps as [INSUFFICIENT EVIDENCE].
         response: LLMResponse,
         evidence: list[Evidence],
         path: str,
-        lineage: Optional[ContentLineage],
+        lineage: ContentLineage | None,
     ) -> WriterOutput:
         """Parse the LLM response into a ContentUnit."""
         raw = response.content.strip()

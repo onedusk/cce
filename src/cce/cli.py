@@ -10,7 +10,6 @@ cce emit-mdx               — emit MDX files from completed jobs
 from __future__ import annotations
 
 import asyncio
-from typing import Optional
 
 import typer
 
@@ -28,7 +27,7 @@ app.add_typer(emit_app, name="emit-mdx")
 def start_server(
     host: str = typer.Option("0.0.0.0", help="Bind address"),
     port: int = typer.Option(8000, help="Bind port"),
-    config: Optional[str] = typer.Option(None, help="Path to config YAML"),
+    config: str | None = typer.Option(None, help="Path to config YAML"),
 ) -> None:
     """Start the CCE API server."""
     import uvicorn
@@ -48,7 +47,7 @@ def start_server(
 @key_app.command("generate")
 def generate_key(
     label: str = typer.Option("", help="Human-readable label for the key"),
-    config: Optional[str] = typer.Option(None, help="Path to config YAML"),
+    config: str | None = typer.Option(None, help="Path to config YAML"),
 ) -> None:
     """Generate a new API key and print it (shown once only)."""
     from cce.api.auth import generate_api_key, hash_api_key
@@ -73,7 +72,7 @@ def generate_key(
 
 @key_app.command("list")
 def list_keys(
-    config: Optional[str] = typer.Option(None, help="Path to config YAML"),
+    config: str | None = typer.Option(None, help="Path to config YAML"),
 ) -> None:
     """List active API keys."""
 
@@ -101,7 +100,7 @@ def list_keys(
 @key_app.command("revoke")
 def revoke_key(
     key_hash_prefix: str = typer.Argument(help="Hash prefix of the key to revoke"),
-    config: Optional[str] = typer.Option(None, help="Path to config YAML"),
+    config: str | None = typer.Option(None, help="Path to config YAML"),
 ) -> None:
     """Revoke an API key by hash prefix."""
 
@@ -138,14 +137,16 @@ def revoke_key(
 
 @emit_app.callback(invoke_without_command=True)
 def emit_mdx_command(
-    job: Optional[str] = typer.Option(None, help="Job ID to emit"),
-    topic: Optional[str] = typer.Option(
+    job: str | None = typer.Option(None, help="Job ID to emit"),
+    topic: str | None = typer.Option(
         None, help="Topic name (emits latest completed job)"
     ),
     all_jobs: bool = typer.Option(False, "--all", help="Emit all completed jobs"),
     target: str = typer.Option(..., help="Target content directory"),
-    config: Optional[str] = typer.Option(None, help="Path to config YAML"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview files without writing"),
+    config: str | None = typer.Option(None, help="Path to config YAML"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Preview files without writing"
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed stats"),
 ) -> None:
     """Emit MDX files from a completed curation job."""
@@ -251,14 +252,20 @@ def emit_mdx_command(
                 if mdx_path.exists():
                     cite_count = mdx_path.read_text().count("[^")
                     size_kb = mdx_path.stat().st_size / 1024
-                    typer.echo(f"  {p}/page.mdx  ({cite_count} citations, {size_kb:.1f} KB)")
+                    typer.echo(
+                        f"  {p}/page.mdx  ({cite_count} citations, {size_kb:.1f} KB)"
+                    )
                 else:
                     typer.echo(f"  {p}/page.mdx")
             else:
                 typer.echo(f"  {p}/page.mdx")
         if verbose:
             ev_path = slug_dir / "_evidence.json"
-            ev_size = f"  ({ev_path.stat().st_size / 1024:.1f} KB)" if ev_path.exists() else ""
+            ev_size = (
+                f"  ({ev_path.stat().st_size / 1024:.1f} KB)"
+                if ev_path.exists()
+                else ""
+            )
             typer.echo(f"  _evidence.json{ev_size}")
         else:
             typer.echo("  _evidence.json")

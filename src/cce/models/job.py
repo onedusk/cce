@@ -6,19 +6,9 @@ Phase 1 uses this in-memory; Phase 3 persists it for the API layer.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-import sys
-
-if sys.version_info >= (3, 11):
-    from enum import StrEnum
-else:
-    from enum import Enum
-
-    class StrEnum(str, Enum):
-        pass
-
-
-from typing import Any, Optional
+from datetime import UTC, datetime
+from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -82,12 +72,12 @@ class Job(BaseModel):
     id: str
     request: CurationRequest
     status: JobStatus = JobStatus.QUEUED
-    stage: Optional[JobStage] = None
-    progress: Optional[JobProgress] = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    completed_at: Optional[datetime] = None
-    error: Optional[JobError] = None
+    stage: JobStage | None = None
+    progress: JobProgress | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    completed_at: datetime | None = None
+    error: JobError | None = None
     stages: list[StageRecord] = Field(
         default_factory=list,
         description="Completed stage records for lineage tracking",

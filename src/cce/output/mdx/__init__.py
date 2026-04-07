@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from cce.models.evidence import Evidence
@@ -73,7 +73,7 @@ def emit_mdx(
     topic_dir = target_dir / topic_slug
     topic_dir.mkdir(parents=True, exist_ok=True)
 
-    curated_at = datetime.now(timezone.utc).isoformat()
+    curated_at = datetime.now(UTC).isoformat()
     files_written = 0
     paths_written: list[str] = []
 

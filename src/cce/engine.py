@@ -12,8 +12,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
+
 import httpx
 
 from cce.config.loader import load_config
@@ -67,7 +68,7 @@ async def run_pipeline_task(
             job.status = result.job.status
             job.error = result.job.error
             job.stages = result.job.stages
-            job.completed_at = result.job.completed_at or datetime.now(timezone.utc)
+            job.completed_at = result.job.completed_at or datetime.now(UTC)
             await job_store.update_job(job)
 
             # Store package if produced (remap job_id to our API job ID)
@@ -80,7 +81,7 @@ async def run_pipeline_task(
             job = await job_store.get_job(job_id)
         if job:
             job.status = JobStatus.CANCELLED
-            job.completed_at = datetime.now(timezone.utc)
+            job.completed_at = datetime.now(UTC)
             await job_store.update_job(job)
         raise
     except Exception as e:
@@ -94,7 +95,7 @@ async def run_pipeline_task(
                 message=str(e),
                 stage=job.stage or JobStage.DISCOVER,
             )
-            job.completed_at = datetime.now(timezone.utc)
+            job.completed_at = datetime.now(UTC)
             await job_store.update_job(job)
     finally:
         running_tasks.pop(job_id, None)

@@ -7,7 +7,7 @@ block followed by the footnoted markdown body.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone  # used when curated_at is None
+from datetime import UTC, datetime  # used when curated_at is None
 
 from cce.models.content import ContentUnit
 from cce.models.evidence import Evidence
@@ -37,7 +37,7 @@ def format_mdx_page(
     result = build_citation_index(unit.content, evidence_by_id)
 
     if curated_at is None:
-        curated_at = datetime.now(timezone.utc).isoformat()
+        curated_at = datetime.now(UTC).isoformat()
 
     metadata = {
         "title": _derive_title(result.content),

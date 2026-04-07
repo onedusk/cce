@@ -6,8 +6,6 @@ Each Dimension is one axis with a fixed set of valid values.
 
 from __future__ import annotations
 
-from typing import Optional
-
 from pydantic import BaseModel, Field
 
 
@@ -16,7 +14,7 @@ class Dimension(BaseModel):
 
     id: str = Field(description="Machine identifier (e.g., 'emotional')")
     name: str = Field(description="Display name (e.g., 'Emotional Well-Being')")
-    description: Optional[str] = Field(
+    description: str | None = Field(
         default=None, description="What this dimension measures"
     )
     values: list[str] = Field(

@@ -4,6 +4,8 @@ Import the models you need from here:
     from cce.models import Evidence, CurationRequest, ContentUnit, PublishPackage
 """
 
+from __future__ import annotations
+
 from cce.models.content import (
     Citation,
     ClaimMapping,

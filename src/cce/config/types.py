@@ -8,7 +8,6 @@ env vars or config files directly.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -85,7 +84,7 @@ class CrawlConfig(BaseModel):
     adapter: str = Field(
         default="firecrawl", description="Crawl adapter: firecrawl, crawl4ai"
     )
-    api_key: Optional[str] = Field(
+    api_key: str | None = Field(
         default=None, description="API key if required by the adapter"
     )
     rate_limit_rps: float = Field(

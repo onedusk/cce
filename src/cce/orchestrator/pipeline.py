@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from cce.config.types import EngineConfig, QualityGateConfig
 from cce.discovery.adapters.base import CrawlAdapter
@@ -23,8 +23,8 @@ from cce.models.package import PackageLineage, PublishPackage
 from cce.models.paths import PathConfig
 from cce.models.request import CurationRequest
 from cce.policy.types import SourcePolicy
-from cce.tagging.base import TaxonomyPlugin, TaxonomyUnavailableError
 from cce.synthesis.writer import Writer
+from cce.tagging.base import TaxonomyPlugin, TaxonomyUnavailableError
 from cce.verification.gate import GateDecision, GateResult, QualityGate
 from cce.verification.verifier import Verifier
 
@@ -138,7 +138,7 @@ class Pipeline:
         try:
             # --- Stage 1: Discover ---
             job = self._update_job(job, JobStatus.RUNNING, JobStage.DISCOVER)
-            stage_start = datetime.now(timezone.utc)
+            stage_start = datetime.now(UTC)
 
             evidence = await self._discoverer.discover(request, policy)
             job_logger.info("Discovered %d evidence objects", len(evidence))
@@ -147,7 +147,7 @@ class Pipeline:
                 StageRecord(
                     stage=JobStage.DISCOVER,
                     started_at=stage_start,
-                    completed_at=datetime.now(timezone.utc),
+                    completed_at=datetime.now(UTC),
                     metrics=self._discoverer.last_discover_metrics or None,
                 )
             )
@@ -163,12 +163,12 @@ class Pipeline:
 
             # --- Stage 1.5: Tag evidence (optional) ---
             if self._taxonomy_plugin is not None:
-                tag_start = datetime.now(timezone.utc)
+                tag_start = datetime.now(UTC)
                 tags_available = False
                 try:
                     results = await self._taxonomy_plugin.tag_many(evidence)
                     tagged: list[Evidence] = []
-                    for ev, result in zip(evidence, results):
+                    for ev, result in zip(evidence, results, strict=True):
                         tagged.append(
                             ev.model_copy(
                                 update={
@@ -196,7 +196,7 @@ class Pipeline:
                     StageRecord(
                         stage=JobStage.TAG,
                         started_at=tag_start,
-                        completed_at=datetime.now(timezone.utc),
+                        completed_at=datetime.now(UTC),
                         metrics={"tags_available": tags_available},
                     )
                 )
@@ -206,7 +206,7 @@ class Pipeline:
                     )
 
             # --- Stage 2: Store evidence ---
-            stage_start = datetime.now(timezone.utc)
+            stage_start = datetime.now(UTC)
             inserted = await self._evidence_store.put_many(evidence)
             job_logger.info(
                 "Stored %d new evidence objects (%d duplicates skipped)",
@@ -226,7 +226,9 @@ class Pipeline:
                     JobStage.WRITE,
                     progress=JobProgress(completed=idx, total=total_paths),
                 )
-                job_logger.info("Progress: path %d/%d ('%s')", idx + 1, total_paths, path)
+                job_logger.info(
+                    "Progress: path %d/%d ('%s')", idx + 1, total_paths, path
+                )
 
                 unit, gate_results = await self._write_verify_loop(
                     request=request,
@@ -246,7 +248,7 @@ class Pipeline:
 
             # --- Stage 4: Build publish package ---
             job = self._update_job(job, JobStatus.RUNNING, JobStage.PUBLISH)
-            stage_start = datetime.now(timezone.utc)
+            stage_start = datetime.now(UTC)
 
             # Determine final status based on the *terminal* gate decision
             # for each output path.  Intermediate FAIL decisions (which
@@ -299,7 +301,7 @@ class Pipeline:
                 StageRecord(
                     stage=JobStage.PUBLISH,
                     started_at=stage_start,
-                    completed_at=datetime.now(timezone.utc),
+                    completed_at=datetime.now(UTC),
                     metrics={"token_usage": dict(token_usage)},
                 )
             )
@@ -361,7 +363,7 @@ class Pipeline:
             )
 
             # Write
-            write_start = datetime.now(timezone.utc)
+            write_start = datetime.now(UTC)
             writer_output = await self._writer.write(
                 request=request,
                 evidence=path_evidence,
@@ -373,8 +375,12 @@ class Pipeline:
 
             # Accumulate token usage from writer
             if _tokens and writer_output.token_usage:
-                _tokens["input_tokens"] += writer_output.token_usage.get("input_tokens", 0)
-                _tokens["output_tokens"] += writer_output.token_usage.get("output_tokens", 0)
+                _tokens["input_tokens"] += writer_output.token_usage.get(
+                    "input_tokens", 0
+                )
+                _tokens["output_tokens"] += writer_output.token_usage.get(
+                    "output_tokens", 0
+                )
 
             if not writer_output.has_content:
                 _log.warning("Writer produced no content for path '%s'", path)
@@ -387,12 +393,12 @@ class Pipeline:
                     StageRecord(
                         stage=JobStage.WRITE,
                         started_at=write_start,
-                        completed_at=datetime.now(timezone.utc),
+                        completed_at=datetime.now(UTC),
                     )
                 )
 
             # Verify
-            verify_start = datetime.now(timezone.utc)
+            verify_start = datetime.now(UTC)
             jurisdiction = (
                 request.constraints.jurisdiction if request.constraints else None
             )
@@ -410,7 +416,7 @@ class Pipeline:
                     StageRecord(
                         stage=JobStage.VERIFY,
                         started_at=verify_start,
-                        completed_at=datetime.now(timezone.utc),
+                        completed_at=datetime.now(UTC),
                     )
                 )
 
@@ -474,7 +480,7 @@ class Pipeline:
     ) -> Job:
         """Update job tracking fields."""
         job.status = status
-        job.updated_at = datetime.now(timezone.utc)
+        job.updated_at = datetime.now(UTC)
 
         if stage is not None:
             job.stage = stage
@@ -483,7 +489,7 @@ class Pipeline:
             job.progress = progress
 
         if status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.REVIEW_REQUIRED):
-            job.completed_at = datetime.now(timezone.utc)
+            job.completed_at = datetime.now(UTC)
 
         if error_msg:
             from cce.models.job import JobError
