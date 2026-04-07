@@ -166,7 +166,7 @@ async def list_jobs(
                 total=total,
                 limit=limit,
                 offset=offset,
-            ).model_dump(mode="json")
+            )
         ).model_dump(mode="json")
     )
 
