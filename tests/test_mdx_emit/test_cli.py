@@ -162,3 +162,32 @@ class TestEmitMdxCli:
         assert result.exit_code == 0, result.output
         assert "Emitted:" in result.output
         assert "1 topic(s)" in result.output
+
+    def test_dry_run_no_files_written(self, tmp_path):
+        db_path = tmp_path / "test.db"
+        target = tmp_path / "content"
+        target.mkdir()
+
+        job_id, _ = asyncio.run(_seed_store(db_path))
+
+        result = _run_emit("--dry-run", "--job", job_id, db_path=db_path, target=target)
+
+        assert result.exit_code == 0, result.output
+        assert "Would emit:" in result.output
+        assert "no files written" in result.output
+        # Verify no files were actually created
+        content_dirs = [d for d in target.iterdir() if d.is_dir()]
+        assert len(content_dirs) == 0
+
+    def test_verbose_shows_stats(self, tmp_path):
+        db_path = tmp_path / "test.db"
+        target = tmp_path / "content"
+        target.mkdir()
+
+        job_id, _ = asyncio.run(_seed_store(db_path))
+
+        result = _run_emit("--verbose", "--job", job_id, db_path=db_path, target=target)
+
+        assert result.exit_code == 0, result.output
+        assert "citations" in result.output
+        assert "KB" in result.output

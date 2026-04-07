@@ -145,6 +145,8 @@ def emit_mdx_command(
     all_jobs: bool = typer.Option(False, "--all", help="Emit all completed jobs"),
     target: str = typer.Option(..., help="Target content directory"),
     config: Optional[str] = typer.Option(None, help="Path to config YAML"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview files without writing"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed stats"),
 ) -> None:
     """Emit MDX files from a completed curation job."""
     if sum([bool(job), bool(topic), all_jobs]) > 1:
@@ -157,14 +159,16 @@ def emit_mdx_command(
     from pathlib import Path
 
     from cce.models.job import JobStatus
-    from cce.output.mdx import EmitResult, emit_mdx
+    from cce.models.package import PublishPackage
+    from cce.output.mdx import EmitResult, emit_mdx, slugify
 
     target_path = Path(target)
     if not target_path.is_dir():
         typer.echo(f"Error: target directory does not exist: {target}", err=True)
         raise typer.Exit(1)
 
-    async def _run() -> list[EmitResult]:
+    async def _fetch() -> list[tuple[PublishPackage, str | None, str | None]]:
+        """Fetch packages from store. Returns list of (package, slug_override, topic_name)."""
         store = await _get_job_store(config)
         try:
             if all_jobs:
@@ -172,24 +176,17 @@ def emit_mdx_command(
                 if not jobs:
                     typer.echo("Error: no completed jobs found", err=True)
                     raise typer.Exit(1)
-                results: list[EmitResult] = []
+                packages: list[tuple[PublishPackage, str | None, str | None]] = []
                 for j in jobs:
                     package = await store.get_package(j.id)
-                    if package is None:
-                        continue
-                    results.append(
-                        emit_mdx(
-                            package=package,
-                            target_dir=target_path,
-                            topic_name=j.request.topic,
-                        )
-                    )
-                if not results:
+                    if package is not None:
+                        packages.append((package, None, j.request.topic))
+                if not packages:
                     typer.echo(
                         "Error: completed jobs found but none have packages", err=True
                     )
                     raise typer.Exit(1)
-                return results
+                return packages
 
             if job:
                 package = await store.get_package(job)
@@ -200,7 +197,7 @@ def emit_mdx_command(
                 if job_obj is None:
                     typer.echo(f"Error: job record not found for {job}", err=True)
                     raise typer.Exit(1)
-                topic_name = job_obj.request.topic
+                return [(package, None, job_obj.request.topic)]
             else:
                 # Find latest completed job for topic
                 jobs = await store.list_jobs(
@@ -215,26 +212,56 @@ def emit_mdx_command(
                 if package is None:
                     typer.echo(f"Error: no package for job {jobs[0].id}", err=True)
                     raise typer.Exit(1)
-                topic_name = jobs[0].request.topic
-
-            return [
-                emit_mdx(
-                    package=package,
-                    target_dir=target_path,
-                    topic_slug=topic if topic else None,
-                    topic_name=topic_name,
-                )
-            ]
+                return [(package, topic, jobs[0].request.topic)]
         finally:
             await store.close()
 
-    results = asyncio.run(_run())
+    packages = asyncio.run(_fetch())
+
+    if dry_run:
+        for pkg, slug_override, topic_name in packages:
+            slug = slug_override or slugify(topic_name or "")
+            typer.echo(f"Would emit: {slug}/")
+            for unit in pkg.units:
+                typer.echo(f"  {unit.path}/page.mdx")
+            typer.echo("  _evidence.json")
+            typer.echo("  meta.json")
+            file_count = len(pkg.units) + 2  # N page files + _evidence.json + meta.json
+            typer.echo(f"  ({file_count} files, {len(pkg.evidence)} evidence)")
+        typer.echo(f"Dry run — {len(packages)} topic(s), no files written")
+        return
+
+    results: list[EmitResult] = []
+    for pkg, slug_override, topic_name in packages:
+        results.append(
+            emit_mdx(
+                package=pkg,
+                target_dir=target_path,
+                topic_slug=slug_override,
+                topic_name=topic_name,
+            )
+        )
 
     for result in results:
         typer.echo(f"Emitted: {result.topic_slug}/")
+        slug_dir = result.target_dir
         for p in result.paths_written:
-            typer.echo(f"  {p}/page.mdx")
-        typer.echo("  _evidence.json")
+            if verbose:
+                mdx_path = slug_dir / p / "page.mdx"
+                if mdx_path.exists():
+                    cite_count = mdx_path.read_text().count("[^")
+                    size_kb = mdx_path.stat().st_size / 1024
+                    typer.echo(f"  {p}/page.mdx  ({cite_count} citations, {size_kb:.1f} KB)")
+                else:
+                    typer.echo(f"  {p}/page.mdx")
+            else:
+                typer.echo(f"  {p}/page.mdx")
+        if verbose:
+            ev_path = slug_dir / "_evidence.json"
+            ev_size = f"  ({ev_path.stat().st_size / 1024:.1f} KB)" if ev_path.exists() else ""
+            typer.echo(f"  _evidence.json{ev_size}")
+        else:
+            typer.echo("  _evidence.json")
         typer.echo("  meta.json")
 
     total_files = sum(r.files_written for r in results)
