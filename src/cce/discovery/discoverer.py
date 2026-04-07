@@ -412,12 +412,15 @@ class Discoverer:
             excerpt_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
 
             published_at = None
-            if result.published_date:
+            pub_date = result.published_date
+            if isinstance(pub_date, list):
+                pub_date = pub_date[0] if pub_date else ""
+            if pub_date:
                 try:
                     published_at = datetime.fromisoformat(
-                        result.published_date.replace("Z", "+00:00")
+                        pub_date.replace("Z", "+00:00")
                     )
-                except ValueError:
+                except (ValueError, AttributeError):
                     pass
 
             # Coerce metadata fields — adapters may return lists instead of strings
