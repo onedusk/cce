@@ -28,6 +28,7 @@ cce = "cce.cli:app"
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
     "ruff>=0.8",
 ]
 
@@ -48,6 +49,7 @@ known-first-party = ["cce"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+addopts = "--cov=src/cce --cov-report=term-missing:skip-covered"
 markers = [
     "unit: Fast tests with no I/O or external dependencies",
     "integration: Tests using real I/O (SQLite, filesystem) with mocked external services",

@@ -284,4 +284,3 @@ traced to the evidence above should be flagged.
             confidence_score=round(min(1.0, max(0.0, confidence)), 3),
             raw_response=raw,
         )
-

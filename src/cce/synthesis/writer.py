@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import uuid
 
+from cce.evidence.formatting import format_evidence_for_prompt
 from cce.llm.base import LLMMessage, LLMProvider, LLMResponse
 from cce.llm.retry import with_llm_retry
 from cce.models.content import (
@@ -59,9 +60,6 @@ Return a JSON object with exactly these fields:
 Write in clear, accessible prose appropriate for the target audience. \
 Structure the content with markdown headings and paragraphs.\
 """
-
-
-from cce.evidence.formatting import format_evidence_for_prompt
 
 
 class Writer:

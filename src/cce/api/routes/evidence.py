@@ -25,9 +25,7 @@ async def get_evidence(evidence_id: str, request: Request) -> JSONResponse:
                 mode="json"
             ),
         )
-    return JSONResponse(
-        content=envelope(data=evidence).model_dump(mode="json")
-    )
+    return JSONResponse(content=envelope(data=evidence).model_dump(mode="json"))
 
 
 @router.get("", response_model=APIEnvelope[list])

@@ -454,7 +454,9 @@ class Discoverer:
         return evidence
 
     @staticmethod
-    def _chunk_content(markdown: str, max_chunk_size: int = MAX_CHUNK_SIZE) -> list[str]:
+    def _chunk_content(
+        markdown: str, max_chunk_size: int = MAX_CHUNK_SIZE
+    ) -> list[str]:
         """Split markdown into chunks, preferring section/paragraph boundaries.
 
         Strategy: split on double newlines (paragraph breaks) first. If a
