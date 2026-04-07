@@ -26,7 +26,7 @@ async def get_evidence(evidence_id: str, request: Request) -> JSONResponse:
             ),
         )
     return JSONResponse(
-        content=envelope(data=evidence.model_dump(mode="json")).model_dump(mode="json")
+        content=envelope(data=evidence).model_dump(mode="json")
     )
 
 

@@ -254,13 +254,14 @@ exists, and mark remaining gaps as [INSUFFICIENT EVIDENCE].
         # Build evidence ID lookup for URL resolution
         ev_lookup = {ev.id: ev for ev in evidence}
 
-        # Parse citations
+        # Parse citations — warn if LLM cited unknown evidence IDs
         citations_used = parsed.get("citations_used", [])
-        citations = [
-            Citation(evidence_id=eid, url=ev_lookup[eid].url)
-            for eid in citations_used
-            if eid in ev_lookup
-        ]
+        citations = []
+        for eid in citations_used:
+            if eid in ev_lookup:
+                citations.append(Citation(evidence_id=eid, url=ev_lookup[eid].url))
+            else:
+                logger.warning("Writer cited unknown evidence ID: %s", eid)
 
         # Parse evidence map
         evidence_map_raw = parsed.get("evidence_map", [])

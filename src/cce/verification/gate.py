@@ -10,6 +10,7 @@ The gate's thresholds are driven by the risk profile in EngineConfig.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from enum import Enum
 
@@ -17,6 +18,8 @@ from cce.config.types import QualityGateConfig
 from cce.models.content import ContentUnit
 from cce.models.evidence import Evidence
 from cce.verification.verifier import VerificationReport
+
+MIN_SUBSTANTIVE_WORDS = 15  # min words for a paragraph to be checked for citations
 
 logger = logging.getLogger(__name__)
 
@@ -187,12 +190,10 @@ class QualityGate:
             if p.strip() and not p.strip().startswith("#")
         ]
 
-        # Only check substantive paragraphs (>15 words)
-        substantive = [p for p in paragraphs if len(p.split()) > 15]
+        # Only check substantive paragraphs
+        substantive = [p for p in paragraphs if len(p.split()) > MIN_SUBSTANTIVE_WORDS]
         if not substantive:
             return True, 1.0
-
-        import re
 
         passing = sum(
             1

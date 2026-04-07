@@ -26,6 +26,8 @@ from cce.parsing import extract_json
 
 logger = logging.getLogger(__name__)
 
+VERIFIER_MAX_TOKENS = 16384  # large output for detailed claim-by-claim analysis
+
 VERIFIER_SYSTEM_PROMPT = """\
 You are a rigorous fact-checking verifier. Your job is to verify that every \
 claim in the draft content is supported by the provided evidence excerpts.
@@ -202,7 +204,7 @@ traced to the evidence above should be flagged.
                 messages,
                 system=_VERIFIER_FULL_PROMPT,
                 temperature=0.1,  # very low for consistent judgment; do not increase
-                max_tokens=16384,
+                max_tokens=VERIFIER_MAX_TOKENS,
             )
             report = self._parse_response(response.content)
             report.token_usage = response.usage

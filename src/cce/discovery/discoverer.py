@@ -37,6 +37,9 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
 
 
 _CRAWL_FAILURE_WARN_THRESHOLD = 0.3
+SEARCH_RESULT_LIMIT = 20  # max URLs from search
+MIN_FRAGMENT_SIZE = 50  # min chars for evidence excerpt
+MAX_CHUNK_SIZE = 1500  # max chars per evidence chunk
 
 
 class Discoverer:
@@ -78,7 +81,7 @@ class Discoverer:
         candidate_urls: list[str] = []
         for query in queries:
             try:
-                urls = await self._adapter.search(query, limit=20)
+                urls = await self._adapter.search(query, limit=SEARCH_RESULT_LIMIT)
                 candidate_urls.extend(urls)
             except NotImplementedError:
                 logger.info(
@@ -403,7 +406,7 @@ class Discoverer:
         evidence: list[Evidence] = []
         for i, chunk in enumerate(chunks):
             text = chunk.strip()
-            if len(text) < 50:  # skip tiny fragments
+            if len(text) < MIN_FRAGMENT_SIZE:
                 continue
 
             excerpt_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -451,7 +454,7 @@ class Discoverer:
         return evidence
 
     @staticmethod
-    def _chunk_content(markdown: str, max_chunk_size: int = 1500) -> list[str]:
+    def _chunk_content(markdown: str, max_chunk_size: int = MAX_CHUNK_SIZE) -> list[str]:
         """Split markdown into chunks, preferring section/paragraph boundaries.
 
         Strategy: split on double newlines (paragraph breaks) first. If a

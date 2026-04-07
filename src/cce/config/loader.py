@@ -147,17 +147,13 @@ def _load_embedding_config(file: dict) -> EmbeddingConfig:
 
 def _load_gate_config(file: dict) -> dict[str, QualityGateConfig]:
     """Load quality gate configs. Falls back to defaults if not in file."""
+    # Per-profile overrides. "medium" uses QualityGateConfig Pydantic defaults.
     defaults = {
         "low": QualityGateConfig(
             autopublish_threshold=0.7,
-            min_citations_per_paragraph=1,
             max_writer_iterations=2,
         ),
-        "medium": QualityGateConfig(
-            autopublish_threshold=0.85,
-            min_citations_per_paragraph=1,
-            max_writer_iterations=3,
-        ),
+        "medium": QualityGateConfig(),
         "high": QualityGateConfig(
             autopublish_threshold=0.95,
             min_citations_per_paragraph=2,

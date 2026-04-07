@@ -18,7 +18,7 @@ from cce.evidence.store import EvidenceStore
 from cce.llm.base import LLMProvider
 from cce.models.content import ContentLineage, ContentScores, ContentUnit
 from cce.models.evidence import Evidence
-from cce.models.job import Job, JobProgress, JobStage, JobStatus, StageRecord
+from cce.models.job import Job, JobError, JobProgress, JobStage, JobStatus, StageRecord
 from cce.models.package import PackageLineage, PublishPackage
 from cce.models.paths import PathConfig
 from cce.models.request import CurationRequest
@@ -492,8 +492,6 @@ class Pipeline:
             job.completed_at = datetime.now(UTC)
 
         if error_msg:
-            from cce.models.job import JobError
-
             job.error = JobError(
                 code="pipeline_error",
                 message=error_msg,

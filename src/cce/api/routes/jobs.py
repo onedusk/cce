@@ -112,7 +112,7 @@ async def create_job(
 
     return JSONResponse(
         status_code=202,
-        content=envelope(data=job_to_response(job).model_dump(mode="json")).model_dump(
+        content=envelope(data=job_to_response(job)).model_dump(
             mode="json"
         ),
     )
@@ -128,7 +128,7 @@ async def get_job(job_id: str, request: Request) -> JSONResponse:
             content=envelope(error=f"Job not found: {job_id}").model_dump(mode="json"),
         )
     return JSONResponse(
-        content=envelope(data=job_to_response(job).model_dump(mode="json")).model_dump(
+        content=envelope(data=job_to_response(job)).model_dump(
             mode="json"
         )
     )
@@ -263,7 +263,7 @@ async def retry_job(
 
     return JSONResponse(
         status_code=202,
-        content=envelope(data=job_to_response(job).model_dump(mode="json")).model_dump(
+        content=envelope(data=job_to_response(job)).model_dump(
             mode="json"
         ),
     )
@@ -281,5 +281,5 @@ async def get_package(job_id: str, request: Request) -> JSONResponse:
             ),
         )
     return JSONResponse(
-        content=envelope(data=package.model_dump(mode="json")).model_dump(mode="json")
+        content=envelope(data=package).model_dump(mode="json")
     )
