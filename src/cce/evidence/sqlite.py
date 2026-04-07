@@ -44,6 +44,8 @@ CREATE_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_evidence_url ON evidence(url);",
     "CREATE INDEX IF NOT EXISTS idx_evidence_hash ON evidence(excerpt_hash);",
     "CREATE INDEX IF NOT EXISTS idx_evidence_retrieved ON evidence(retrieved_at);",
+    # TODO: tags is a JSON text blob — B-tree index won't help json_each() queries.
+    # Add a junction table (evidence_tags) or functional index when tag-based queries are needed.
 ]
 
 CREATE_META_TABLE = """

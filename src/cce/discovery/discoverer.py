@@ -44,10 +44,12 @@ class Discoverer:
         adapter: CrawlAdapter,
         config: CrawlConfig,
         embedding_provider: EmbeddingProvider | None = None,
+        embedding_batch_size: int = 64,
     ) -> None:
         self._adapter = adapter
         self._config = config
         self._embedding = embedding_provider
+        self._embedding_batch_size = embedding_batch_size
 
     async def discover(
         self,
@@ -328,13 +330,22 @@ class Discoverer:
         if subtopics:
             query_text += " " + " ".join(subtopics)
 
-        # Embed everything in one call: [query, excerpt_0, excerpt_1, ...]
+        # Embed in batches respecting batch_size config
         texts = [query_text] + [ev.excerpt for ev in evidence]
-        result = await self._embedding.embed(texts)
+        all_vectors: list[list[float]] = []
+        for i in range(0, len(texts), self._embedding_batch_size):
+            batch = texts[i : i + self._embedding_batch_size]
+            result = await self._embedding.embed(batch)
+            all_vectors.extend(result.vectors)
 
-        query_vec = result.vectors[0]
+        if len(all_vectors) != len(texts):
+            raise EmbeddingUnavailableError(
+                f"Expected {len(texts)} vectors, got {len(all_vectors)}"
+            )
+
+        query_vec = all_vectors[0]
         scores: dict[str, float] = {}
-        for ev, vec in zip(evidence, result.vectors[1:]):
+        for ev, vec in zip(evidence, all_vectors[1:]):
             scores[ev.id] = _cosine_similarity(query_vec, vec)
 
         return scores

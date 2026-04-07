@@ -29,25 +29,35 @@ class CurationConstraints(BaseModel):
         default=None, description="Legal/regulatory jurisdiction filter"
     )
 
+    model_config = {"frozen": True}
+
 
 class CurationRequest(BaseModel):
     """Input contract for a curation run."""
 
-    topic: str = Field(description="Primary topic to curate")
+    topic: str = Field(
+        ..., min_length=1, max_length=500, description="Primary topic to curate"
+    )
     subtopics: list[str] = Field(
-        default_factory=list, description="Optional subtopics to cover"
+        default_factory=list, max_length=20, description="Optional subtopics to cover"
     )
     paths: list[str] = Field(
-        description="Output paths to generate, drawn from registered PathConfig"
+        ...,
+        min_length=1,
+        max_length=10,
+        description="Output paths to generate, drawn from registered PathConfig",
     )
     audience: str = Field(
         default="general",
+        max_length=100,
         description="Target audience (free-form or enum per product)",
     )
     constraints: Optional[CurationConstraints] = Field(
         default=None, description="Discovery filters"
     )
-    policy_id: str = Field(description="Which SourcePolicy config to use")
+    policy_id: str = Field(
+        ..., min_length=1, description="Which SourcePolicy config to use"
+    )
     taxonomy_id: Optional[str] = Field(
         default=None,
         description="Which TaxonomyConfig to use (Phase 2, optional for Phase 1)",
@@ -58,5 +68,8 @@ class CurationRequest(BaseModel):
     )
     risk_profile: str = Field(
         default="medium",
+        pattern=r"^(low|medium|high)$",
         description="Maps to quality gate thresholds: low, medium, high",
     )
+
+    model_config = {"frozen": True}

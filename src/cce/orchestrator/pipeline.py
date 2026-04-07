@@ -94,6 +94,7 @@ class Pipeline:
             adapter=crawl_adapter,
             config=config.crawl,
             embedding_provider=embedding_provider,
+            embedding_batch_size=config.embedding.batch_size,
         )
         self._evidence_store = evidence_store
         self._writer = Writer(llm=llm)
