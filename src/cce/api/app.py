@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from cce.api.auth import make_auth_dependency
+from cce.api.middleware import RequestLoggingMiddleware
 from cce.api.schemas import envelope
 from cce.config.loader import load_config
 from cce.config.types import EngineConfig
@@ -140,6 +141,9 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Request logging
+    app.add_middleware(RequestLoggingMiddleware)
 
     # Global exception handler
     @app.exception_handler(Exception)
