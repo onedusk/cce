@@ -113,7 +113,12 @@ class Pipeline:
         run_id = f"run_{uuid.uuid4().hex[:12]}"
         job = Job(id=f"job_{uuid.uuid4().hex[:12]}", request=request)
 
-        logger.info("Pipeline run %s started for topic '%s'", run_id, request.topic)
+        # Job-scoped logger — all pipeline logs include job_id
+        job_logger = logging.LoggerAdapter(logger, extra={"job_id": job.id})
+        job_logger.info("Pipeline run %s started for topic '%s'", run_id, request.topic)
+
+        # Token accumulator — summed across all writer + verifier calls
+        token_usage = {"input_tokens": 0, "output_tokens": 0}
 
         # Resolve quality gate config for the risk profile
         gate_config = self._config.quality_gate.get(
@@ -136,7 +141,7 @@ class Pipeline:
             stage_start = datetime.now(timezone.utc)
 
             evidence = await self._discoverer.discover(request, policy)
-            logger.info("Discovered %d evidence objects", len(evidence))
+            job_logger.info("Discovered %d evidence objects", len(evidence))
 
             job.stages.append(
                 StageRecord(
@@ -170,15 +175,15 @@ class Pipeline:
                             )
                         )
                     evidence = tagged
-                    logger.info(
+                    job_logger.info(
                         "Tagged %d evidence objects with taxonomy", len(evidence)
                     )
                 except TaxonomyUnavailableError:
-                    logger.warning(
+                    job_logger.warning(
                         "Taxonomy plugin unavailable, proceeding without tags"
                     )
                 except Exception:
-                    logger.warning(
+                    job_logger.warning(
                         "Taxonomy plugin raised unexpected error, proceeding without tags",
                         exc_info=True,
                     )
@@ -186,7 +191,7 @@ class Pipeline:
             # --- Stage 2: Store evidence ---
             stage_start = datetime.now(timezone.utc)
             inserted = await self._evidence_store.put_many(evidence)
-            logger.info(
+            job_logger.info(
                 "Stored %d new evidence objects (%d duplicates skipped)",
                 inserted,
                 len(evidence) - inserted,
@@ -204,7 +209,7 @@ class Pipeline:
                     JobStage.WRITE,
                     progress=JobProgress(completed=idx, total=total_paths),
                 )
-                logger.info("Progress: path %d/%d ('%s')", idx + 1, total_paths, path)
+                job_logger.info("Progress: path %d/%d ('%s')", idx + 1, total_paths, path)
 
                 unit, gate_results = await self._write_verify_loop(
                     request=request,
@@ -213,6 +218,8 @@ class Pipeline:
                     gate=gate,
                     lineage=lineage,
                     job=job,
+                    job_logger=job_logger,
+                    token_usage=token_usage,
                 )
 
                 all_gate_results.extend(gate_results)
@@ -276,16 +283,18 @@ class Pipeline:
                     stage=JobStage.PUBLISH,
                     started_at=stage_start,
                     completed_at=datetime.now(timezone.utc),
+                    metrics={"token_usage": dict(token_usage)},
                 )
             )
             job = self._update_job(job, final_status)
 
-            logger.info(
-                "Pipeline run %s completed: %d units, confidence=%.3f, status=%s",
+            job_logger.info(
+                "Pipeline run %s completed: %d units, confidence=%.3f, status=%s, tokens=%s",
                 run_id,
                 len(all_units),
                 avg_confidence,
                 final_status.value,
+                token_usage,
             )
 
             return PipelineResult(
@@ -293,7 +302,7 @@ class Pipeline:
             )
 
         except Exception as e:
-            logger.exception("Pipeline run %s failed: %s", run_id, e)
+            job_logger.exception("Pipeline run %s failed: %s", run_id, e)
             return PipelineResult(
                 package=None,
                 job=self._update_job(job, JobStatus.FAILED, error_msg=str(e)),
@@ -308,8 +317,12 @@ class Pipeline:
         gate: QualityGate,
         lineage: ContentLineage,
         job: Job | None = None,
+        job_logger: logging.LoggerAdapter | None = None,
+        token_usage: dict | None = None,
     ) -> tuple[ContentUnit | None, list[GateResult]]:
         """Run the writer-verifier loop for a single output path."""
+        _log = job_logger or logger
+        _tokens = token_usage  # may be None if called outside full pipeline
         gate_results: list[GateResult] = []
         feedback: str | None = None
         unit: ContentUnit | None = None
@@ -326,7 +339,7 @@ class Pipeline:
             path_evidence = evidence[: path_config.max_evidence]
 
         for iteration in range(1, max_iters + 1):
-            logger.info(
+            _log.info(
                 "Path '%s': write-verify iteration %d/%d", path, iteration, max_iters
             )
 
@@ -341,8 +354,13 @@ class Pipeline:
                 lineage=lineage,
             )
 
+            # Accumulate token usage from writer
+            if _tokens and writer_output.token_usage:
+                _tokens["input_tokens"] += writer_output.token_usage.get("input_tokens", 0)
+                _tokens["output_tokens"] += writer_output.token_usage.get("output_tokens", 0)
+
             if not writer_output.has_content:
-                logger.warning("Writer produced no content for path '%s'", path)
+                _log.warning("Writer produced no content for path '%s'", path)
                 break
 
             unit = writer_output.unit
@@ -364,6 +382,11 @@ class Pipeline:
             report = await self._verifier.verify(
                 unit, path_evidence, jurisdiction=jurisdiction
             )
+
+            # Accumulate token usage from verifier
+            if _tokens and report.token_usage:
+                _tokens["input_tokens"] += report.token_usage.get("input_tokens", 0)
+                _tokens["output_tokens"] += report.token_usage.get("output_tokens", 0)
 
             if job is not None:
                 job.stages.append(
@@ -406,22 +429,22 @@ class Pipeline:
             gate_results.append(gate_result)
 
             if gate_result.should_publish:
-                logger.info("Path '%s': PASSED at iteration %d", path, iteration)
+                _log.info("Path '%s': PASSED at iteration %d", path, iteration)
                 return unit, gate_results
 
             if gate_result.should_rewrite:
                 feedback = gate_result.feedback
-                logger.info("Path '%s': rewriting (iteration %d)", path, iteration)
+                _log.info("Path '%s': rewriting (iteration %d)", path, iteration)
                 continue
 
             if gate_result.needs_human:
-                logger.info(
+                _log.info(
                     "Path '%s': routed to human review at iteration %d", path, iteration
                 )
                 return unit, gate_results
 
         # Exhausted iterations without passing
-        logger.info("Path '%s': exhausted %d iterations", path, max_iters)
+        _log.info("Path '%s': exhausted %d iterations", path, max_iters)
         return unit, gate_results
 
     @staticmethod

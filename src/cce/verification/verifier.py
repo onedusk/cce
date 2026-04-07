@@ -132,6 +132,7 @@ class VerificationReport:
     overall_feedback: str = ""
     confidence_score: float = 0.0
     raw_response: str = ""
+    token_usage: dict = field(default_factory=dict)
 
     @property
     def pass_rate(self) -> float:
@@ -200,10 +201,12 @@ traced to the evidence above should be flagged.
             response = await self._llm.complete(
                 messages,
                 system=_VERIFIER_FULL_PROMPT,
-                temperature=0.1,  # very low temp for consistent judgment
+                temperature=0.1,  # very low for consistent judgment; do not increase
                 max_tokens=16384,
             )
-            return self._parse_response(response.content)
+            report = self._parse_response(response.content)
+            report.token_usage = response.usage
+            return report
 
         return await with_llm_retry(_attempt)
 

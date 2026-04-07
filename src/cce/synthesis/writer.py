@@ -181,9 +181,11 @@ exists, and mark remaining gaps as [INSUFFICIENT EVIDENCE].
             response = await self._llm.complete(
                 messages,
                 system=system_prompt,
-                temperature=0.2,  # low temp for factual consistency
+                temperature=0.2,  # low temp for factual consistency; do not increase without testing
             )
-            return self._parse_response(response, evidence, path, lineage)
+            output = self._parse_response(response, evidence, path, lineage)
+            output.token_usage = response.usage
+            return output
 
         return await with_llm_retry(_attempt)
 
@@ -323,10 +325,12 @@ class WriterOutput:
         unit: ContentUnit | None,
         gaps: list[str],
         raw_response: str,
+        token_usage: dict | None = None,
     ) -> None:
         self.unit = unit
         self.gaps = gaps
         self.raw_response = raw_response
+        self.token_usage: dict = token_usage or {}
 
     @property
     def has_content(self) -> bool:
