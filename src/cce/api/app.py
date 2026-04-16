@@ -13,7 +13,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from cce.api.auth import make_auth_dependency
-from cce.api.middleware import RequestLoggingMiddleware
+from cce.api.middleware import (
+    RequestIdMiddleware,
+    RequestLoggingMiddleware,
+    install_request_id_log_factory,
+)
 from cce.api.schemas import envelope
 from cce.config.loader import load_config
 from cce.config.types import EngineConfig
@@ -171,6 +175,13 @@ def create_app(
 
     # Request logging
     app.add_middleware(RequestLoggingMiddleware)
+
+    # Request ID correlation — registered LAST so it wraps outermost and the
+    # contextvar is set before RequestLoggingMiddleware logs the first line.
+    app.add_middleware(RequestIdMiddleware)
+
+    # Ensure every log record (from any logger) carries `request_id`.
+    install_request_id_log_factory()
 
     # Global exception handler
     @app.exception_handler(Exception)
