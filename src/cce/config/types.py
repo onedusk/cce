@@ -8,6 +8,7 @@ env vars or config files directly.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Final
 
 from pydantic import BaseModel, Field
 
@@ -134,6 +135,37 @@ class QualityGateConfig(BaseModel):
     )
 
 
+# --- Canonical quality-gate profile templates (audit A3) -------------------
+# Single source of truth for the three named risk profiles. Both
+# `EngineConfig.quality_gate` and `config/loader._load_gate_config` read from
+# here — changing a profile in one place propagates to both.
+
+QUALITY_GATE_PROFILES: Final[dict[str, dict]] = {
+    "low": {
+        "autopublish_threshold": 0.7,
+        "min_citations_per_paragraph": 1,
+        "max_writer_iterations": 2,
+    },
+    "medium": {
+        "autopublish_threshold": 0.85,
+        "min_citations_per_paragraph": 1,
+        "max_writer_iterations": 3,
+    },
+    "high": {
+        "autopublish_threshold": 0.95,
+        "min_citations_per_paragraph": 2,
+        "max_writer_iterations": 4,
+    },
+}
+
+
+def default_quality_gate_profiles() -> dict[str, QualityGateConfig]:
+    """Build a fresh {profile_name: QualityGateConfig} dict from the templates."""
+    return {
+        name: QualityGateConfig(**fields) for name, fields in QUALITY_GATE_PROFILES.items()
+    }
+
+
 class APIConfig(BaseModel):
     """API server configuration (Phase 3)."""
 
@@ -159,23 +191,7 @@ class EngineConfig(BaseModel):
     crawl: CrawlConfig = Field(default_factory=CrawlConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     quality_gate: dict[str, QualityGateConfig] = Field(
-        default_factory=lambda: {
-            "low": QualityGateConfig(
-                autopublish_threshold=0.7,
-                min_citations_per_paragraph=1,
-                max_writer_iterations=2,
-            ),
-            "medium": QualityGateConfig(
-                autopublish_threshold=0.85,
-                min_citations_per_paragraph=1,
-                max_writer_iterations=3,
-            ),
-            "high": QualityGateConfig(
-                autopublish_threshold=0.95,
-                min_citations_per_paragraph=2,
-                max_writer_iterations=4,
-            ),
-        },
+        default_factory=default_quality_gate_profiles,
         description="Quality gate thresholds keyed by risk profile name",
     )
     api: APIConfig = Field(default_factory=APIConfig)

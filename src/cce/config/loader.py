@@ -25,6 +25,7 @@ from cce.config.types import (
     EvidenceStoreConfig,
     LLMConfig,
     QualityGateConfig,
+    default_quality_gate_profiles,
 )
 
 
@@ -146,29 +147,17 @@ def _load_embedding_config(file: dict) -> EmbeddingConfig:
 
 
 def _load_gate_config(file: dict) -> dict[str, QualityGateConfig]:
-    """Load quality gate configs. Falls back to defaults if not in file."""
-    # Per-profile overrides. "medium" uses QualityGateConfig Pydantic defaults.
-    defaults = {
-        "low": QualityGateConfig(
-            autopublish_threshold=0.7,
-            max_writer_iterations=2,
-        ),
-        "medium": QualityGateConfig(),
-        "high": QualityGateConfig(
-            autopublish_threshold=0.95,
-            min_citations_per_paragraph=2,
-            max_writer_iterations=4,
-        ),
-    }
-
+    """Load quality gate configs. Profile templates come from the canonical
+    `QUALITY_GATE_PROFILES` dict in `config/types.py` (audit A3); YAML entries
+    override them per-profile.
+    """
+    result = default_quality_gate_profiles()
     if not file:
-        return defaults
+        return result
 
-    result = dict(defaults)
     for profile_name, profile_data in file.items():
         if isinstance(profile_data, dict):
             result[profile_name] = QualityGateConfig(**profile_data)
-
     return result
 
 
