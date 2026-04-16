@@ -7,21 +7,16 @@ Usage:
 
 import asyncio
 import logging
-import os
 from pathlib import Path
 
-# Load .env manually (avoid adding python-dotenv as a dependency)
-env_path = Path(__file__).parent / ".env"
-if env_path.exists():
-    for line in env_path.read_text().splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            key, _, value = line.partition("=")
-            os.environ.setdefault(key.strip(), value.strip())
+from cce import load_env_file
 
-from cce.engine import CurationEngine
-from cce.models.request import CurationRequest
-from cce.output import write_output
+# Load .env (shared helper; see src/cce/__init__.py).
+load_env_file(Path(__file__).parent / ".env")
+
+from cce.engine import CurationEngine  # noqa: E402
+from cce.models.request import CurationRequest  # noqa: E402
+from cce.output import write_output  # noqa: E402
 
 # --- Logging ---
 logging.basicConfig(

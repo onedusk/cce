@@ -29,6 +29,99 @@ def _use_tmp_db(tmp_path, monkeypatch):
         monkeypatch.delenv(var, raising=False)
 
 
+def test_load_env_file_sets_missing_keys(tmp_path, monkeypatch):
+    """load_env_file sets keys that aren't already in os.environ."""
+    from cce import load_env_file
+
+    monkeypatch.delenv("CCE_TEST_KEY_A", raising=False)
+    monkeypatch.delenv("CCE_TEST_KEY_B", raising=False)
+    env = tmp_path / ".env"
+    env.write_text('CCE_TEST_KEY_A=value-a\nCCE_TEST_KEY_B="quoted-b"\n')
+
+    load_env_file(env)
+
+    import os
+
+    assert os.environ.get("CCE_TEST_KEY_A") == "value-a"
+    assert os.environ.get("CCE_TEST_KEY_B") == "quoted-b"
+
+
+def test_load_env_file_does_not_overwrite(tmp_path, monkeypatch):
+    """Existing env vars win; load_env_file uses setdefault semantics."""
+    from cce import load_env_file
+
+    monkeypatch.setenv("CCE_TEST_PRESET", "original")
+    env = tmp_path / ".env"
+    env.write_text("CCE_TEST_PRESET=from-file\n")
+
+    load_env_file(env)
+
+    import os
+
+    assert os.environ.get("CCE_TEST_PRESET") == "original"
+
+
+def test_load_env_file_ignores_comments_and_blanks(tmp_path, monkeypatch):
+    from cce import load_env_file
+
+    monkeypatch.delenv("CCE_TEST_REAL", raising=False)
+    env = tmp_path / ".env"
+    env.write_text(
+        "# this is a comment\n"
+        "\n"
+        "CCE_TEST_REAL=real-value\n"
+        "malformed line with no equals sign\n"
+    )
+
+    load_env_file(env)
+
+    import os
+
+    assert os.environ.get("CCE_TEST_REAL") == "real-value"
+
+
+def test_load_env_file_missing_file_is_noop(tmp_path):
+    """load_env_file on a nonexistent path just returns — doesn't raise."""
+    from cce import load_env_file
+
+    load_env_file(tmp_path / "does-not-exist.env")
+    # No assertion needed; reaching this line means no exception.
+
+
+def test_batch_command_rejects_missing_topics_file(tmp_path):
+    """--topics-file pointing at a nonexistent file exits with non-zero."""
+    result = runner.invoke(
+        app,
+        [
+            "batch",
+            "--topics-file",
+            str(tmp_path / "nope.yaml"),
+            "--policy-id",
+            "peer-reviewed",
+        ],
+    )
+    assert result.exit_code != 0
+
+
+def test_batch_command_rejects_non_list_yaml(tmp_path):
+    """The YAML must be a top-level list of topic entries."""
+    topics_file = tmp_path / "topics.yaml"
+    topics_file.write_text("key: value\n")  # dict, not list
+
+    result = runner.invoke(
+        app,
+        [
+            "batch",
+            "--topics-file",
+            str(topics_file),
+            "--policy-id",
+            "peer-reviewed",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "top-level YAML list" in result.output
+
+
 def test_generate_key_writes_file_by_default(tmp_path):
     """Default `api key generate` writes a 0600-mode file and doesn't print the key (audit U3)."""
     import os

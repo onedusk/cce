@@ -1,0 +1,23 @@
+# Sample topics file for `cce batch --topics-file <this>`.
+#
+# Schema: a top-level list of topic entries. Each entry:
+#   topic:           required, string
+#   subtopics:       optional, list[string] (default: [])
+#   paths:           required, list[string]
+#   audience:        optional, string (default: "general")
+#   risk_profile:    optional, string (default from --risk-profile flag)
+#
+# The --policy-id, --taxonomy-id, --path-config-id flags on the CLI apply
+# to every topic in the file — they're not per-entry here.
+
+- topic: "prompt caching cost optimization"
+  subtopics:
+    - "ephemeral cache blocks"
+    - "cache hit measurement"
+  paths: ["learn", "decide"]
+
+- topic: "sqlite-vec production deployments"
+  subtopics:
+    - "index sizing"
+    - "backup strategies"
+  paths: ["learn"]

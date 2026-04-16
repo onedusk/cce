@@ -37,6 +37,91 @@ def _main_callback() -> None:
     configure_logging()
 
 
+@app.command("batch")
+def batch_command(
+    topics_file: Path = typer.Option(  # noqa: B008
+        ...,
+        "--topics-file",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help="Path to a YAML file with {topic, subtopics, paths, ...} entries.",
+    ),
+    policy_id: str = typer.Option(..., "--policy-id", help="Source policy id."),
+    path_config_id: str | None = typer.Option(
+        None, "--path-config-id", help="Path config id (lineage)."
+    ),
+    taxonomy_id: str | None = typer.Option(
+        None, "--taxonomy-id", help="Taxonomy id (lineage)."
+    ),
+    risk_profile: str = typer.Option(
+        "medium", "--risk-profile", help="Risk profile: low | medium | high."
+    ),
+    audience: str = typer.Option(
+        "general", "--audience", help="Target audience (overridable per-entry)."
+    ),
+) -> None:
+    """Run the pipeline over every topic in a YAML file (audit U4 / PDR-002).
+
+    Consolidated alternative to the per-developer run_*.py scripts — topics
+    are data, not code, so editing them shouldn't require Python.
+    """
+    import yaml
+
+    from cce.engine import CurationEngine
+    from cce.models.request import CurationRequest
+
+    entries = yaml.safe_load(topics_file.read_text()) or []
+    if not isinstance(entries, list):
+        typer.echo(
+            f"Error: {topics_file} must contain a top-level YAML list, got {type(entries).__name__}.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    async def _run() -> None:
+        engine = await CurationEngine.embedded()
+        try:
+            for i, entry in enumerate(entries, start=1):
+                if not isinstance(entry, dict):
+                    typer.echo(
+                        f"[{i}/{len(entries)}] SKIP (not a dict): {entry!r}",
+                        err=True,
+                    )
+                    continue
+                topic = entry.get("topic")
+                paths = entry.get("paths")
+                if not topic or not paths:
+                    typer.echo(
+                        f"[{i}/{len(entries)}] SKIP (missing topic or paths): {entry!r}",
+                        err=True,
+                    )
+                    continue
+
+                request = CurationRequest(
+                    topic=topic,
+                    subtopics=entry.get("subtopics", []),
+                    paths=paths,
+                    audience=entry.get("audience", audience),
+                    policy_id=policy_id,
+                    taxonomy_id=taxonomy_id,
+                    path_config_id=path_config_id,
+                    risk_profile=entry.get("risk_profile", risk_profile),
+                )
+
+                typer.echo(f"[{i}/{len(entries)}] Starting: {topic}")
+                handle = await engine.curate(request)
+                job = await handle.wait(timeout=1800)
+                typer.echo(
+                    f"[{i}/{len(entries)}] {job.status.value}: {topic}"
+                    + (f" — {job.error.message}" if job.error else "")
+                )
+        finally:
+            await engine.close()
+
+    asyncio.run(_run())
+
+
 @api_app.command("start")
 def start_server(
     host: str = typer.Option("0.0.0.0", help="Bind address"),
