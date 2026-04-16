@@ -21,6 +21,7 @@ if env_path.exists():
 from cce.engine import CurationEngine
 from cce.models.request import CurationRequest
 from cce.output import write_output
+from cce.output.mdx import emit_mdx
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,39 +33,21 @@ logger = logging.getLogger("cce.batch")
 # --- Topics to run ---
 TOPICS = [
     {
-        "topic": "the science of attention and focus",
+        "topic": "resilience — post-traumatic growth and psychological flexibility",
         "subtopics": [
-            "attention economy and cognitive switching costs",
-            "deep work and sustained focus",
-            "attention restoration theory and nature exposure",
-            "neuroplasticity of attention",
+            "post-traumatic growth vs bouncing back",
+            "psychological flexibility and ACT",
+            "grit vs resilience distinction",
+            "community resilience vs individual toughness",
         ],
     },
     {
-        "topic": "burnout — causes, mechanisms, and recovery",
+        "topic": "boredom — the signal we have been taught to silence",
         "subtopics": [
-            "Maslach burnout dimensions: exhaustion, cynicism, inefficacy",
-            "organizational vs individual causes of burnout",
-            "recovery trajectories and intervention research",
-            "presenteeism and the cost of working while burned out",
-        ],
-    },
-    {
-        "topic": "loneliness, social isolation, and health",
-        "subtopics": [
-            "epidemic of disconnection and modern loneliness",
-            "health effects of social isolation: mortality, immune function",
-            "loneliness vs solitude — when being alone is harmful vs restorative",
-            "digital connection as substitute vs supplement for in-person contact",
-        ],
-    },
-    {
-        "topic": "how environment design shapes well-being",
-        "subtopics": [
-            "environmental psychology and biophilic design",
-            "noise, light, and temperature effects on cognition and mood",
-            "workspace design and productivity",
-            "urban vs rural well-being and restorative environments",
+            "boredom as creativity catalyst",
+            "default mode network and mind-wandering",
+            "overstimulation and dopamine baseline",
+            "boredom tolerance in children and adults",
         ],
     },
 ]
@@ -93,7 +76,7 @@ async def main():
                 )
 
                 handle = await engine.curate(request)
-                job = await handle.wait()
+                job = await handle.wait(timeout=1800)
                 package = await handle.package()
 
                 # Write output
@@ -106,6 +89,12 @@ async def main():
                     output_dir = Path(__file__).parent / "output"
                     run_dir = write_output(result, output_dir)
                     logger.info("Output written to: %s", run_dir)
+
+                    # Also emit MDX
+                    mdx_dir = output_dir / "mdx"
+                    mdx_dir.mkdir(exist_ok=True)
+                    mdx_result = emit_mdx(package, mdx_dir, topic_name=topic)
+                    logger.info("MDX emitted to: %s", mdx_result.target_dir)
 
                 # Console summary
                 print("\n" + "=" * 70)
