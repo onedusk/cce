@@ -55,6 +55,48 @@ def _merge_tokens(into: dict[str, int], frm: Mapping[str, int]) -> None:
         into[k] += int(frm.get(k, 0))
 
 
+def _format_completion_line(
+    *,
+    token_usage: Mapping[str, int],
+    path_count: int,
+    per_path_iterations: list[int],
+    cost_estimate_usd: float | None = None,
+) -> str:
+    """Single-line structured pipeline-completion summary (audit D3).
+
+    Format:
+        Pipeline complete: input=N, (cache_read=N, cache_write=N), output=N[, est_cost=$N], paths=N, iterations=[...]
+
+    Numbers use thousands separators so a 50k-token run reads as 50,000.
+    ``cost_estimate_usd=None`` (the default in this sprint — no pricing
+    table is wired yet) drops the est_cost field entirely.
+    """
+    parts = [
+        f"input={token_usage.get('input_tokens', 0):,}",
+        f"(cache_read={token_usage.get('cache_read_input_tokens', 0):,}, "
+        f"cache_write={token_usage.get('cache_creation_input_tokens', 0):,})",
+        f"output={token_usage.get('output_tokens', 0):,}",
+    ]
+    if cost_estimate_usd is not None:
+        parts.append(f"est_cost=${cost_estimate_usd:.4f}")
+    parts.append(f"paths={path_count}")
+    parts.append(f"iterations={per_path_iterations}")
+    return "Pipeline complete: " + ", ".join(parts)
+
+
+def _per_path_iteration_counts(job: Job, paths: list[str]) -> list[int]:
+    """Max WRITE iteration number reached per path, in `paths` order."""
+    by_path: dict[str, int] = dict.fromkeys(paths, 0)
+    for rec in job.stages:
+        if rec.stage != JobStage.WRITE or not rec.metrics:
+            continue
+        p = rec.metrics.get("path")
+        if isinstance(p, str) and p in by_path:
+            iter_count = int(rec.metrics.get("iterations", 0))
+            by_path[p] = max(by_path[p], iter_count)
+    return [by_path[p] for p in paths]
+
+
 def _terminal_decisions(
     gate_results: list[GateResult],
     paths: list[str],
@@ -324,13 +366,13 @@ class Pipeline:
             )
             job = self._update_job(job, final_status)
 
+            per_path_iterations = _per_path_iteration_counts(job, request.paths)
             job_logger.info(
-                "Pipeline run %s completed: %d units, confidence=%.3f, status=%s, tokens=%s",
-                run_id,
-                len(all_units),
-                avg_confidence,
-                final_status.value,
-                token_usage,
+                _format_completion_line(
+                    token_usage=token_usage,
+                    path_count=len(request.paths),
+                    per_path_iterations=per_path_iterations,
+                )
             )
 
             return PipelineResult(

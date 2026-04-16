@@ -101,9 +101,7 @@ def pipeline_deps(tmp_path):
         crawl = MockCrawlAdapter(
             search_map={"test topic": ["https://example.com/1"]},
             url_map={
-                "https://example.com/1": make_crawl_result(
-                    url="https://example.com/1"
-                )
+                "https://example.com/1": make_crawl_result(url="https://example.com/1")
             },
         )
 
@@ -167,9 +165,21 @@ class TestJobScopedLogging:
 
         await store.close()
 
-        # Check that token usage appears in completion log
-        completion_msgs = [r.message for r in caplog.records if "completed" in r.message]
-        assert any("tokens=" in msg for msg in completion_msgs)
+        # Check that token usage appears in the structured completion log
+        # (new format introduced by audit T-04.04).
+        completion_msgs = [
+            r.getMessage()
+            for r in caplog.records
+            if "Pipeline complete" in r.getMessage()
+        ]
+        assert len(completion_msgs) == 1
+        msg = completion_msgs[0]
+        assert "input=" in msg
+        assert "output=" in msg
+        assert "cache_read=" in msg
+        assert "cache_write=" in msg
+        assert "paths=" in msg
+        assert "iterations=" in msg
 
     async def test_token_usage_in_stage_metrics(self, pipeline_deps):
         from cce.models.request import CurationRequest
@@ -187,9 +197,7 @@ class TestJobScopedLogging:
         await store.close()
 
         # Find the PUBLISH stage record (where we store token totals)
-        publish_stages = [
-            s for s in result.job.stages if s.stage == JobStage.PUBLISH
-        ]
+        publish_stages = [s for s in result.job.stages if s.stage == JobStage.PUBLISH]
         assert len(publish_stages) == 1
         metrics = publish_stages[0].metrics
         assert metrics is not None
