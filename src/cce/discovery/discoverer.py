@@ -144,8 +144,27 @@ class Discoverer:
             filtered_urls
         )
 
-        # Cap fresh URLs at max sources
+        # Cap total sources at policy.max_sources_per_run (review finding F-3).
+        # Fresh URLs keep priority; reusable evidence fills the remaining
+        # headroom. Cap is measured in UNIQUE URLs so a chunked page (multiple
+        # Evidence rows per URL) contributes one "source" either way. Honors
+        # the docstring contract "Cap on total sources discovered per curation
+        # run"; previously the cap only bounded fresh URLs.
         fresh_urls = fresh_urls[: policy.max_sources_per_run]
+        reusable_url_cap = max(0, policy.max_sources_per_run - len(fresh_urls))
+        if reusable_url_cap == 0:
+            reusable_evidence = []
+        elif reusable_evidence:
+            # Keep all evidence rows for the first `reusable_url_cap` unique URLs.
+            seen_urls: set[str] = set()
+            kept: list[Evidence] = []
+            for ev in reusable_evidence:
+                if ev.url in seen_urls:
+                    kept.append(ev)  # additional chunks from an already-kept URL
+                elif len(seen_urls) < reusable_url_cap:
+                    seen_urls.add(ev.url)
+                    kept.append(ev)
+            reusable_evidence = kept
         logger.info(
             "Discovery: %d fresh URLs to crawl, %d reusable evidence rows",
             len(fresh_urls),

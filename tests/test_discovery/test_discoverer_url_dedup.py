@@ -13,7 +13,6 @@ import pytest
 
 from cce.config.types import CrawlConfig
 from cce.discovery.discoverer import Discoverer
-
 from tests.conftest import make_evidence
 
 pytestmark = pytest.mark.integration
@@ -174,3 +173,127 @@ async def test_log_not_emitted_when_nothing_skipped(caplog):
 
     dedup_lines = [r for r in caplog.records if "URL dedup" in r.message]
     assert dedup_lines == []
+
+
+# ---------------------------------------------------------------------------
+# F-3: policy.max_sources_per_run applies to fresh + reusable combined
+# ---------------------------------------------------------------------------
+
+
+async def _run_discover_with_cap(
+    *,
+    max_sources_per_run: int,
+    fresh_urls: list[str],
+    stored: dict[str, list],
+):
+    """Drive Discoverer.discover() end-to-end with seeded fresh + stored URLs.
+
+    Returns the `(fresh_urls_sent_to_crawl, final_evidence_url_set)`.
+    """
+    from tests.conftest import (
+        MockCrawlAdapter,
+        make_crawl_result,
+        make_curation_request,
+        make_source_policy,
+    )
+
+    # Crawl adapter returns every `fresh_urls` entry from search. Markdown is
+    # unique per URL so excerpt-hash dedup in _extract_evidence doesn't collapse
+    # multiple fresh URLs into one.
+    adapter = MockCrawlAdapter(
+        search_map={"test topic": fresh_urls},
+        url_map={
+            url: make_crawl_result(
+                url=url,
+                markdown=(
+                    f"A reasonably long paragraph for {url} to exceed the "
+                    "fifty-character minimum for evidence extraction; unique."
+                ),
+            )
+            for url in fresh_urls
+        },
+    )
+
+    store = _StubEvidenceStore(stored=stored)
+    discoverer = Discoverer(
+        adapter=adapter,
+        config=CrawlConfig(api_key="test"),
+        evidence_store=store,  # type: ignore[arg-type]
+    )
+    policy = make_source_policy(max_sources_per_run=max_sources_per_run)
+    request = make_curation_request(topic="test topic")
+
+    evidence = await discoverer.discover(request, policy)
+    # Count unique URLs in the final evidence — one "source" per URL.
+    return {ev.url for ev in evidence}
+
+
+async def test_cap_applies_to_fresh_plus_reusable_combined():
+    """max=5; 10 fresh + 10 reusable -> total unique sources <= 5."""
+    fresh = [f"https://fresh.example.com/{i}" for i in range(10)]
+    reusable_urls = [f"https://stored.example.com/{i}" for i in range(10)]
+    stored = {
+        u: [
+            make_evidence(
+                id=f"ev_{u.rsplit('/', 1)[-1]}",
+                url=u,
+                excerpt=f"Stored excerpt for {u} — distinct content.",
+            )
+        ]
+        for u in reusable_urls
+    }
+
+    source_urls = await _run_discover_with_cap(
+        max_sources_per_run=5, fresh_urls=fresh + reusable_urls, stored=stored
+    )
+
+    assert len(source_urls) <= 5, (
+        f"Expected <=5 unique source URLs post-cap; got {len(source_urls)}"
+    )
+
+
+async def test_cap_fresh_priority_over_reusable():
+    """max=3; 4 fresh + 10 reusable -> fresh wins: 3 fresh, 0 reusable."""
+    fresh = [f"https://fresh.example.com/{i}" for i in range(4)]
+    reusable_urls = [f"https://stored.example.com/{i}" for i in range(10)]
+    stored = {
+        u: [make_evidence(id=f"ev_{u.rsplit('/', 1)[-1]}", url=u, excerpt=f"x{u}")]
+        for u in reusable_urls
+    }
+
+    source_urls = await _run_discover_with_cap(
+        max_sources_per_run=3, fresh_urls=fresh + reusable_urls, stored=stored
+    )
+
+    # All 3 source slots went to fresh URLs. No reusable URL appears.
+    assert len(source_urls) == 3
+    assert all(u in set(fresh) for u in source_urls), (
+        f"Expected all sources to be fresh; got {source_urls}"
+    )
+
+
+async def test_cap_reusable_fills_remainder():
+    """max=5; 2 fresh + 10 reusable -> 2 fresh + 3 reusable = 5 total."""
+    fresh = [f"https://fresh.example.com/{i}" for i in range(2)]
+    reusable_urls = [f"https://stored.example.com/{i}" for i in range(10)]
+    stored = {
+        u: [
+            make_evidence(
+                id=f"ev_{u.rsplit('/', 1)[-1]}",
+                url=u,
+                excerpt=f"Stored excerpt for {u} unique long enough content.",
+            )
+        ]
+        for u in reusable_urls
+    }
+
+    source_urls = await _run_discover_with_cap(
+        max_sources_per_run=5, fresh_urls=fresh + reusable_urls, stored=stored
+    )
+
+    # 2 fresh (crawled) + 3 reusable = 5 total unique source URLs.
+    assert len(source_urls) == 5
+    fresh_in_final = source_urls & set(fresh)
+    reusable_in_final = source_urls & set(reusable_urls)
+    assert len(fresh_in_final) == 2
+    assert len(reusable_in_final) == 3
