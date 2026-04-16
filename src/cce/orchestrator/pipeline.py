@@ -1,13 +1,16 @@
 """Pipeline orchestrator.
 
 Wires the core loop: discover -> store -> write -> verify -> gate -> (loop or publish).
-Phase 1 entry point. Single-threaded, no API, no plugins.
+Phase 1 entry point. Single-threaded at the process level; per-path
+writer/verifier loops fan out concurrently via asyncio.gather (audit P1).
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
+from collections.abc import Mapping
 from datetime import UTC, datetime
 
 from cce.config.types import EngineConfig, QualityGateConfig
@@ -29,6 +32,27 @@ from cce.verification.gate import GateDecision, GateResult, QualityGate
 from cce.verification.verifier import Verifier
 
 logger = logging.getLogger(__name__)
+
+
+# --- Token-usage helpers (audit P1) ---------------------------------------
+# Each per-path task owns its own dict to avoid contention during LLM calls;
+# the parent merges them after asyncio.gather returns.
+
+_TOKEN_KEYS: tuple[str, ...] = (
+    "input_tokens",
+    "output_tokens",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+)
+
+
+def _zero_tokens() -> dict[str, int]:
+    return dict.fromkeys(_TOKEN_KEYS, 0)
+
+
+def _merge_tokens(into: dict[str, int], frm: Mapping[str, int]) -> None:
+    for k in _TOKEN_KEYS:
+        into[k] += int(frm.get(k, 0))
 
 
 def _terminal_decisions(
@@ -118,13 +142,9 @@ class Pipeline:
         job_logger = logging.LoggerAdapter(logger, extra={"job_id": job.id})
         job_logger.info("Pipeline run %s started for topic '%s'", run_id, request.topic)
 
-        # Token accumulator — summed across all writer + verifier calls
-        token_usage = {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "cache_creation_input_tokens": 0,
-            "cache_read_input_tokens": 0,
-        }
+        # Token accumulator — parent dict; each path task gets its own local
+        # dict that is merged back after gather (see _run_all_paths).
+        token_usage = _zero_tokens()
 
         # Resolve quality gate config for the risk profile
         gate_config = self._config.quality_gate.get(
@@ -220,37 +240,27 @@ class Pipeline:
                 len(evidence) - inserted,
             )
 
-            # --- Stage 3: Write + Verify loop (per output path) ---
-            all_units: list[ContentUnit] = []
-            all_gate_results: list[GateResult] = []
-
+            # --- Stage 3: Write + Verify loop (per output path, run concurrently) ---
             total_paths = len(request.paths)
-            for idx, path in enumerate(request.paths):
-                job = self._update_job(
-                    job,
-                    JobStatus.RUNNING,
-                    JobStage.WRITE,
-                    progress=JobProgress(completed=idx, total=total_paths),
-                )
-                job_logger.info(
-                    "Progress: path %d/%d ('%s')", idx + 1, total_paths, path
-                )
+            job = self._update_job(
+                job,
+                JobStatus.RUNNING,
+                JobStage.WRITE,
+                progress=JobProgress(completed=0, total=total_paths),
+            )
+            job_logger.info(
+                "Starting write-verify across %d path(s) concurrently", total_paths
+            )
 
-                unit, gate_results = await self._write_verify_loop(
-                    request=request,
-                    evidence=evidence,
-                    path=path,
-                    gate=gate,
-                    lineage=lineage,
-                    job=job,
-                    job_logger=job_logger,
-                    token_usage=token_usage,
-                )
-
-                all_gate_results.extend(gate_results)
-
-                if unit is not None:
-                    all_units.append(unit)
+            all_units, all_gate_results = await self._run_all_paths(
+                request=request,
+                evidence=evidence,
+                gate=gate,
+                lineage=lineage,
+                job=job,
+                job_logger=job_logger,
+                token_usage=token_usage,
+            )
 
             # --- Stage 4: Build publish package ---
             job = self._update_job(job, JobStatus.RUNNING, JobStage.PUBLISH)
@@ -334,6 +344,109 @@ class Pipeline:
                 gate_results=[],
             )
 
+    async def _run_one_path(
+        self,
+        *,
+        request: CurationRequest,
+        evidence: list[Evidence],
+        path: str,
+        gate: QualityGate,
+        lineage: ContentLineage,
+        job: Job,
+        parent_logger: logging.Logger | logging.LoggerAdapter,
+    ) -> tuple[ContentUnit | None, list[GateResult], dict[str, int]]:
+        """Run one path's writer/verifier loop with a local token dict and child logger."""
+        # LoggerAdapter doesn't expose .getChild on every Python version — reach
+        # through to the underlying logger, then re-wrap to preserve any `extra`.
+        if isinstance(parent_logger, logging.LoggerAdapter):
+            base_child = parent_logger.logger.getChild(path)
+            path_logger: logging.Logger | logging.LoggerAdapter = logging.LoggerAdapter(
+                base_child, extra=dict(parent_logger.extra or {})
+            )
+        else:
+            path_logger = parent_logger.getChild(path)
+
+        path_tokens = _zero_tokens()
+        unit, gate_results = await self._write_verify_loop(
+            request=request,
+            evidence=evidence,
+            path=path,
+            gate=gate,
+            lineage=lineage,
+            job=job,
+            job_logger=path_logger,
+            token_usage=path_tokens,
+        )
+        return unit, gate_results, path_tokens
+
+    async def _run_all_paths(
+        self,
+        *,
+        request: CurationRequest,
+        evidence: list[Evidence],
+        gate: QualityGate,
+        lineage: ContentLineage,
+        job: Job,
+        job_logger: logging.Logger | logging.LoggerAdapter,
+        token_usage: dict[str, int],
+    ) -> tuple[list[ContentUnit], list[GateResult]]:
+        """Fan per-path write-verify loops out concurrently (audit P1).
+
+        Per-task token dicts are merged back into `token_usage` after gather.
+        A lock-protected completion counter drives in-progress job updates so
+        callers watching `job.progress` still see monotonically increasing
+        completion numbers even though paths finish out of submission order.
+        """
+        total = len(request.paths)
+        completed = 0
+        counter_lock = asyncio.Lock()
+
+        async def _wrapped(
+            path: str,
+        ) -> tuple[ContentUnit | None, list[GateResult], dict[str, int], str]:
+            nonlocal completed
+            unit, gate_results, path_tokens = await self._run_one_path(
+                request=request,
+                evidence=evidence,
+                path=path,
+                gate=gate,
+                lineage=lineage,
+                job=job,
+                parent_logger=job_logger,
+            )
+            async with counter_lock:
+                completed += 1
+                job_logger.info(
+                    "Progress: %d/%d paths complete (finished '%s')",
+                    completed,
+                    total,
+                    path,
+                )
+                self._update_job(
+                    job,
+                    JobStatus.RUNNING,
+                    JobStage.WRITE,
+                    progress=JobProgress(completed=completed, total=total),
+                )
+            return unit, gate_results, path_tokens, path
+
+        # Preserve submission order in the output so downstream ordering
+        # (e.g. _terminal_decisions) remains stable across runs.
+        results = await asyncio.gather(
+            *[_wrapped(p) for p in request.paths],
+            return_exceptions=False,
+        )
+
+        all_units: list[ContentUnit] = []
+        all_gate_results: list[GateResult] = []
+        for unit, gate_results, path_tokens, _path in results:
+            all_gate_results.extend(gate_results)
+            if unit is not None:
+                all_units.append(unit)
+            _merge_tokens(token_usage, path_tokens)
+
+        return all_units, all_gate_results
+
     async def _write_verify_loop(
         self,
         request: CurationRequest,
@@ -342,7 +455,7 @@ class Pipeline:
         gate: QualityGate,
         lineage: ContentLineage,
         job: Job | None = None,
-        job_logger: logging.LoggerAdapter | None = None,
+        job_logger: logging.Logger | logging.LoggerAdapter | None = None,
         token_usage: dict | None = None,
     ) -> tuple[ContentUnit | None, list[GateResult]]:
         """Run the writer-verifier loop for a single output path."""
@@ -398,6 +511,7 @@ class Pipeline:
                         started_at=write_start,
                         completed_at=datetime.now(UTC),
                         metrics={
+                            "path": path,
                             "iterations": iteration,
                             "tokens_input": write_tokens.get("input_tokens", 0),
                             "tokens_output": write_tokens.get("output_tokens", 0),
@@ -432,6 +546,7 @@ class Pipeline:
                         started_at=verify_start,
                         completed_at=datetime.now(UTC),
                         metrics={
+                            "path": path,
                             "total_claims": report.total_claims,
                             "supported": report.supported,
                             "pass_rate": report.pass_rate,

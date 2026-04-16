@@ -83,6 +83,7 @@ class TagMetrics(TypedDict):
 
 
 class WriteMetrics(TypedDict):
+    path: str
     iterations: int
     tokens_input: int
     tokens_output: int
@@ -91,6 +92,7 @@ class WriteMetrics(TypedDict):
 
 
 class VerifyMetrics(TypedDict):
+    path: str
     total_claims: int
     supported: int
     pass_rate: float
