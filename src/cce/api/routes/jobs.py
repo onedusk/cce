@@ -16,9 +16,8 @@ import uuid
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
-from fastapi.security import HTTPAuthorizationCredentials
 
-from cce.api.auth import security as _security
+from cce.api.auth import auth_dependency
 from cce.api.middleware import get_request_id
 from cce.api.schemas import (
     APIEnvelope,
@@ -37,18 +36,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/curate/jobs", tags=["jobs"])
 
-# ---------------------------------------------------------------------------
-# Auth dependency — bridges import-time gap (closure lives on app.state)
-# ---------------------------------------------------------------------------
-
-
-async def _auth_dependency(
-    request: Request,
-    credentials: HTTPAuthorizationCredentials | None = Depends(_security),  # noqa: B008
-) -> str | None:
-    """Delegates to the app's configured auth dependency."""
-    return await request.app.state.auth_dependency(credentials=credentials)
-
 
 # ---------------------------------------------------------------------------
 # Endpoints
@@ -59,7 +46,7 @@ async def _auth_dependency(
 async def create_job(
     body: JobCreateRequest,
     request: Request,
-    _auth: str | None = Depends(_auth_dependency),
+    _auth: str | None = Depends(auth_dependency),
 ) -> JSONResponse:
     """Submit a curation request. Returns 202 with job ID."""
     state = request.app.state
@@ -185,7 +172,7 @@ async def list_jobs(
 async def delete_job(
     job_id: str,
     request: Request,
-    _auth: str | None = Depends(_auth_dependency),
+    _auth: str | None = Depends(auth_dependency),
 ) -> JSONResponse:
     """Cancel and delete a job."""
     state = request.app.state
@@ -221,7 +208,7 @@ async def delete_job(
 async def retry_job(
     job_id: str,
     request: Request,
-    _auth: str | None = Depends(_auth_dependency),
+    _auth: str | None = Depends(auth_dependency),
 ) -> JSONResponse:
     """Re-run a completed or failed job."""
     state = request.app.state

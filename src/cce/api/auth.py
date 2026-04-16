@@ -12,12 +12,25 @@ from collections.abc import Callable, Coroutine
 from typing import Any
 
 import nacl.utils
-from fastapi import HTTPException
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from cce.jobs.store import JobStore
 
 security = HTTPBearer(auto_error=False)
+
+
+async def auth_dependency(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),  # noqa: B008
+) -> str | None:
+    """Shared FastAPI auth dependency for every protected route.
+
+    Delegates to the app's configured check (wired into `app.state` at
+    startup by `make_auth_dependency`). Import this from any route module
+    that wants auth enforcement — do not re-implement per-router.
+    """
+    return await request.app.state.auth_dependency(credentials=credentials)
 
 
 def generate_api_key() -> str:
