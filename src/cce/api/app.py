@@ -16,9 +16,10 @@ from cce.api.auth import make_auth_dependency
 from cce.api.middleware import (
     RequestIdMiddleware,
     RequestLoggingMiddleware,
+    get_request_id,
     install_request_id_log_factory,
 )
-from cce.api.schemas import envelope
+from cce.api.schemas import error_envelope
 from cce.config.loader import load_config
 from cce.config.types import EngineConfig
 from cce.evidence.sqlite import SQLiteEvidenceStore
@@ -189,7 +190,11 @@ def create_app(
         logger.exception("Unhandled error: %s", exc)
         return JSONResponse(
             status_code=500,
-            content=envelope(error="Internal server error").model_dump(),
+            content=error_envelope(
+                code="internal_error",
+                message="Internal server error",
+                request_id=get_request_id(),
+            ).model_dump(),
         )
 
     # Route registration

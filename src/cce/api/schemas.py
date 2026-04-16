@@ -21,22 +21,43 @@ T = TypeVar("T")
 # ---------------------------------------------------------------------------
 
 
+class ErrorBody(BaseModel):
+    """Structured error payload for APIEnvelope.error (audit U1).
+
+    Fields:
+      - ``code``: short machine-readable identifier clients can switch on
+        (e.g. ``"not_found"``, ``"internal_error"``).
+      - ``message``: optional human-readable detail.
+      - ``request_id``: correlation ID set by RequestIdMiddleware; absent
+        on synthetic envelopes constructed outside a request.
+    """
+
+    code: str
+    message: str | None = None
+    request_id: str | None = None
+
+
 class APIEnvelope(BaseModel, Generic[T]):
     """Standard response wrapper.
 
     Generic over T so that ``APIEnvelope[JobResponse]`` produces a typed
     ``data`` field in the OpenAPI schema.
+
+    Note: the ``error`` field's shape changed from ``str`` to ``ErrorBody``
+    in the audit-2026-04-14 remediation. Callers migrating from the old
+    string form: read ``response.error.message`` instead of
+    ``response.error``. Clients can also switch on ``response.error.code``.
     """
 
     data: T | None = None
-    error: str | None = None
+    error: ErrorBody | None = None
     meta: dict[str, Any] = Field(default_factory=dict)
 
 
 def envelope(
     data: Any = None,
     *,
-    error: str | None = None,
+    error: ErrorBody | None = None,
     **meta: Any,
 ) -> APIEnvelope:
     """Build an APIEnvelope with an auto-generated timestamp."""
@@ -45,6 +66,25 @@ def envelope(
     }
     meta_dict.update(meta)
     return APIEnvelope(data=data, error=error, meta=meta_dict)
+
+
+def error_envelope(
+    code: str,
+    *,
+    message: str | None = None,
+    request_id: str | None = None,
+    **meta: Any,
+) -> APIEnvelope:
+    """Build an APIEnvelope wrapping a structured ErrorBody.
+
+    Preferred over ``envelope(error=ErrorBody(...))`` for all error paths —
+    it's shorter and makes the code value a required, named argument so
+    call sites have to choose one deliberately.
+    """
+    return envelope(
+        error=ErrorBody(code=code, message=message, request_id=request_id),
+        **meta,
+    )
 
 
 # ---------------------------------------------------------------------------

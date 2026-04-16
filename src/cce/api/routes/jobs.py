@@ -19,12 +19,14 @@ from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials
 
 from cce.api.auth import security as _security
+from cce.api.middleware import get_request_id
 from cce.api.schemas import (
     APIEnvelope,
     JobCreateRequest,
     JobListResponse,
     JobResponse,
     envelope,
+    error_envelope,
     job_to_response,
 )
 from cce.engine import run_pipeline_task
@@ -67,9 +69,11 @@ async def create_job(
     if policy is None:
         return JSONResponse(
             status_code=404,
-            content=envelope(error=f"Policy not found: {body.policy_id}").model_dump(
-                mode="json"
-            ),
+            content=error_envelope(
+                code="policy_not_found",
+                message=f"Policy not found: {body.policy_id}",
+                request_id=get_request_id(),
+            ).model_dump(mode="json"),
         )
 
     # Convert to CurationRequest
@@ -123,7 +127,11 @@ async def get_job(job_id: str, request: Request) -> JSONResponse:
     if job is None:
         return JSONResponse(
             status_code=404,
-            content=envelope(error=f"Job not found: {job_id}").model_dump(mode="json"),
+            content=error_envelope(
+                code="job_not_found",
+                message=f"Job not found: {job_id}",
+                request_id=get_request_id(),
+            ).model_dump(mode="json"),
         )
     return JSONResponse(
         content=envelope(data=job_to_response(job)).model_dump(mode="json")
@@ -149,9 +157,11 @@ async def list_jobs(
         except ValueError:
             return JSONResponse(
                 status_code=400,
-                content=envelope(error=f"Invalid status: {status}").model_dump(
-                    mode="json"
-                ),
+                content=error_envelope(
+                    code="invalid_status",
+                    message=f"Invalid status: {status}",
+                    request_id=get_request_id(),
+                ).model_dump(mode="json"),
             )
 
     jobs = await store.list_jobs(
@@ -193,7 +203,11 @@ async def delete_job(
     if not deleted:
         return JSONResponse(
             status_code=404,
-            content=envelope(error=f"Job not found: {job_id}").model_dump(mode="json"),
+            content=error_envelope(
+                code="job_not_found",
+                message=f"Job not found: {job_id}",
+                request_id=get_request_id(),
+            ).model_dump(mode="json"),
         )
 
     return JSONResponse(
@@ -216,15 +230,21 @@ async def retry_job(
     if job is None:
         return JSONResponse(
             status_code=404,
-            content=envelope(error=f"Job not found: {job_id}").model_dump(mode="json"),
+            content=error_envelope(
+                code="job_not_found",
+                message=f"Job not found: {job_id}",
+                request_id=get_request_id(),
+            ).model_dump(mode="json"),
         )
 
     if job.status in (JobStatus.QUEUED, JobStatus.RUNNING):
         return JSONResponse(
             status_code=409,
-            content=envelope(error="Job is already queued or running").model_dump(
-                mode="json"
-            ),
+            content=error_envelope(
+                code="already_running",
+                message="Job is already queued or running",
+                request_id=get_request_id(),
+            ).model_dump(mode="json"),
         )
 
     # Reset job state
@@ -239,8 +259,10 @@ async def retry_job(
     if policy is None:
         return JSONResponse(
             status_code=404,
-            content=envelope(
-                error=f"Policy not found: {job.request.policy_id}"
+            content=error_envelope(
+                code="policy_not_found",
+                message=f"Policy not found: {job.request.policy_id}",
+                request_id=get_request_id(),
             ).model_dump(mode="json"),
         )
 
@@ -270,8 +292,10 @@ async def get_package(job_id: str, request: Request) -> JSONResponse:
     if package is None:
         return JSONResponse(
             status_code=404,
-            content=envelope(error=f"Package not found for job: {job_id}").model_dump(
-                mode="json"
-            ),
+            content=error_envelope(
+                code="package_not_found",
+                message=f"Package not found for job: {job_id}",
+                request_id=get_request_id(),
+            ).model_dump(mode="json"),
         )
     return JSONResponse(content=envelope(data=package).model_dump(mode="json"))

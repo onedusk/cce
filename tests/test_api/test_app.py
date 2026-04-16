@@ -55,8 +55,12 @@ def test_envelope_has_timestamp():
 
 
 def test_envelope_with_error():
-    env = envelope(error="Something failed")
-    assert env.error == "Something failed"
+    from cce.api.schemas import error_envelope
+
+    env = error_envelope(code="something_failed", message="Something failed")
+    assert env.error is not None
+    assert env.error.code == "something_failed"
+    assert env.error.message == "Something failed"
     assert env.data is None
 
 

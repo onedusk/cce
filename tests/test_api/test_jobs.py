@@ -40,7 +40,9 @@ async def test_create_job_invalid_policy_returns_404(client: httpx.AsyncClient):
         },
     )
     assert resp.status_code == 404
-    assert "not found" in resp.json()["error"].lower()
+    err = resp.json()["error"]
+    assert err["code"] == "policy_not_found"
+    assert "not found" in err["message"].lower()
 
 
 async def test_get_job_after_create(client: httpx.AsyncClient, app):

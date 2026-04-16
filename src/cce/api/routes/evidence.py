@@ -9,7 +9,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
-from cce.api.schemas import APIEnvelope, envelope
+from cce.api.middleware import get_request_id
+from cce.api.schemas import APIEnvelope, envelope, error_envelope
 
 router = APIRouter(prefix="/v1/curate/evidence", tags=["evidence"])
 
@@ -21,9 +22,11 @@ async def get_evidence(evidence_id: str, request: Request) -> JSONResponse:
     if evidence is None:
         return JSONResponse(
             status_code=404,
-            content=envelope(error=f"Evidence not found: {evidence_id}").model_dump(
-                mode="json"
-            ),
+            content=error_envelope(
+                code="evidence_not_found",
+                message=f"Evidence not found: {evidence_id}",
+                request_id=get_request_id(),
+            ).model_dump(mode="json"),
         )
     return JSONResponse(content=envelope(data=evidence).model_dump(mode="json"))
 
