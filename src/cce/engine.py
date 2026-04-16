@@ -5,6 +5,12 @@ Two modes:
 - CurationEngine.remote(base_url, api_key) — HTTP client to the REST API
 
 Both return a JobHandle with the same interface.
+
+Mode dispatch lives in ``curate()`` as a single ``if self._mode == "embedded"``
+branch. If a third mode is ever proposed, see ADR-005 in
+``docs/decompose/audit-2026-04-14/stage-1-design-pack.md`` before splitting
+``CurationEngine`` into subclasses — the current two-mode dispatch was kept
+deliberately flat until a concrete third-mode requirement motivates the refactor.
 """
 
 from __future__ import annotations
@@ -194,7 +200,14 @@ class JobHandle:
 
 
 class CurationEngine:
-    """Application facade for the curation pipeline."""
+    """Application facade for the curation pipeline.
+
+    Two construction modes, selected by classmethod:
+    ``embedded()`` builds and owns an in-process ``Pipeline`` (used by the
+    CLI and runner scripts), and ``remote(base_url, api_key)`` becomes a
+    thin HTTP client against a running CCE API server. Both modes expose
+    the same ``curate() -> JobHandle`` interface; consumers don't branch.
+    """
 
     def __init__(self) -> None:
         self._mode: str = "uninitialized"
@@ -262,6 +275,7 @@ class CurationEngine:
 
     async def curate(self, request: CurationRequest) -> JobHandle:
         """Submit a curation request and return a job handle."""
+        # Mode dispatch — see module docstring + ADR-005 for rationale.
         if self._mode == "embedded":
             return await self._curate_embedded(request)
         return await self._curate_remote(request)
