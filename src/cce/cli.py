@@ -23,6 +23,19 @@ api_app.add_typer(key_app)
 app.add_typer(emit_app, name="emit-mdx")
 
 
+@app.callback()
+def _main_callback() -> None:
+    """CCE CLI — runs once before every subcommand.
+
+    Installs the request-id LogRecordFactory and, when
+    ``CCE_LOG_FORMAT=json`` is set, swaps the root handler's formatter to
+    JsonFormatter. Idempotent (audit D2).
+    """
+    from cce.logging_config import configure_logging
+
+    configure_logging()
+
+
 @api_app.command("start")
 def start_server(
     host: str = typer.Option("0.0.0.0", help="Bind address"),

@@ -17,7 +17,6 @@ from cce.api.middleware import (
     RequestIdMiddleware,
     RequestLoggingMiddleware,
     get_request_id,
-    install_request_id_log_factory,
 )
 from cce.api.schemas import error_envelope
 from cce.config.loader import load_config
@@ -181,8 +180,11 @@ def create_app(
     # contextvar is set before RequestLoggingMiddleware logs the first line.
     app.add_middleware(RequestIdMiddleware)
 
-    # Ensure every log record (from any logger) carries `request_id`.
-    install_request_id_log_factory()
+    # Ensure every log record (from any logger) carries `request_id` and
+    # apply the JSON formatter if CCE_LOG_FORMAT=json is set. Idempotent.
+    from cce.logging_config import configure_logging
+
+    configure_logging()
 
     # Global exception handler
     @app.exception_handler(Exception)
