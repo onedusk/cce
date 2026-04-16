@@ -11,6 +11,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+from functools import lru_cache
 from pathlib import Path
 
 import yaml
@@ -25,8 +26,14 @@ from cce.policy.types import (
 logger = logging.getLogger(__name__)
 
 
+@lru_cache(maxsize=32)
 def load_policy(path: str | Path) -> SourcePolicy:
-    """Load a single SourcePolicy from a YAML file."""
+    """Load a single SourcePolicy from a YAML file.
+
+    Cached per-path (audit P6) so repeated loads inside one process parse
+    the YAML once. Tests mutating on-disk state between calls should
+    ``load_policy.cache_clear()``.
+    """
     path = Path(path)
     with open(path) as f:
         data = yaml.safe_load(f)

@@ -7,6 +7,7 @@ Follows the same pattern as policy/loader.py.
 from __future__ import annotations
 
 import logging
+from functools import lru_cache
 from pathlib import Path
 
 import yaml
@@ -17,6 +18,7 @@ from cce.models.taxonomy import Dimension, TaxonomyConfig
 logger = logging.getLogger(__name__)
 
 
+@lru_cache(maxsize=32)
 def load_taxonomy(path: str | Path) -> TaxonomyConfig | None:
     """Load a single TaxonomyConfig from a YAML file.
 
@@ -24,6 +26,9 @@ def load_taxonomy(path: str | Path) -> TaxonomyConfig | None:
     warning, and returns None so callers can gracefully run without a
     taxonomy rather than bricking on a typo. Strict validation errors
     surfaced by Pydantic also degrade to None — same reasoning.
+
+    Cached per-path (audit P6); tests that mutate on-disk state between
+    calls should ``load_taxonomy.cache_clear()``.
     """
     path = Path(path)
     try:
@@ -38,6 +43,7 @@ def load_taxonomy(path: str | Path) -> TaxonomyConfig | None:
         return None
 
 
+@lru_cache(maxsize=32)
 def load_path_configs(path: str | Path) -> dict[str, PathConfig]:
     """Load path configs from a YAML file.
 
@@ -46,6 +52,9 @@ def load_path_configs(path: str | Path) -> dict[str, PathConfig]:
     ADR-006: returns an empty dict on any parse/structure/validation
     failure and logs a warning, so the pipeline runs without path configs
     rather than failing.
+
+    Cached per-path (audit P6); tests that mutate on-disk state between
+    calls should ``load_path_configs.cache_clear()``.
     """
     path = Path(path)
     try:

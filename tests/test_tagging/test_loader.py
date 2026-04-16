@@ -149,6 +149,34 @@ class TestLoaderDegradation:
             "Unexpected YAML structure" in r.getMessage() for r in caplog.records
         )
 
+    def test_cache_reuses_parsed_result(self, tmp_path):
+        """Second call returns the same object by identity — proof of cache hit."""
+        load_taxonomy.cache_clear()
+        data = {
+            "id": "cached-tax",
+            "name": "Cached",
+            "dimensions": [{"id": "d1", "name": "D1", "values": ["a"]}],
+        }
+        path = _write_yaml(tmp_path, "cached.yaml", data)
+        first = load_taxonomy(path)
+        second = load_taxonomy(path)
+        assert first is second  # identity — same cached object
+
+    def test_cache_clear_forces_reparse(self, tmp_path):
+        """After cache_clear(), the next call returns a freshly-parsed object."""
+        load_taxonomy.cache_clear()
+        data = {
+            "id": "tax",
+            "name": "Tax",
+            "dimensions": [{"id": "d1", "name": "D1", "values": ["a"]}],
+        }
+        path = _write_yaml(tmp_path, "tax.yaml", data)
+        first = load_taxonomy(path)
+        load_taxonomy.cache_clear()
+        second = load_taxonomy(path)
+        assert first is not second  # cache miss -> fresh instance
+        assert first.id == second.id  # but equivalent content
+
     def test_path_configs_malformed_item_keeps_valid_predecessors(self, tmp_path, caplog):
         """If item 2 is malformed, items before it stay in the result."""
         import logging
