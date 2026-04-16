@@ -275,7 +275,10 @@ class CurationEngine:
 
     async def curate(self, request: CurationRequest) -> JobHandle:
         """Submit a curation request and return a job handle."""
-        # Mode dispatch — see module docstring + ADR-005 for rationale.
+        # DEFERRED (audit A2 / ADR-005): split CurationEngine into embedded/
+        # remote subclasses when a third mode is proposed. Current two-mode
+        # dispatch is deliberately flat.
+        # See docs/decompose/audit-2026-04-14/stage-1-design-pack.md.
         if self._mode == "embedded":
             return await self._curate_embedded(request)
         return await self._curate_remote(request)

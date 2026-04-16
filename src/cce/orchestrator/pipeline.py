@@ -178,6 +178,11 @@ class Pipeline:
         self._writer = Writer(llm=llm)
         self._verifier = Verifier(llm=llm)
 
+    # DEFERRED (audit M1): extract _run_discovery / _run_tag /
+    # _run_write_verify_paths / _build_package helpers when a non-cosmetic
+    # change requires re-reading run(). Current structure is linear and
+    # readable; no refactor pays for itself today.
+    # See docs/decompose/audit-2026-04-14/audit-2026-04-14.md §M1.
     async def run(
         self,
         request: CurationRequest,
