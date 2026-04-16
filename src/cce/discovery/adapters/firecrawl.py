@@ -28,19 +28,43 @@ logger = logging.getLogger(__name__)
 
 _FIRECRAWL_DEFAULT_BASE_URL = "https://api.firecrawl.dev"
 _SEMAPHORES: dict[tuple[str, str], asyncio.Semaphore] = {}
+# Parallel dict of the first-registered `max_rps` per key. Used only to detect
+# and warn about mismatched capacities on subsequent calls (review F-4);
+# asyncio.Semaphore's `_value` / `_initial_value` are private and unsafe to
+# read from application code.
+_SEMAPHORE_CAPACITIES: dict[tuple[str, str], int] = {}
 _REGISTRY_LOCK = Lock()  # guards first-time insert; the semaphore itself is async.
 
 
 def _get_shared_semaphore(
     *, api_key: str, base_url: str, max_rps: int
 ) -> asyncio.Semaphore:
-    """Return the shared asyncio.Semaphore for (api_key, base_url), creating it once."""
+    """Return the shared asyncio.Semaphore for (api_key, base_url), creating it once.
+
+    If a subsequent call supplies a different `max_rps` for the same key, the
+    first-registered capacity wins (there is no way to safely resize an
+    already-awaited semaphore) and a warning is logged so the caller knows
+    their requested cap was ignored.
+    """
     key = (api_key, base_url)
+    cap = max(1, max_rps)
     with _REGISTRY_LOCK:
         sem = _SEMAPHORES.get(key)
         if sem is None:
-            sem = asyncio.Semaphore(max(1, max_rps))
+            sem = asyncio.Semaphore(cap)
             _SEMAPHORES[key] = sem
+            _SEMAPHORE_CAPACITIES[key] = cap
+        else:
+            registered = _SEMAPHORE_CAPACITIES.get(key, cap)
+            if registered != cap:
+                logger.warning(
+                    "Firecrawl semaphore for %s already registered with "
+                    "rate_limit_rps=%d; ignoring subsequent request for "
+                    "rate_limit_rps=%d.",
+                    base_url,
+                    registered,
+                    cap,
+                )
     return sem
 
 
@@ -48,6 +72,7 @@ def _reset_firecrawl_semaphores_for_tests() -> None:
     """Clear the module-global semaphore registry. Tests only — never call in prod."""
     with _REGISTRY_LOCK:
         _SEMAPHORES.clear()
+        _SEMAPHORE_CAPACITIES.clear()
 
 
 class FirecrawlAdapter:

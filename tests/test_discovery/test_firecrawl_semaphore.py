@@ -124,6 +124,36 @@ async def test_combined_rps_respects_shared_cap():
     )
 
 
+def test_differing_max_rps_for_same_key_logs_warning(caplog):
+    """Second adapter with a different rate_limit_rps gets a warning, not a silent merge (F-4)."""
+    import logging
+
+    first = FirecrawlAdapter(CrawlConfig(api_key="shared-key", rate_limit_rps=2.0))
+    with caplog.at_level(logging.WARNING, logger="cce.discovery.adapters.firecrawl"):
+        second = FirecrawlAdapter(CrawlConfig(api_key="shared-key", rate_limit_rps=5.0))
+
+    # Both adapters still share the first-registered semaphore.
+    assert first._semaphore is second._semaphore
+
+    warnings = [r for r in caplog.records if "rate_limit_rps" in r.getMessage()]
+    assert len(warnings) == 1
+    msg = warnings[0].getMessage()
+    assert "2" in msg
+    assert "5" in msg
+
+
+def test_matching_max_rps_no_warning(caplog):
+    """Same rate_limit_rps on second registration -> no warning."""
+    import logging
+
+    FirecrawlAdapter(CrawlConfig(api_key="k", rate_limit_rps=3.0))
+    with caplog.at_level(logging.WARNING, logger="cce.discovery.adapters.firecrawl"):
+        FirecrawlAdapter(CrawlConfig(api_key="k", rate_limit_rps=3.0))
+
+    warnings = [r for r in caplog.records if "rate_limit_rps" in r.getMessage()]
+    assert warnings == []
+
+
 async def test_single_adapter_respects_own_cap():
     """Sanity: a single adapter with rate_limit_rps=2 still enforces its cap.
 
