@@ -6,7 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Content Curation Engine (CCE) — an evidence-first content pipeline that discovers sources, extracts verbatim evidence with provenance, synthesizes citation-backed drafts, and verifies every claim before publishing. Core invariant: no citation, no ship.
 
-Phase 1 (core loop) is implemented. Phases 2–4 (tagging plugins, REST API, platform integration) are not started.
+**Phase status:**
+
+| Phase | Status | Reference |
+|-------|--------|-----------|
+| Phase 1 — core loop | Shipped | `orchestrator/pipeline.py` |
+| Phase 2 — taxonomy tagging + embedding ranking | Shipped | `tagging/`, `discovery/discoverer.py` (embedding path) |
+| Phase 3 — REST API + CLI | Shipped | `api/`, `cli.py`, `engine.py` |
+| Phase 4 — platform integration | Not started | — |
 
 ## Commands
 
@@ -58,10 +65,15 @@ The pipeline flows: `CurationRequest → SourcePolicy → Discoverer → Evidenc
 - `policy/` ← models
 - `discovery/` ← models, policy, config, adapters
 - `evidence/` ← models, config
-- `synthesis/` ← models, evidence, llm, config
+- `tagging/` ← models, config (taxonomy-driven tagger consumed by discoverer + writer)
+- `synthesis/` ← models, evidence, llm, config, tagging
 - `verification/` ← models, evidence, policy, llm, config
 - `orchestrator/` ← all pipeline modules
-- `api/` ← orchestrator, models, config (Phase 3, not yet built)
+- `output/` ← models, orchestrator (consumed by CLI `emit-mdx` and runner scripts)
+- `api/` ← orchestrator, models, config
+- `engine.py` ← api, orchestrator, config (job lifecycle + mode dispatch; see the `CurationEngine` docstring)
+
+**`engine.py` vs `orchestrator/pipeline.py`:** `engine.py` owns the job lifecycle — dispatching between embedded (in-process `Pipeline`) and remote (HTTP client) modes — while `orchestrator/pipeline.py` is pure stage orchestration consumed by the embedded mode. Treat them as separate roles; do not mix concerns.
 
 ## Conventions
 
@@ -75,3 +87,20 @@ The pipeline flows: `CurationRequest → SourcePolicy → Discoverer → Evidenc
 ## Environment
 
 Requires `ANTHROPIC_API_KEY` and `FIRECRAWL_API_KEY` in `.env` (gitignored).
+
+<!-- decompose:start -->
+## Decompose Code Intelligence
+
+This project has a decompose MCP server with code intelligence tools powered by tree-sitter and a graph database. For code understanding tasks, these tools provide richer context than manual file operations:
+
+- `mcp__decompose__build_graph` — index the codebase (run once per session, persists to .decompose/graph/)
+- `mcp__decompose__query_symbols` — find functions, types, interfaces by name
+- `mcp__decompose__get_dependencies` — trace upstream/downstream dependencies
+- `mcp__decompose__assess_impact` — compute blast radius of file changes
+- `mcp__decompose__get_clusters` — discover tightly-coupled file groups
+
+For the /decompose skill specifically:
+- `mcp__decompose__get_stage_context` — load templates and prerequisite content
+- `mcp__decompose__write_stage` — write stage files with validation and coherence checking
+- `mcp__decompose__get_status` — check decomposition progress
+<!-- decompose:end -->
