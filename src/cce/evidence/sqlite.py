@@ -21,6 +21,11 @@ logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 3
 
+# Chunk size for WHERE url IN (...) lookups. Kept well below SQLite's default
+# SQLITE_MAX_VARIABLE_NUMBER (999 on most builds) so callers can pass a large
+# candidate list without hitting the parameter cap.
+_URL_LOOKUP_CHUNK = 500
+
 CREATE_EVIDENCE_TABLE = """
 CREATE TABLE IF NOT EXISTS evidence (
     id              TEXT PRIMARY KEY,
@@ -188,6 +193,24 @@ class SQLiteEvidenceStore:
             "SELECT 1 FROM evidence WHERE excerpt_hash = ?", (excerpt_hash,)
         ) as cursor:
             return await cursor.fetchone() is not None
+
+    async def get_existing_urls(self, candidates: list[str]) -> set[str]:
+        """Return the subset of `candidates` already present in the evidence store.
+
+        Chunked so a large candidate list stays under SQLite's parameter cap.
+        """
+        if not candidates:
+            return set()
+        assert self._db is not None
+        found: set[str] = set()
+        for start in range(0, len(candidates), _URL_LOOKUP_CHUNK):
+            chunk = candidates[start : start + _URL_LOOKUP_CHUNK]
+            placeholders = ",".join("?" * len(chunk))
+            query = f"SELECT DISTINCT url FROM evidence WHERE url IN ({placeholders})"
+            async with self._db.execute(query, chunk) as cursor:
+                rows = await cursor.fetchall()
+            found.update(row[0] for row in rows)
+        return found
 
     async def count(self) -> int:
         assert self._db is not None

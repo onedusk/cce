@@ -41,6 +41,16 @@ class EvidenceStore(Protocol):
         """Search evidence by URL prefix or topic keyword. Used for dedup checks."""
         ...
 
+    async def get_existing_urls(self, candidates: list[str]) -> set[str]:
+        """Return the subset of `candidates` that already exist in the store.
+
+        Used by the discoverer to skip re-crawling URLs whose evidence is
+        already indexed. Implementations should be a single round trip per
+        reasonable batch size (chunked internally if `candidates` exceeds the
+        backend's parameter limit).
+        """
+        ...
+
     async def exists_by_hash(self, excerpt_hash: str) -> bool:
         """Check if evidence with this excerpt hash already exists."""
         ...
