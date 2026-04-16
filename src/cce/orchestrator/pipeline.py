@@ -380,10 +380,15 @@ class Pipeline:
             )
 
         except Exception as e:
-            job_logger.exception("Pipeline run %s failed: %s", run_id, e)
+            # TaskGroup wraps failures in ExceptionGroup; unwrap to the first
+            # underlying exception so job.error.message stays readable.
+            inner = e
+            if isinstance(e, BaseExceptionGroup) and e.exceptions:
+                inner = e.exceptions[0]
+            job_logger.exception("Pipeline run %s failed: %s", run_id, inner)
             return PipelineResult(
                 package=None,
-                job=self._update_job(job, JobStatus.FAILED, error_msg=str(e)),
+                job=self._update_job(job, JobStatus.FAILED, error_msg=str(inner)),
                 gate_results=[],
             )
 
@@ -475,10 +480,12 @@ class Pipeline:
 
         # Preserve submission order in the output so downstream ordering
         # (e.g. _terminal_decisions) remains stable across runs.
-        results = await asyncio.gather(
-            *[_wrapped(p) for p in request.paths],
-            return_exceptions=False,
-        )
+        # TaskGroup cancels all sibling tasks atomically on the first exception,
+        # so no abandoned path task can mutate `job` after the outer try/except
+        # has marked it FAILED (review finding C1 from M01-M05 review).
+        async with asyncio.TaskGroup() as tg:
+            path_tasks = [tg.create_task(_wrapped(p)) for p in request.paths]
+        results = [t.result() for t in path_tasks]
 
         all_units: list[ContentUnit] = []
         all_gate_results: list[GateResult] = []

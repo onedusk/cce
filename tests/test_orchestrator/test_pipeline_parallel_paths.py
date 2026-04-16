@@ -167,6 +167,88 @@ async def test_progress_counter_increments_to_N(sqlite_store, caplog):
     assert sorted(observed) == [1, 2, 3]
 
 
+class _RaisingLLM:
+    """Stub that raises on the Nth `complete` call; other calls sleep + succeed.
+
+    Used to pin TaskGroup cancellation semantics (review finding C1): when one
+    path's writer raises, sibling paths MUST be cancelled before they reach
+    their verifier call.
+    """
+
+    def __init__(self, *, raise_on_call: int = 1) -> None:
+        self._raise_on_call = raise_on_call
+        self.calls: list[str] = []
+        self._lock = asyncio.Lock()
+
+    async def complete(
+        self,
+        messages: list[LLMMessage],
+        *,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        system: str | None = None,
+    ) -> LLMResponse:
+        kind = "verifier" if system and "fact-checking" in system else "writer"
+        async with self._lock:
+            self.calls.append(kind)
+            call_index = len(self.calls)
+            should_raise = call_index == self._raise_on_call
+        if should_raise:
+            raise RuntimeError(f"stub raised on call {call_index} ({kind})")
+        await asyncio.sleep(0.05)
+        if kind == "writer":
+            return LLMResponse(
+                content=writer_json(),
+                model="mock",
+                stop_reason="end_turn",
+                usage={"input_tokens": 1, "output_tokens": 1},
+            )
+        return LLMResponse(
+            content=verifier_json(supported=10, total=10, gaps=0),
+            model="mock",
+            stop_reason="end_turn",
+            usage={"input_tokens": 1, "output_tokens": 1},
+        )
+
+
+async def test_exception_in_one_path_cancels_siblings(sqlite_store):
+    """TaskGroup must cancel sibling path tasks when one raises (review finding C1).
+
+    Without cancellation, abandoned tasks continue running — they finish their
+    writer+verifier calls and mutate `job.stages` / `job.status` AFTER the
+    outer handler has marked the job FAILED. The signal that cancellation
+    worked: the verifier is NEVER called. If it were, siblings would have
+    completed their full iteration past the raising task.
+    """
+    config = make_engine_config()
+    llm = _RaisingLLM(raise_on_call=1)  # first writer call raises
+    pipeline = Pipeline(
+        config=config,
+        crawl_adapter=make_adapter(),
+        evidence_store=sqlite_store,
+        llm=llm,
+    )
+
+    result = await pipeline.run(
+        _request_with_paths("blog", "summary", "faq"), make_source_policy()
+    )
+
+    # Job was marked FAILED, siblings were cancelled.
+    assert result.succeeded is False
+    assert result.job.status.value == "failed"
+    # The raised exception's message must survive ExceptionGroup unwrapping.
+    assert result.job.error is not None
+    assert "stub raised" in result.job.error.message
+
+    # No verifier ever ran — that's the cancellation tell. With return_exceptions
+    # =False on asyncio.gather (pre-fix), siblings would have continued to
+    # verifier after the writer phase.
+    assert llm.calls.count("verifier") == 0
+    # At most 3 writer calls (all paths enter concurrently before the first
+    # raises and cancellation propagates).
+    assert llm.calls.count("writer") <= 3
+
+
 async def test_stage_records_carry_path(sqlite_store):
     config = make_engine_config()
     pipeline = Pipeline(
