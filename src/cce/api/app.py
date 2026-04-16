@@ -240,26 +240,25 @@ def _build_pipeline(
         except (EmbeddingUnavailableError, Exception) as e:
             logger.warning("Embedding provider unavailable: %s", e)
 
-    # Taxonomy plugin (optional)
+    # Taxonomy plugin (optional). load_taxonomy catches parse errors and
+    # returns None (audit A4 / ADR-006), so no outer try/except here.
     taxonomy_plugin = None
     taxonomy_path = Path("taxonomies/wellbeing-8d.yaml")
     if taxonomy_path.exists():
-        try:
-            taxonomy_config = load_taxonomy(taxonomy_path)
+        taxonomy_config = load_taxonomy(taxonomy_path)
+        if taxonomy_config is not None:
             taxonomy_plugin = WellBeingTaxonomy(taxonomy_config)
             logger.info("Taxonomy loaded: %s", taxonomy_config.name)
-        except Exception as e:
-            logger.warning("Failed to load taxonomy: %s", e)
 
-    # Path configs (optional)
+    # Path configs (optional). load_path_configs returns an empty dict on
+    # any parse/structure failure (audit A4 / ADR-006).
     path_configs = None
     path_configs_path = Path("path_configs/thnklabs.yaml")
     if path_configs_path.exists():
-        try:
-            path_configs = load_path_configs(path_configs_path)
+        loaded = load_path_configs(path_configs_path)
+        if loaded:
+            path_configs = loaded
             logger.info("Path configs loaded: %s", list(path_configs.keys()))
-        except Exception as e:
-            logger.warning("Failed to load path configs: %s", e)
 
     return Pipeline(
         config=config,

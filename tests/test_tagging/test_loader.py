@@ -78,3 +78,95 @@ class TestLoadPathConfigs:
         configs = load_path_configs(path)
         assert "solo" in configs
         assert configs["solo"].name == "Solo Path"
+
+
+# ---------------------------------------------------------------------------
+# Graceful degradation (audit A4 / ADR-006)
+# ---------------------------------------------------------------------------
+
+
+class TestLoaderDegradation:
+    """User-supplied YAML loaders catch parse errors and return a degraded
+    result (None / empty dict) + warning log, rather than raising."""
+
+    def test_taxonomy_malformed_yaml_returns_none(self, tmp_path, caplog):
+        import logging
+
+        path = tmp_path / "bad.yaml"
+        path.write_text("key: [unclosed list")  # invalid YAML
+
+        with caplog.at_level(logging.WARNING, logger="cce.tagging.loader"):
+            result = load_taxonomy(path)
+
+        assert result is None
+        assert any("Could not load taxonomy" in r.getMessage() for r in caplog.records)
+
+    def test_taxonomy_missing_file_returns_none(self, tmp_path, caplog):
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="cce.tagging.loader"):
+            result = load_taxonomy(tmp_path / "nonexistent.yaml")
+
+        assert result is None
+        assert any("Could not load taxonomy" in r.getMessage() for r in caplog.records)
+
+    def test_taxonomy_missing_required_id_returns_none(self, tmp_path, caplog):
+        import logging
+
+        path = _write_yaml(tmp_path, "bad.yaml", {"name": "No ID"})
+        with caplog.at_level(logging.WARNING, logger="cce.tagging.loader"):
+            result = load_taxonomy(path)
+
+        assert result is None
+        assert any("Malformed taxonomy" in r.getMessage() for r in caplog.records)
+
+    def test_path_configs_malformed_yaml_returns_empty(self, tmp_path, caplog):
+        import logging
+
+        path = tmp_path / "bad.yaml"
+        path.write_text("key: [unclosed list")
+
+        with caplog.at_level(logging.WARNING, logger="cce.tagging.loader"):
+            result = load_path_configs(path)
+
+        assert result == {}
+        assert any(
+            "Could not load path configs" in r.getMessage() for r in caplog.records
+        )
+
+    def test_path_configs_unexpected_structure_returns_empty(self, tmp_path, caplog):
+        import logging
+
+        # Top-level scalar — neither dict nor list.
+        path = tmp_path / "bad.yaml"
+        path.write_text("just-a-string")
+
+        with caplog.at_level(logging.WARNING, logger="cce.tagging.loader"):
+            result = load_path_configs(path)
+
+        assert result == {}
+        assert any(
+            "Unexpected YAML structure" in r.getMessage() for r in caplog.records
+        )
+
+    def test_path_configs_malformed_item_keeps_valid_predecessors(self, tmp_path, caplog):
+        """If item 2 is malformed, items before it stay in the result."""
+        import logging
+
+        data = [
+            {"id": "good", "name": "Good Path"},
+            {"name": "missing id"},  # required field missing
+            {"id": "never-reached", "name": "Never Reached"},
+        ]
+        path = _write_yaml(tmp_path, "paths.yaml", data)
+        with caplog.at_level(logging.WARNING, logger="cce.tagging.loader"):
+            result = load_path_configs(path)
+
+        assert "good" in result
+        # "never-reached" comes AFTER the bad item and will not be processed
+        # because the for-loop raised. This is intentional — we preserve
+        # predecessors but stop on the first bad one.
+        assert "never-reached" not in result
+        assert any(
+            "Malformed path config" in r.getMessage() for r in caplog.records
+        )
