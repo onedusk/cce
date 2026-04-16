@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
 import pytest
 from typer.testing import CliRunner
 
@@ -16,19 +14,62 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture(autouse=True)
 def _use_tmp_db(tmp_path, monkeypatch):
-    """Point the CLI at a temp DB so tests don't collide."""
+    """Point the CLI at a temp DB so tests don't collide.
+
+    Also redirects Path.home() to tmp_path so `api key generate`'s default
+    output path (`~/.cce/api-key`) writes into the test sandbox instead of
+    the real user home directory.
+    """
+    from pathlib import Path as _Path
+
     monkeypatch.setenv("CCE_EVIDENCE_SQLITE_PATH", str(tmp_path / "cli_test.db"))
+    monkeypatch.setattr(_Path, "home", classmethod(lambda cls: tmp_path))
     # Clear any other env vars that might interfere
     for var in ("ANTHROPIC_API_KEY", "FIRECRAWL_API_KEY"):
         monkeypatch.delenv(var, raising=False)
 
 
-def test_generate_key_outputs_key():
+def test_generate_key_writes_file_by_default(tmp_path):
+    """Default `api key generate` writes a 0600-mode file and doesn't print the key (audit U3)."""
+    import os
+    import stat
+
     result = runner.invoke(app, ["api", "key", "generate", "--label", "test"])
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
+    # Key is NOT in stdout under the default.
+    assert "API Key:" not in result.output
+    # Output message points to the file.
+    assert "Wrote API key to" in result.output
+    assert "mode 0600" in result.output
+    # File actually exists and has 0600 permissions.
+    key_path = tmp_path / ".cce" / "api-key"
+    assert key_path.exists()
+    mode = stat.S_IMODE(os.stat(key_path).st_mode)
+    assert mode == 0o600, f"Expected 0o600, got {oct(mode)}"
+    # And contains a non-empty key.
+    assert len(key_path.read_text().strip()) > 0
+
+
+def test_generate_key_print_flag_echoes_to_stdout():
+    """--print opts into legacy stdout behavior."""
+    result = runner.invoke(app, ["api", "key", "generate", "--print", "--label", "t"])
+    assert result.exit_code == 0, result.output
     assert "API Key:" in result.output
     assert "Hash:" in result.output
     assert "Store this key securely" in result.output
+
+
+def test_generate_key_custom_output_path(tmp_path):
+    """--output writes to an explicit path (parent dirs created as needed)."""
+    import os
+    import stat
+
+    target = tmp_path / "deep" / "nested" / "dir" / "key.txt"
+    result = runner.invoke(app, ["api", "key", "generate", "--output", str(target)])
+    assert result.exit_code == 0, result.output
+    assert target.exists()
+    mode = stat.S_IMODE(os.stat(target).st_mode)
+    assert mode == 0o600
 
 
 def test_list_keys_empty():

@@ -10,6 +10,7 @@ cce emit-mdx               — emit MDX files from completed jobs
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import typer
 
@@ -61,9 +62,40 @@ def start_server(
 def generate_key(
     label: str = typer.Option("", help="Human-readable label for the key"),
     config: str | None = typer.Option(None, help="Path to config YAML"),
+    output: Path | None = typer.Option(  # noqa: B008
+        None,
+        "--output",
+        "-o",
+        help=(
+            "Path to write the key (mode 0600). Parent dirs created as needed. "
+            "Default: ~/.cce/api-key"
+        ),
+    ),
+    print_to_stdout: bool = typer.Option(
+        False,
+        "--print",
+        help=(
+            "Print the key to stdout instead of writing to a file. "
+            "Use only in trusted contexts (CI key bootstrap, for example)."
+        ),
+    ),
 ) -> None:
-    """Generate a new API key and print it (shown once only)."""
+    """Generate a new API key (audit U3 / PDR-003).
+
+    Default writes the key to a 0600-mode file and prints only the path.
+    ``--print`` opts into the legacy stdout behavior. Shown once only;
+    retrieving an existing key is not supported.
+    """
+    import os
+    import stat
+
     from cce.api.auth import generate_api_key, hash_api_key
+
+    # Resolve default output path at call time (not at import time) so
+    # tests monkey-patching Path.home() are honored.
+    resolved_output: Path = (
+        output if output is not None else Path.home() / ".cce" / "api-key"
+    )
 
     async def _run() -> None:
         store = await _get_job_store(config)
@@ -72,7 +104,13 @@ def generate_key(
             key_hash = hash_api_key(key)
             await store.store_api_key(key_hash, label=label or None)
 
-            typer.echo(f"API Key:  {key}")
+            if print_to_stdout:
+                typer.echo(f"API Key:  {key}")
+            else:
+                resolved_output.parent.mkdir(parents=True, exist_ok=True)
+                resolved_output.write_text(key + "\n")
+                os.chmod(resolved_output, stat.S_IRUSR | stat.S_IWUSR)  # 0600
+                typer.echo(f"Wrote API key to {resolved_output} (mode 0600)")
             typer.echo(f"Hash:     {key_hash[:16]}...")
             if label:
                 typer.echo(f"Label:    {label}")
