@@ -156,6 +156,7 @@ class Verifier:
         evidence: list[Evidence],
         *,
         jurisdiction: str | None = None,
+        evidence_block: str | None = None,
     ) -> VerificationReport:
         """Verify a content unit against its evidence.
 
@@ -163,14 +164,20 @@ class Verifier:
             unit: The draft content to verify.
             evidence: All evidence objects available for this curation run.
             jurisdiction: Optional regulatory/geographic scope for claim validation.
+            evidence_block: Pre-formatted verifier-style evidence prompt block
+                (audit P7). When provided, skips the internal
+                ``format_evidence_for_prompt`` call — the caller has already
+                paid that cost once for the whole run. None -> fall back to
+                computing it here (backward-compat for direct callers).
         """
         if not unit.content:
             return VerificationReport(
                 overall_feedback="Empty content -- nothing to verify"
             )
 
-        # Build evidence reference for the verifier
-        evidence_block = format_evidence_for_prompt(evidence, style="verifier")
+        # Build evidence reference for the verifier (skip if pre-computed)
+        if evidence_block is None:
+            evidence_block = format_evidence_for_prompt(evidence, style="verifier")
 
         jurisdiction_line = ""
         if jurisdiction:

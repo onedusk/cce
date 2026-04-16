@@ -77,6 +77,7 @@ class Writer:
         path_config: PathConfig | None = None,
         feedback: str | None = None,
         lineage: ContentLineage | None = None,
+        evidence_block: str | None = None,
     ) -> WriterOutput:
         """Produce a draft for one output path from the given evidence.
 
@@ -89,6 +90,11 @@ class Writer:
             feedback: Optional verifier feedback from a previous iteration
                       (gaps to fill, claims to fix).
             lineage: Provenance metadata to attach to the content unit.
+            evidence_block: Pre-formatted writer-style evidence prompt block
+                (audit P7). When provided, skips the internal
+                ``format_evidence_for_prompt`` call — the caller has already
+                paid that cost once for the whole run. None -> fall back to
+                computing it here (backward-compat for direct callers).
         """
         if not evidence:
             logger.warning("Writer called with no evidence for path '%s'", path)
@@ -98,7 +104,8 @@ class Writer:
                 raw_response="",
             )
 
-        evidence_block = format_evidence_for_prompt(evidence, style="writer")
+        if evidence_block is None:
+            evidence_block = format_evidence_for_prompt(evidence, style="writer")
 
         # Resolve audience: path config can override the request default
         audience = request.audience

@@ -17,6 +17,7 @@ from cce.config.types import EngineConfig, QualityGateConfig
 from cce.discovery.adapters.base import CrawlAdapter
 from cce.discovery.discoverer import Discoverer
 from cce.discovery.embeddings import EmbeddingProvider
+from cce.evidence.formatting import format_evidence_for_prompt
 from cce.evidence.store import EvidenceStore
 from cce.llm.base import LLMProvider
 from cce.models.content import ContentLineage, ContentScores, ContentUnit
@@ -535,6 +536,12 @@ class Pipeline:
         if path_config and path_config.max_evidence:
             path_evidence = evidence[: path_config.max_evidence]
 
+        # Pre-format the evidence prompt blocks once per path — all iterations
+        # share the same blocks since `path_evidence` is immutable here
+        # (audit P7). Saves (iterations - 1) formatting passes per path.
+        writer_block = format_evidence_for_prompt(path_evidence, style="writer")
+        verifier_block = format_evidence_for_prompt(path_evidence, style="verifier")
+
         for iteration in range(1, max_iters + 1):
             _log.info(
                 "Path '%s': write-verify iteration %d/%d", path, iteration, max_iters
@@ -549,6 +556,7 @@ class Pipeline:
                 path_config=path_config,
                 feedback=feedback,
                 lineage=lineage,
+                evidence_block=writer_block,
             )
 
             # Accumulate token usage from writer
@@ -590,7 +598,10 @@ class Pipeline:
                 request.constraints.jurisdiction if request.constraints else None
             )
             report = await self._verifier.verify(
-                unit, path_evidence, jurisdiction=jurisdiction
+                unit,
+                path_evidence,
+                jurisdiction=jurisdiction,
+                evidence_block=verifier_block,
             )
 
             # Accumulate token usage from verifier
