@@ -293,6 +293,12 @@ class Pipeline:
                 len(evidence) - inserted,
             )
 
+            # Build the evidence-id lookup once and pass it through (audit P8).
+            # Writer + _write_verify_loop previously rebuilt this dict on every
+            # iteration of every path — O(paths × iterations) sweeps over the
+            # same list.
+            ev_lookup = {ev.id: ev for ev in evidence}
+
             # --- Stage 3: Write + Verify loop (per output path, run concurrently) ---
             total_paths = len(request.paths)
             job = self._update_job(
@@ -313,6 +319,7 @@ class Pipeline:
                 job=job,
                 job_logger=job_logger,
                 token_usage=token_usage,
+                ev_lookup=ev_lookup,
             )
 
             # --- Stage 4: Build publish package ---
@@ -412,6 +419,7 @@ class Pipeline:
         lineage: ContentLineage,
         job: Job,
         parent_logger: logging.Logger | logging.LoggerAdapter,
+        ev_lookup: dict[str, Evidence],
     ) -> tuple[ContentUnit | None, list[GateResult], dict[str, int]]:
         """Run one path's writer/verifier loop with a local token dict and child logger."""
         # LoggerAdapter doesn't expose .getChild on every Python version — reach
@@ -434,6 +442,7 @@ class Pipeline:
             job=job,
             job_logger=path_logger,
             token_usage=path_tokens,
+            ev_lookup=ev_lookup,
         )
         return unit, gate_results, path_tokens
 
@@ -447,6 +456,7 @@ class Pipeline:
         job: Job,
         job_logger: logging.Logger | logging.LoggerAdapter,
         token_usage: dict[str, int],
+        ev_lookup: dict[str, Evidence],
     ) -> tuple[list[ContentUnit], list[GateResult]]:
         """Fan per-path write-verify loops out concurrently (audit P1).
 
@@ -471,6 +481,7 @@ class Pipeline:
                 lineage=lineage,
                 job=job,
                 parent_logger=job_logger,
+                ev_lookup=ev_lookup,
             )
             async with counter_lock:
                 completed += 1
@@ -517,6 +528,7 @@ class Pipeline:
         job: Job | None = None,
         job_logger: logging.Logger | logging.LoggerAdapter | None = None,
         token_usage: dict | None = None,
+        ev_lookup: dict[str, Evidence] | None = None,
     ) -> tuple[ContentUnit | None, list[GateResult]]:
         """Run the writer-verifier loop for a single output path."""
         _log = job_logger or logger
@@ -529,7 +541,10 @@ class Pipeline:
         max_iters = gate_config.max_writer_iterations
 
         path_config = self._path_configs.get(path)
-        ev_lookup = {ev.id: ev for ev in evidence}
+        # ev_lookup is built once in Pipeline.run() and passed down (audit P8).
+        # Falls back to a local rebuild when called directly (e.g. unit tests).
+        if ev_lookup is None:
+            ev_lookup = {ev.id: ev for ev in evidence}
 
         # Per-path evidence cap (keeps full list for tag aggregation)
         path_evidence = evidence
@@ -557,6 +572,7 @@ class Pipeline:
                 feedback=feedback,
                 lineage=lineage,
                 evidence_block=writer_block,
+                ev_lookup=ev_lookup,
             )
 
             # Accumulate token usage from writer

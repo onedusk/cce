@@ -99,6 +99,52 @@ async def test_writer_falls_back_when_no_evidence_block_passed(sqlite_store):
     # Fallback path produced a valid draft using its own format_evidence_for_prompt.
 
 
+async def test_ev_lookup_built_once_across_paths_and_iterations(
+    sqlite_store, monkeypatch
+):
+    """Pipeline.run() builds one ev_lookup and threads it through; writer's
+    internal fallback-rebuild path never runs during a pipeline-driven call
+    (audit P8).
+    """
+    rebuild_count = 0
+    real_dict = dict
+
+    import cce.synthesis.writer as writer_module
+
+    original_parse = writer_module.Writer._parse_response
+
+    def _counting_parse(self, response, evidence, path, lineage, *, ev_lookup=None):
+        nonlocal rebuild_count
+        # ev_lookup should always be supplied by the pipeline (non-None)
+        # during pipeline-driven calls.
+        if ev_lookup is None:
+            rebuild_count += 1
+        return original_parse(
+            self, response, evidence, path, lineage, ev_lookup=ev_lookup
+        )
+
+    monkeypatch.setattr(writer_module.Writer, "_parse_response", _counting_parse)
+
+    config = make_engine_config()
+    pipeline = Pipeline(
+        config=config,
+        crawl_adapter=make_adapter(),
+        evidence_store=sqlite_store,
+        llm=_SleepyLLM(),
+    )
+    result = await pipeline.run(
+        make_curation_request(paths=["blog", "summary", "faq"]),
+        make_source_policy(),
+    )
+    assert result.succeeded is True
+    # Writer received a non-None ev_lookup on every call. The fallback
+    # rebuild path (local dict comp inside _parse_response) never ran.
+    assert rebuild_count == 0, (
+        f"Writer fell back to rebuilding ev_lookup {rebuild_count} times; "
+        "Pipeline should have supplied it."
+    )
+
+
 async def test_verifier_falls_back_when_no_evidence_block_passed(sqlite_store):
     """Direct callers of Verifier.verify() that don't pass evidence_block still work."""
     from cce.llm.base import LLMResponse

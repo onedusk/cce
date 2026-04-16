@@ -78,6 +78,7 @@ class Writer:
         feedback: str | None = None,
         lineage: ContentLineage | None = None,
         evidence_block: str | None = None,
+        ev_lookup: dict[str, Evidence] | None = None,
     ) -> WriterOutput:
         """Produce a draft for one output path from the given evidence.
 
@@ -164,7 +165,9 @@ exists, and mark remaining gaps as [INSUFFICIENT EVIDENCE].
                 system=system_prompt,
                 temperature=0.2,  # low temp for factual consistency; do not increase without testing
             )
-            output = self._parse_response(response, evidence, path, lineage)
+            output = self._parse_response(
+                response, evidence, path, lineage, ev_lookup=ev_lookup
+            )
             output.token_usage = response.usage
             return output
 
@@ -202,6 +205,8 @@ exists, and mark remaining gaps as [INSUFFICIENT EVIDENCE].
         evidence: list[Evidence],
         path: str,
         lineage: ContentLineage | None,
+        *,
+        ev_lookup: dict[str, Evidence] | None = None,
     ) -> WriterOutput:
         """Parse the LLM response into a ContentUnit."""
         raw = response.content.strip()
@@ -233,8 +238,11 @@ exists, and mark remaining gaps as [INSUFFICIENT EVIDENCE].
                 raw_response=raw,
             )
 
-        # Build evidence ID lookup for URL resolution
-        ev_lookup = {ev.id: ev for ev in evidence}
+        # Evidence ID lookup for URL resolution — use the caller's version
+        # when provided (audit P8), else build locally. The caller's dict is
+        # read-only from here.
+        if ev_lookup is None:
+            ev_lookup = {ev.id: ev for ev in evidence}
 
         # Parse citations — warn if LLM cited unknown evidence IDs
         citations_used = parsed.get("citations_used", [])
