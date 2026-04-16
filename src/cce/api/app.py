@@ -71,6 +71,11 @@ async def lifespan(app: FastAPI):
     app.state.job_store = job_store
     app.state.evidence_store = evidence_store
     app.state.policies = policies
+    # path_configs is a map {path_name: PathConfig}. Exposed here so
+    # create_job can validate `body.paths` against the known names early
+    # (audit U2) rather than letting unknown names fail deep in the pipeline.
+    # None -> no path_configs loaded -> handler skips the check.
+    app.state.path_configs = getattr(pipeline, "_path_configs", None) or None
     app.state.semaphore = asyncio.Semaphore(config.api.max_concurrent_jobs)
     running_tasks: dict[str, asyncio.Task] = {}
     app.state.running_tasks = running_tasks

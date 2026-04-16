@@ -63,6 +63,25 @@ async def create_job(
             ).model_dump(mode="json"),
         )
 
+    # Validate `paths` against known path configs (audit U2). Only runs when
+    # path_configs were loaded — if the app was started without a path_configs
+    # file, the handler accepts any path name and lets the pipeline route it.
+    path_configs = getattr(state, "path_configs", None)
+    if path_configs:
+        known_paths = set(path_configs.keys())
+        unknown = [p for p in body.paths if p not in known_paths]
+        if unknown:
+            return JSONResponse(
+                status_code=400,
+                content=error_envelope(
+                    code="unknown_paths",
+                    message=f"Unknown paths: {unknown}",
+                    request_id=get_request_id(),
+                    unknown=unknown,
+                    known=sorted(known_paths),
+                ).model_dump(mode="json"),
+            )
+
     # Convert to CurationRequest
     constraints = None
     if body.jurisdiction:

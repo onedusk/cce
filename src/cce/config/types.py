@@ -162,7 +162,8 @@ QUALITY_GATE_PROFILES: Final[dict[str, dict]] = {
 def default_quality_gate_profiles() -> dict[str, QualityGateConfig]:
     """Build a fresh {profile_name: QualityGateConfig} dict from the templates."""
     return {
-        name: QualityGateConfig(**fields) for name, fields in QUALITY_GATE_PROFILES.items()
+        name: QualityGateConfig(**fields)
+        for name, fields in QUALITY_GATE_PROFILES.items()
     }
 
 
