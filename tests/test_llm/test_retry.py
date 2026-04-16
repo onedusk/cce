@@ -1,10 +1,23 @@
 """Tests for cce.llm.retry — async retry wrapper for LLM operations."""
 
+import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from cce.llm.retry import with_llm_retry
+from cce.llm.retry import (
+    JITTER_FRACTION,
+    RETRYABLE_EXCEPTIONS,
+    _with_jitter,
+    with_llm_retry,
+)
+
+
+@pytest.fixture
+def no_jitter():
+    """Zero out the jitter so tests that assert exact delay values remain stable."""
+    with patch("cce.llm.retry.random.random", return_value=0.0):
+        yield
 
 
 # ---------------------------------------------------------------------------
@@ -26,7 +39,7 @@ async def test_success_on_first_try():
 
 
 @pytest.mark.unit
-async def test_success_after_one_failure():
+async def test_success_after_one_failure(no_jitter):
     fn = AsyncMock(side_effect=[ValueError("bad json"), "ok"])
     with patch("cce.llm.retry.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
         result = await with_llm_retry(fn)
@@ -68,14 +81,14 @@ async def test_non_retryable_exception_propagates_immediately():
 
 
 @pytest.mark.unit
-async def test_backoff_timing():
+async def test_backoff_timing(no_jitter):
     fn = AsyncMock(side_effect=[ValueError("e1"), ValueError("e2"), "ok"])
     with patch("cce.llm.retry.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
         result = await with_llm_retry(fn, max_attempts=3)
     assert result == "ok"
     assert mock_sleep.await_count == 2
-    mock_sleep.assert_any_await(1.0)   # attempt 1 -> delay = 1.0 * 2^0
-    mock_sleep.assert_any_await(2.0)   # attempt 2 -> delay = 1.0 * 2^1
+    mock_sleep.assert_any_await(1.0)  # attempt 1 -> delay = 1.0 * 2^0 * (1 + 0)
+    mock_sleep.assert_any_await(2.0)  # attempt 2 -> delay = 1.0 * 2^1 * (1 + 0)
 
 
 # ---------------------------------------------------------------------------
@@ -104,3 +117,68 @@ async def test_key_error_is_retryable():
         result = await with_llm_retry(fn)
     assert result == "ok"
     assert fn.await_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Jitter (audit P5)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_jitter_bounds_zero_factor():
+    """At random()=0 the jitter multiplier is 1.0 — base delay unchanged."""
+    with patch("cce.llm.retry.random.random", return_value=0.0):
+        assert _with_jitter(4.0) == 4.0
+
+
+@pytest.mark.unit
+def test_jitter_bounds_max_factor():
+    """At random()=1 the jitter multiplier is 1 + JITTER_FRACTION."""
+    with patch("cce.llm.retry.random.random", return_value=1.0):
+        assert _with_jitter(4.0) == pytest.approx(4.0 * (1.0 + JITTER_FRACTION))
+
+
+@pytest.mark.unit
+async def test_jitter_applied_in_backoff():
+    """The delay passed to asyncio.sleep is >= base and <= base*(1+JITTER_FRACTION)."""
+    fn = AsyncMock(side_effect=[ValueError("boom"), "ok"])
+    with patch("cce.llm.retry.random.random", return_value=0.5):
+        with patch("cce.llm.retry.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            result = await with_llm_retry(fn)
+    assert result == "ok"
+    # Base delay at attempt 1 is 1.0; with random()=0.5 jitter is 1.0 * (1 + 0.5*0.25) = 1.125
+    mock_sleep.assert_awaited_once_with(pytest.approx(1.125))
+
+
+# ---------------------------------------------------------------------------
+# json.JSONDecodeError explicit in retryable set (audit P5)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_jsondecodeerror_in_retryable_exceptions():
+    assert json.JSONDecodeError in RETRYABLE_EXCEPTIONS
+
+
+@pytest.mark.unit
+async def test_jsondecodeerror_is_retried(no_jitter):
+    err = json.JSONDecodeError("bad", "doc", 0)
+    fn = AsyncMock(side_effect=[err, "ok"])
+    with patch("cce.llm.retry.asyncio.sleep", new_callable=AsyncMock):
+        result = await with_llm_retry(fn)
+    assert result == "ok"
+    assert fn.await_count == 2
+
+
+# ---------------------------------------------------------------------------
+# No type-ignore on final raise (audit P5, code-hygiene)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+async def test_raises_last_error_with_max_attempts_1():
+    """max_attempts=1 exercises the no-retry branch where last_error must still raise."""
+    fn = AsyncMock(side_effect=ValueError("once"))
+    with pytest.raises(ValueError, match="once"):
+        await with_llm_retry(fn, max_attempts=1)
+    fn.assert_awaited_once()

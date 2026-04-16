@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import random
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
 
@@ -13,7 +15,20 @@ T = TypeVar("T")
 
 MAX_ATTEMPTS = 3
 BASE_DELAY_S = 1.0
-RETRYABLE_EXCEPTIONS = (ValueError, KeyError)
+JITTER_FRACTION = 0.25  # Max +fraction of the current exponential delay.
+
+# JSONDecodeError is a subclass of ValueError, but listed explicitly so that
+# a future refactor narrowing ValueError cannot silently drop JSON-parse retries.
+RETRYABLE_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    ValueError,
+    KeyError,
+    json.JSONDecodeError,
+)
+
+
+def _with_jitter(delay: float) -> float:
+    """Spread retry delays by up to JITTER_FRACTION to avoid lockstep retries."""
+    return delay * (1.0 + random.random() * JITTER_FRACTION)
 
 
 async def with_llm_retry(
@@ -25,8 +40,12 @@ async def with_llm_retry(
 ) -> T:
     """Call an async function with retry on application-level failures.
 
-    Retries on ValueError and KeyError (JSON parse failures).
-    Does NOT retry on network/SDK errors.
+    Retries on ValueError, KeyError, and json.JSONDecodeError (all JSON/shape
+    problems surfaced by the adapter layer). Does NOT retry on network/SDK
+    errors — the SDK's own retries handle those.
+
+    Backoff is exponential with jitter: attempt N waits
+    ``base_delay * 2^(N-1) * (1 + rand()*JITTER_FRACTION)`` seconds.
     """
     last_error: Exception | None = None
     for attempt in range(1, max_attempts + 1):
@@ -35,9 +54,9 @@ async def with_llm_retry(
         except RETRYABLE_EXCEPTIONS as e:
             last_error = e
             if attempt < max_attempts:
-                delay = base_delay * (2 ** (attempt - 1))
+                delay = _with_jitter(base_delay * (2 ** (attempt - 1)))
                 logger.warning(
-                    "LLM operation failed (attempt %d/%d): %s. Retrying in %.1fs",
+                    "LLM operation failed (attempt %d/%d): %s. Retrying in %.2fs",
                     attempt,
                     max_attempts,
                     e,
@@ -48,4 +67,5 @@ async def with_llm_retry(
                 logger.error(
                     "LLM operation failed after %d attempts: %s", max_attempts, e
                 )
-    raise last_error  # type: ignore[misc]
+    assert last_error is not None
+    raise last_error
