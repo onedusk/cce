@@ -120,6 +120,7 @@ class Pipeline:
             config=config.crawl,
             embedding_provider=embedding_provider,
             embedding_batch_size=config.embedding.batch_size,
+            embedding_concurrency=config.embedding.concurrency,
             evidence_store=evidence_store,
         )
         self._writer = Writer(llm=llm)

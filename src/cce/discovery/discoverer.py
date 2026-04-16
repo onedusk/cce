@@ -7,6 +7,7 @@ Evidence objects ready for the evidence store.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import math
@@ -52,12 +53,14 @@ class Discoverer:
         config: CrawlConfig,
         embedding_provider: EmbeddingProvider | None = None,
         embedding_batch_size: int = 64,
+        embedding_concurrency: int = 1,
         evidence_store: EvidenceStore | None = None,
     ) -> None:
         self._adapter = adapter
         self._config = config
         self._embedding = embedding_provider
         self._embedding_batch_size = embedding_batch_size
+        self._embedding_concurrency = max(1, embedding_concurrency)
         self._evidence_store = evidence_store
         self.last_discover_metrics: dict = {}  # Metrics from most recent discover() call
 
@@ -393,6 +396,29 @@ class Discoverer:
 
     # -- Embedding relevance --
 
+    async def _embed_batches(self, texts: list[str]) -> list[list[float]]:
+        """Dispatch embedding batches concurrently, preserving input order (audit P2).
+
+        Concurrency is capped by `self._embedding_concurrency` — default 1
+        keeps the behavior sequential on backends whose concurrency safety
+        isn't verified. Output order matches input order so the caller can
+        pair query vector + per-evidence vectors without re-mapping.
+        """
+        if not texts or self._embedding is None:
+            return []
+
+        size = self._embedding_batch_size
+        batches = [texts[i : i + size] for i in range(0, len(texts), size)]
+        semaphore = asyncio.Semaphore(self._embedding_concurrency)
+
+        async def _one(batch: list[str]) -> list[list[float]]:
+            async with semaphore:
+                result = await self._embedding.embed(batch)
+                return result.vectors
+
+        per_batch = await asyncio.gather(*[_one(b) for b in batches])
+        return [v for group in per_batch for v in group]
+
     async def _compute_relevance_scores(
         self,
         evidence: list[Evidence],
@@ -411,13 +437,8 @@ class Discoverer:
         if subtopics:
             query_text += " " + " ".join(subtopics)
 
-        # Embed in batches respecting batch_size config
         texts = [query_text] + [ev.excerpt for ev in evidence]
-        all_vectors: list[list[float]] = []
-        for i in range(0, len(texts), self._embedding_batch_size):
-            batch = texts[i : i + self._embedding_batch_size]
-            result = await self._embedding.embed(batch)
-            all_vectors.extend(result.vectors)
+        all_vectors = await self._embed_batches(texts)
 
         if len(all_vectors) != len(texts):
             raise EmbeddingUnavailableError(

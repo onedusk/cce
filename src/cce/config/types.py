@@ -76,6 +76,15 @@ class EmbeddingConfig(BaseModel):
         ge=1,
         description="Max texts per embedding API call",
     )
+    concurrency: int = Field(
+        default=1,
+        ge=1,
+        description=(
+            "Max concurrent embedding API calls (audit P2). Default 1 keeps "
+            "the behavior sequential until a given backend's concurrency is "
+            "verified; raise once you've confirmed the backend handles it."
+        ),
+    )
 
 
 class CrawlConfig(BaseModel):
