@@ -1,0 +1,23 @@
+# Pre-commit hooks for CCE — ruff lint + format at commit time.
+# See docs/decompose/stage-0-development-standards.md — Code Change Checklist §4.
+#
+# Install (once per dev machine):
+#   uv tool install pre-commit   # or: pipx install pre-commit
+#   pre-commit install
+#
+# Run on demand:
+#   pre-commit run --all-files
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    # Pin to the same ruff major/minor as pyproject.toml's dev deps (>=0.8);
+    # bump both together.
+    rev: v0.15.10
+    hooks:
+      # Lint — mirrors CI's `uv run ruff check src/`.
+      - id: ruff
+        args: [--fix]
+        files: ^src/
+      # Format — mirrors CI's `uv run ruff format --check src/`.
+      - id: ruff-format
+        files: ^src/
