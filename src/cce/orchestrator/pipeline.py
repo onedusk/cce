@@ -108,25 +108,28 @@ def _terminal_decisions(
     determination we only care about the last decision per path — the one
     that actually ended the loop.
 
-    When there are *N* paths, the gate_results list is partitioned into *N*
-    consecutive groups (one per path, in order).  Within each group the last
-    entry is the terminal decision.
-    """
-    if not gate_results:
-        return []
+    Path accounting:
+      - A path whose writer produced content contributes >=1 gate result.
+      - A path whose writer returned `has_content=False` breaks the loop
+        BEFORE any gate evaluation, so it contributes ZERO gate results.
+        For status-determination purposes that is a terminal FAIL (the
+        path produced nothing publishable).
 
-    # Partition results into per-path groups.  Gate results are appended in
-    # path order, with each path contributing >=1 result.  We split by
-    # counting how many results belong to each path: the total for a path
-    # equals the number of write-verify iterations it ran.
+    Partitioning is by iteration-boundary (iteration resets to 1 per path);
+    sparse groups are padded with FAIL so `len(return) == len(paths)`
+    always holds.
+    """
     n_paths = len(paths)
 
+    if not gate_results:
+        # Every path silently produced no gate result — treat each as FAIL
+        # so callers doing `all(d == PASS)` see the right answer (review F-2).
+        return [GateDecision.FAIL] * n_paths
+
     if n_paths <= 1:
-        # Single path — terminal decision is simply the last one.
         return [gate_results[-1].decision]
 
-    # Multiple paths: partition evenly when possible, otherwise split by
-    # tracking iteration numbering (iteration resets to 1 per path).
+    # Multiple paths: partition by iteration==1 boundaries.
     groups: list[list[GateResult]] = []
     current_group: list[GateResult] = []
     for gr in gate_results:
@@ -137,7 +140,13 @@ def _terminal_decisions(
     if current_group:
         groups.append(current_group)
 
-    return [group[-1].decision for group in groups]
+    decisions = [group[-1].decision for group in groups]
+    # Pad any missing-path groups with FAIL. An empty-content path drops out
+    # of the loop before contributing to gate_results, so `len(groups)` can
+    # legitimately be less than `n_paths` (review F-2).
+    if len(decisions) < n_paths:
+        decisions.extend([GateDecision.FAIL] * (n_paths - len(decisions)))
+    return decisions
 
 
 class Pipeline:

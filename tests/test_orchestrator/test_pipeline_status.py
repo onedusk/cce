@@ -5,14 +5,13 @@ correctly maps terminal gate decisions to JobStatus, and that StageRecord
 accepts the optional metrics kwarg.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
 from cce.models.job import JobStage, JobStatus, StageRecord
 from cce.orchestrator.pipeline import _terminal_decisions
 from cce.verification.gate import GateDecision
-
 
 # ---------------------------------------------------------------------------
 # Helper: simulate the status-determination logic from Pipeline.run
@@ -146,18 +145,53 @@ class TestTerminalDecisions:
     @pytest.mark.unit
     def test_multiple_paths_one_fails_terminally(self):
         results = [
-            _make_gate_result(GateDecision.PASS, iteration=1),       # path 1: pass
-            _make_gate_result(GateDecision.FAIL, iteration=1),       # path 2: fail iter 1
-            _make_gate_result(GateDecision.FAIL, iteration=2),       # path 2: fail iter 2
-            _make_gate_result(GateDecision.REVIEW, iteration=3),     # path 2: review iter 3
+            _make_gate_result(GateDecision.PASS, iteration=1),  # path 1: pass
+            _make_gate_result(GateDecision.FAIL, iteration=1),  # path 2: fail iter 1
+            _make_gate_result(GateDecision.FAIL, iteration=2),  # path 2: fail iter 2
+            _make_gate_result(
+                GateDecision.REVIEW, iteration=3
+            ),  # path 2: review iter 3
         ]
         decisions = _terminal_decisions(results, ["blog", "newsletter"])
         assert decisions == [GateDecision.PASS, GateDecision.REVIEW]
 
     @pytest.mark.unit
-    def test_empty_gate_results(self):
-        decisions = _terminal_decisions([], ["blog"])
-        assert decisions == []
+    def test_empty_gate_results_pads_with_fail(self):
+        """No gate results at all -> every path is FAIL (review finding F-2)."""
+        assert _terminal_decisions([], ["blog"]) == [GateDecision.FAIL]
+        assert _terminal_decisions([], ["blog", "summary", "faq"]) == [
+            GateDecision.FAIL,
+            GateDecision.FAIL,
+            GateDecision.FAIL,
+        ]
+
+    @pytest.mark.unit
+    def test_sparse_groups_padded_with_fail(self):
+        """Only 1 path produces results in a 2-path run -> pad tail with FAIL.
+
+        Simulates the case where path[0]'s writer had content (1 iteration,
+        PASS) but path[1]'s writer returned empty, so the loop broke before
+        any gate result for path[1] existed.
+        """
+        results = [_make_gate_result(iteration=1, decision=GateDecision.PASS)]
+        assert _terminal_decisions(results, ["blog", "summary"]) == [
+            GateDecision.PASS,
+            GateDecision.FAIL,
+        ]
+
+    @pytest.mark.unit
+    def test_multiple_paths_with_some_missing(self):
+        """3-path run; only paths 0 and 1 produced results."""
+        results = [
+            _make_gate_result(iteration=1, decision=GateDecision.PASS),
+            _make_gate_result(iteration=1, decision=GateDecision.FAIL),
+            _make_gate_result(iteration=2, decision=GateDecision.PASS),
+        ]
+        assert _terminal_decisions(results, ["a", "b", "c"]) == [
+            GateDecision.PASS,  # path a: single iter, PASS
+            GateDecision.PASS,  # path b: iter 1 FAIL then iter 2 PASS
+            GateDecision.FAIL,  # path c: padded — writer had no content
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -172,8 +206,8 @@ class TestStageRecordMetrics:
     def test_stage_record_default_metrics_is_none(self):
         record = StageRecord(
             stage=JobStage.DISCOVER,
-            started_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-            completed_at=datetime(2026, 1, 1, 0, 1, tzinfo=timezone.utc),
+            started_at=datetime(2026, 1, 1, tzinfo=UTC),
+            completed_at=datetime(2026, 1, 1, 0, 1, tzinfo=UTC),
         )
         assert record.metrics is None
 
@@ -182,8 +216,8 @@ class TestStageRecordMetrics:
         metrics = {"evidence_count": 42, "iteration_count": 3}
         record = StageRecord(
             stage=JobStage.WRITE,
-            started_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-            completed_at=datetime(2026, 1, 1, 0, 5, tzinfo=timezone.utc),
+            started_at=datetime(2026, 1, 1, tzinfo=UTC),
+            completed_at=datetime(2026, 1, 1, 0, 5, tzinfo=UTC),
             metrics=metrics,
         )
         assert record.metrics == {"evidence_count": 42, "iteration_count": 3}
@@ -193,8 +227,8 @@ class TestStageRecordMetrics:
         """StageRecord is frozen — assignment after construction must fail."""
         record = StageRecord(
             stage=JobStage.VERIFY,
-            started_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-            completed_at=datetime(2026, 1, 1, 0, 2, tzinfo=timezone.utc),
+            started_at=datetime(2026, 1, 1, tzinfo=UTC),
+            completed_at=datetime(2026, 1, 1, 0, 2, tzinfo=UTC),
         )
         with pytest.raises(Exception):
             record.metrics = {"should": "fail"}  # type: ignore[misc]
@@ -205,8 +239,8 @@ class TestStageRecordMetrics:
         metrics = {"sources_crawled": 10, "dedup_rate": 0.15}
         record = StageRecord(
             stage=JobStage.EXTRACT,
-            started_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-            completed_at=datetime(2026, 1, 1, 0, 3, tzinfo=timezone.utc),
+            started_at=datetime(2026, 1, 1, tzinfo=UTC),
+            completed_at=datetime(2026, 1, 1, 0, 3, tzinfo=UTC),
             metrics=metrics,
         )
         dumped = record.model_dump()
