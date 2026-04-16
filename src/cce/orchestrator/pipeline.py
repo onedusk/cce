@@ -390,11 +390,23 @@ class Pipeline:
             unit = writer_output.unit
 
             if job is not None:
+                write_tokens = writer_output.token_usage or {}
                 job.stages.append(
                     StageRecord(
                         stage=JobStage.WRITE,
                         started_at=write_start,
                         completed_at=datetime.now(UTC),
+                        metrics={
+                            "iterations": iteration,
+                            "tokens_input": write_tokens.get("input_tokens", 0),
+                            "tokens_output": write_tokens.get("output_tokens", 0),
+                            "tokens_cache_read": write_tokens.get(
+                                "cache_read_input_tokens", 0
+                            ),
+                            "tokens_cache_write": write_tokens.get(
+                                "cache_creation_input_tokens", 0
+                            ),
+                        },
                     )
                 )
 
@@ -418,6 +430,12 @@ class Pipeline:
                         stage=JobStage.VERIFY,
                         started_at=verify_start,
                         completed_at=datetime.now(UTC),
+                        metrics={
+                            "total_claims": report.total_claims,
+                            "supported": report.supported,
+                            "pass_rate": report.pass_rate,
+                            "confidence_score": report.confidence_score,
+                        },
                     )
                 )
 
