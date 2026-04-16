@@ -47,7 +47,7 @@ async def with_llm_retry(
     Backoff is exponential with jitter: attempt N waits
     ``base_delay * 2^(N-1) * (1 + rand()*JITTER_FRACTION)`` seconds.
     """
-    last_error: Exception | None = None
+    last_error: BaseException | None = None
     for attempt in range(1, max_attempts + 1):
         try:
             return await fn(*args, **kwargs)

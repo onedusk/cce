@@ -71,8 +71,9 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.message,
         }
-        if hasattr(record, "request_id"):
-            payload["request_id"] = record.request_id
+        request_id = getattr(record, "request_id", None)
+        if request_id is not None:
+            payload["request_id"] = request_id
         # Pass-through `extra={}` fields
         for k, v in record.__dict__.items():
             if k in self._RESERVED or k.startswith("_") or k == "request_id":

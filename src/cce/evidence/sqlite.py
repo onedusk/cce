@@ -356,7 +356,7 @@ class SQLiteEvidenceStore:
         )
 
     @staticmethod
-    def _from_row(row: tuple) -> Evidence:
+    def _from_row(row: aiosqlite.Row | tuple) -> Evidence:
         from datetime import datetime
 
         source_quality = None

@@ -426,13 +426,17 @@ class Discoverer:
         if not texts or self._embedding is None:
             return []
 
+        # Bind to a local non-None reference so pyright can narrow inside the
+        # nested closure (the `self._embedding is None` check at the top
+        # doesn't narrow through the closure boundary).
+        embedder = self._embedding
         size = self._embedding_batch_size
         batches = [texts[i : i + size] for i in range(0, len(texts), size)]
         semaphore = asyncio.Semaphore(self._embedding_concurrency)
 
         async def _one(batch: list[str]) -> list[list[float]]:
             async with semaphore:
-                result = await self._embedding.embed(batch)
+                result = await embedder.embed(batch)
                 return result.vectors
 
         per_batch = await asyncio.gather(*[_one(b) for b in batches])

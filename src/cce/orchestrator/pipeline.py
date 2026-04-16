@@ -584,6 +584,9 @@ class Pipeline:
                 _log.warning("Writer produced no content for path '%s'", path)
                 break
 
+            # `has_content=True` implies the writer produced a non-None unit
+            # with non-empty content. Narrow the type for pyright.
+            assert writer_output.unit is not None
             unit = writer_output.unit
 
             if job is not None:

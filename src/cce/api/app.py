@@ -72,7 +72,8 @@ async def lifespan(app: FastAPI):
     app.state.evidence_store = evidence_store
     app.state.policies = policies
     app.state.semaphore = asyncio.Semaphore(config.api.max_concurrent_jobs)
-    app.state.running_tasks: dict[str, asyncio.Task] = {}
+    running_tasks: dict[str, asyncio.Task] = {}
+    app.state.running_tasks = running_tasks
     app.state.auth_dependency = auth_dep
 
     logger.info(
