@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-import pytest
 from typer.testing import CliRunner
 
 from cce.cli import app

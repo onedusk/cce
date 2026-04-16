@@ -4,14 +4,13 @@ import json
 
 import pytest
 
+from cce.evidence.formatting import format_evidence_for_prompt
 from cce.llm.base import LLMResponse
 from cce.models.content import ContentLineage
 from cce.models.evidence import SourceQuality
 from cce.models.request import CurationConstraints
-from cce.evidence.formatting import format_evidence_for_prompt
 from cce.synthesis.writer import WRITER_SYSTEM_PROMPT, Writer, WriterOutput
 from tests.conftest import MockLLMProvider, make_curation_request, make_evidence
-
 
 # ---------------------------------------------------------------------------
 # format_evidence_for_prompt

@@ -9,13 +9,10 @@ from cce.api.schemas import (
     APIEnvelope,
     JobCreateRequest,
     JobResponse,
-    HealthResponse,
-    MetaResponse,
     envelope,
     job_to_response,
 )
 from tests.conftest import make_job
-
 
 pytestmark = pytest.mark.unit
 

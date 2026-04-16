@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import pytest
+from datetime import UTC
 
-from cce.output.mdx.citations import CitationEntry, CitationResult, build_citation_index
+from cce.output.mdx.citations import build_citation_index
 from tests.conftest import make_evidence
 
 
@@ -74,14 +74,14 @@ class TestBuildCitationIndex:
         assert result.citations == ()
 
     def test_citation_fields_match_evidence(self):
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         ev = make_evidence(
             id="ev_x",
             url="https://example.com/paper",
             title="A Paper",
             author="Dr. Smith",
-            published_at=datetime(2024, 6, 15, tzinfo=timezone.utc),
+            published_at=datetime(2024, 6, 15, tzinfo=UTC),
         )
         result = build_citation_index("[ev:ev_x]", {"ev_x": ev})
 

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import logging
 
-import pytest
-
 from cce.models.job import JobStage
 from cce.tagging.base import TaxonomyUnavailableError
 from tests.conftest import (

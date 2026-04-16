@@ -7,13 +7,11 @@ import pytest
 from cce.llm.base import LLMResponse
 from cce.models.evidence import SourceQuality
 from cce.verification.verifier import (
-    VERIFIER_SYSTEM_PROMPT,
-    Verifier,
-    VerificationReport,
     _VERIFIER_FULL_PROMPT,
+    VerificationReport,
+    Verifier,
 )
 from tests.conftest import MockLLMProvider, make_content_unit, make_evidence
-
 
 # ---------------------------------------------------------------------------
 # VerificationReport.pass_rate

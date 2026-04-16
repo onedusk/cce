@@ -7,10 +7,6 @@ import asyncio
 import httpx
 import pytest
 
-from cce.models.job import JobStatus
-from tests.conftest import make_job, make_publish_package
-
-
 pytestmark = pytest.mark.unit
 
 

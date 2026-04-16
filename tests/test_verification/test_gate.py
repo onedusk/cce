@@ -4,7 +4,12 @@ import pytest
 
 from cce.models.evidence import SourceQuality
 from cce.verification.gate import GateDecision, GateResult, QualityGate
-from tests.conftest import make_content_unit, make_evidence, make_gate_config, make_verification_report
+from tests.conftest import (
+    make_content_unit,
+    make_evidence,
+    make_gate_config,
+    make_verification_report,
+)
 
 pytestmark = pytest.mark.unit
 

@@ -4,26 +4,25 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from datetime import datetime, timezone
+from collections.abc import AsyncGenerator, Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from collections.abc import AsyncGenerator
-from typing import Any, Callable
+from typing import Any
 
 import pytest
 
 from cce.config.types import (
     CrawlConfig,
-    EmbeddingConfig,
     EngineConfig,
     EvidenceStoreConfig,
     LLMConfig,
     QualityGateConfig,
 )
-from cce.discovery.adapters.base import CrawlAdapter, CrawlRequest, CrawlResult
+from cce.discovery.adapters.base import CrawlRequest, CrawlResult
 from cce.discovery.embeddings import EmbeddingResult, EmbeddingUnavailableError
 from cce.evidence.sqlite import SQLiteEvidenceStore
 from cce.jobs.store import JobStore
-from cce.llm.base import LLMMessage, LLMProvider, LLMResponse
+from cce.llm.base import LLMMessage, LLMResponse
 from cce.models.content import (
     ContentLineage,
     ContentScores,
@@ -35,7 +34,6 @@ from cce.models.package import PackageLineage, PublishPackage
 from cce.models.request import CurationRequest
 from cce.policy.types import RecencyRule, ReputationRule, SourcePolicy
 from cce.verification.verifier import VerificationReport
-
 
 # ---------------------------------------------------------------------------
 # Mock: LLMProvider
@@ -170,8 +168,8 @@ def make_evidence(**overrides: Any) -> Evidence:
         "url": "https://example.com/article",
         "title": "Test Article Title",
         "author": "Test Author",
-        "published_at": datetime(2024, 1, 15, tzinfo=timezone.utc),
-        "retrieved_at": datetime(2024, 3, 1, tzinfo=timezone.utc),
+        "published_at": datetime(2024, 1, 15, tzinfo=UTC),
+        "retrieved_at": datetime(2024, 3, 1, tzinfo=UTC),
         "excerpt": excerpt,
         "excerpt_hash": excerpt_hash,
         "locator": "chunk:0",

@@ -7,7 +7,6 @@ import json
 import pytest
 
 from cce.models.content import Citation, ContentScores
-from cce.models.package import PackageLineage
 from cce.output.mdx import EmitResult, emit_mdx, slugify
 from tests.conftest import make_content_unit, make_evidence, make_publish_package
 

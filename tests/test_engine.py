@@ -15,17 +15,17 @@ from cce.models.job import JobStatus
 from cce.models.request import CurationRequest
 from cce.orchestrator.pipeline import Pipeline
 from tests.conftest import (
-    MockCrawlAdapter,
     make_engine_config,
     make_source_policy,
 )
 from tests.test_orchestrator.conftest import (
     llm as make_llm,
+)
+from tests.test_orchestrator.conftest import (
     make_adapter,
     verifier_json,
     writer_json,
 )
-
 
 pytestmark = pytest.mark.integration
 

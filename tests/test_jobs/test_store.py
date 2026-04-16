@@ -5,9 +5,8 @@ from __future__ import annotations
 import pytest
 
 from cce.jobs.store import JOB_SCHEMA_VERSION, JobStore
-from cce.models.job import Job, JobStatus
+from cce.models.job import JobStatus
 from tests.conftest import make_job, make_publish_package
-
 
 pytestmark = pytest.mark.unit
 

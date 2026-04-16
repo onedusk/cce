@@ -7,7 +7,6 @@ import pytest
 
 from tests.conftest import make_evidence
 
-
 pytestmark = pytest.mark.unit
 
 

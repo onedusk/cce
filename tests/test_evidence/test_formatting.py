@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from cce.evidence.formatting import format_evidence_for_prompt
 from cce.models.evidence import SourceQuality
 from tests.conftest import make_evidence

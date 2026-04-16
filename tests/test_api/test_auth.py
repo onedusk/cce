@@ -13,7 +13,6 @@ from fastapi.security import HTTPAuthorizationCredentials
 from cce.api.auth import generate_api_key, hash_api_key, make_auth_dependency
 from cce.jobs.store import JobStore
 
-
 pytestmark = pytest.mark.unit
 
 

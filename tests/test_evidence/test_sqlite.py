@@ -1,6 +1,6 @@
 """Tests for cce.evidence.sqlite — SQLiteEvidenceStore CRUD, dedup, search, serialization."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -279,7 +279,7 @@ async def test_serialization_roundtrip(sqlite_store):
         url="https://example.com/full",
         title="Full Title",
         author="Full Author",
-        published_at=datetime(2024, 6, 15, 12, 30, tzinfo=timezone.utc),
+        published_at=datetime(2024, 6, 15, 12, 30, tzinfo=UTC),
         excerpt="A complete evidence excerpt for roundtrip serialization testing.",
         locator="chunk:3",
         source_quality=SourceQuality(

@@ -6,7 +6,7 @@ import pytest
 
 from cce.models.content import Citation, ContentScores
 from cce.models.evidence import Evidence
-from cce.models.package import PackageLineage, PublishPackage
+from cce.models.package import PublishPackage
 from tests.conftest import make_content_unit, make_evidence, make_publish_package
 
 

@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
-import pytest
-
 from cce.jobs.store import JobStore
 from cce.models.job import JobError, JobStage, JobStatus
 from tests.conftest import make_job

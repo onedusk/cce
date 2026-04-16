@@ -1,7 +1,7 @@
 """Tests for cce.discovery.discoverer — static methods and discovery pipeline."""
 
 import hashlib
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -10,8 +10,13 @@ from cce.discovery.adapters.base import CrawlResult
 from cce.discovery.discoverer import Discoverer
 from cce.models.evidence import SourceQuality
 from cce.models.request import CurationConstraints
-from cce.policy.types import RecencyRule, ReputationRule, SourcePolicy, TopicOverride
-from tests.conftest import make_crawl_result, make_curation_request, make_evidence, make_source_policy
+from cce.policy.types import RecencyRule, ReputationRule, TopicOverride
+from tests.conftest import (
+    make_crawl_result,
+    make_curation_request,
+    make_evidence,
+    make_source_policy,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -237,7 +242,7 @@ def test_looks_marketing_negative():
 # ---------------------------------------------------------------------------
 
 
-_NOW = datetime(2026, 3, 24, tzinfo=timezone.utc)
+_NOW = datetime(2026, 3, 24, tzinfo=UTC)
 
 
 def test_passes_date_filter_no_published_at_passes():
@@ -277,7 +282,7 @@ def test_passes_date_filter_no_max_age_passes():
 
 def test_passes_date_filter_date_from_constraint():
     ev = make_evidence(
-        published_at=datetime(2022, 6, 1, tzinfo=timezone.utc),
+        published_at=datetime(2022, 6, 1, tzinfo=UTC),
         retrieved_at=_NOW,
     )
     policy = make_source_policy(recency=RecencyRule(max_age_days=None))
@@ -285,7 +290,7 @@ def test_passes_date_filter_date_from_constraint():
     assert Discoverer._passes_date_filter(ev, policy, constraints) is False
 
     ev_recent = make_evidence(
-        published_at=datetime(2023, 6, 1, tzinfo=timezone.utc),
+        published_at=datetime(2023, 6, 1, tzinfo=UTC),
         retrieved_at=_NOW,
     )
     assert Discoverer._passes_date_filter(ev_recent, policy, constraints) is True
@@ -293,7 +298,7 @@ def test_passes_date_filter_date_from_constraint():
 
 def test_passes_date_filter_date_to_constraint():
     ev = make_evidence(
-        published_at=datetime(2025, 6, 1, tzinfo=timezone.utc),
+        published_at=datetime(2025, 6, 1, tzinfo=UTC),
         retrieved_at=_NOW,
     )
     policy = make_source_policy(recency=RecencyRule(max_age_days=None))
@@ -301,7 +306,7 @@ def test_passes_date_filter_date_to_constraint():
     assert Discoverer._passes_date_filter(ev, policy, constraints) is False
 
     ev_older = make_evidence(
-        published_at=datetime(2024, 6, 1, tzinfo=timezone.utc),
+        published_at=datetime(2024, 6, 1, tzinfo=UTC),
         retrieved_at=_NOW,
     )
     assert Discoverer._passes_date_filter(ev_older, policy, constraints) is True
@@ -310,7 +315,7 @@ def test_passes_date_filter_date_to_constraint():
 def test_passes_date_filter_composes_max_age_and_constraints():
     """The tighter bound wins: max_age_days=365 vs date_from=2025-09-01."""
     ev = make_evidence(
-        published_at=datetime(2025, 6, 1, tzinfo=timezone.utc),
+        published_at=datetime(2025, 6, 1, tzinfo=UTC),
         retrieved_at=_NOW,
     )
     # max_age_days=365 → cutoff ~2025-03-24, so 2025-06-01 passes
@@ -323,7 +328,7 @@ def test_passes_date_filter_composes_max_age_and_constraints():
 def test_passes_date_filter_naive_constraint_passes():
     """Fail-open when constraint date has no timezone (naive vs aware comparison)."""
     ev = make_evidence(
-        published_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        published_at=datetime(2024, 1, 1, tzinfo=UTC),
         retrieved_at=_NOW,
     )
     policy = make_source_policy(recency=RecencyRule(max_age_days=None))
@@ -345,7 +350,7 @@ def test_passes_date_filter_naive_published_at_with_max_age_passes():
 def test_passes_date_filter_invalid_constraint_passes():
     """Fail-open on unparseable constraint dates."""
     ev = make_evidence(
-        published_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        published_at=datetime(2024, 1, 1, tzinfo=UTC),
         retrieved_at=_NOW,
     )
     policy = make_source_policy(recency=RecencyRule(max_age_days=None))
@@ -470,13 +475,13 @@ def test_cap_evidence_prefer_recent_sorts_by_date():
         id="ev_old",
         url="https://source.com/page",
         excerpt="x" * 500,
-        published_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        published_at=datetime(2020, 1, 1, tzinfo=UTC),
     )
     new_short = make_evidence(
         id="ev_new",
         url="https://source.com/page",
         excerpt="x" * 100,
-        published_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        published_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
     capped = Discoverer._cap_evidence(
         [old_long, new_short], max_per_source=1, max_total=10, prefer_recent=True
@@ -491,13 +496,13 @@ def test_cap_evidence_prefer_recent_false_preserves_length():
         id="ev_old",
         url="https://source.com/page",
         excerpt="x" * 500,
-        published_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        published_at=datetime(2020, 1, 1, tzinfo=UTC),
     )
     new_short = make_evidence(
         id="ev_new",
         url="https://source.com/page",
         excerpt="x" * 100,
-        published_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        published_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
     capped = Discoverer._cap_evidence(
         [old_long, new_short], max_per_source=1, max_total=10, prefer_recent=False
@@ -512,7 +517,7 @@ def test_cap_evidence_prefer_recent_missing_dates_sorted_last():
         id="ev_dated",
         url="https://source.com/page",
         excerpt="x" * 100,
-        published_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        published_at=datetime(2024, 1, 1, tzinfo=UTC),
     )
     undated = make_evidence(
         id="ev_undated",
@@ -784,12 +789,12 @@ def test_cap_sort_key_relevance_beats_recency():
     """High relevance + old date should beat low relevance + new date."""
     old_ev = make_evidence(
         id="ev_old",
-        published_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        published_at=datetime(2020, 1, 1, tzinfo=UTC),
         excerpt="x" * 100,
     )
     new_ev = make_evidence(
         id="ev_new",
-        published_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        published_at=datetime(2026, 1, 1, tzinfo=UTC),
         excerpt="x" * 100,
     )
     scores = {"ev_old": 0.95, "ev_new": 0.3}
@@ -803,7 +808,7 @@ def test_cap_sort_key_without_relevance_matches_old_behavior():
     """When relevance_scores=None, relevance is 0.0 — recency and length decide."""
     ev = make_evidence(
         id="ev_1",
-        published_at=datetime(2025, 6, 1, tzinfo=timezone.utc),
+        published_at=datetime(2025, 6, 1, tzinfo=UTC),
         excerpt="x" * 200,
     )
     key = Discoverer._cap_sort_key(ev, prefer_recent=True, relevance_scores=None)

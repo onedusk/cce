@@ -83,9 +83,7 @@ async def test_strict_policy_rejects_all_urls(sqlite_store):
             "https://example.com/article": make_crawl_result(
                 url="https://example.com/article"
             ),
-            "https://other.com/study": make_crawl_result(
-                url="https://other.com/study"
-            ),
+            "https://other.com/study": make_crawl_result(url="https://other.com/study"),
         },
     )
     llm = _llm()  # empty scripted list — any call fails the test

@@ -10,25 +10,22 @@ import pytest
 from fastapi import FastAPI
 
 from cce.api.app import create_app
-from cce.api.auth import generate_api_key, hash_api_key
 from cce.config.types import APIConfig, EvidenceStoreConfig
 from cce.evidence.sqlite import SQLiteEvidenceStore
 from cce.jobs.store import JobStore
 from cce.orchestrator.pipeline import Pipeline
 from tests.conftest import (
-    MockCrawlAdapter,
-    MockLLMProvider,
-    make_crawl_result,
     make_engine_config,
     make_source_policy,
 )
 from tests.test_orchestrator.conftest import (
     llm as make_llm,
+)
+from tests.test_orchestrator.conftest import (
     make_adapter,
     verifier_json,
     writer_json,
 )
-
 
 pytestmark = pytest.mark.integration
 
@@ -244,7 +241,6 @@ async def test_auth_required_rejects_unauthenticated(tmp_path: Path):
 
 async def test_pipeline_error_sets_failed_status(tmp_path: Path):
     """When pipeline raises, job status becomes FAILED with error details."""
-    from cce.llm.base import LLMResponse
 
     class FailingLLM:
         async def complete(self, messages, **kwargs):

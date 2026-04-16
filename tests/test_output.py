@@ -1,7 +1,7 @@
 """Tests for cce.output — serialization and file output."""
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -18,7 +18,6 @@ from tests.conftest import (
     make_evidence,
     make_verification_report,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -41,7 +40,7 @@ def _make_pipeline_result(*, failed: bool = False) -> PipelineResult:
         id="job_test",
         request=request,
         status=JobStatus.COMPLETED,
-        completed_at=datetime.now(timezone.utc),
+        completed_at=datetime.now(UTC),
     )
     unit = make_content_unit()
     evidence = [make_evidence(id="ev_001")]

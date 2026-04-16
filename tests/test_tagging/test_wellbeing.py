@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-
 from cce.tagging.base import TaxonomyPlugin
-from cce.tagging.wellbeing import WellBeingTaxonomy
 from tests.conftest import make_evidence
 
 

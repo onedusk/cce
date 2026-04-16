@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from cce.models.content import ContentScores
-from cce.models.evidence import Evidence, SourceQuality
+from cce.models.evidence import SourceQuality
 from cce.models.job import JobStatus
 from cce.models.request import CurationRequest
 from tests.conftest import make_evidence

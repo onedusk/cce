@@ -6,9 +6,9 @@ import pytest
 
 from cce.llm.base import LLMResponse
 from cce.verification.verifier import (
+    _VERIFIER_FULL_PROMPT,
     VERIFIER_SYSTEM_PROMPT,
     Verifier,
-    _VERIFIER_FULL_PROMPT,
 )
 from tests.conftest import MockLLMProvider, make_content_unit, make_evidence
 

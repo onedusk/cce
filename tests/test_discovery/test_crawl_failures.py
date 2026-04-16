@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import logging
 
-import pytest
-
 from cce.config.types import CrawlConfig
 from cce.discovery.adapters.base import CrawlResult
 from cce.discovery.discoverer import Discoverer
-from tests.conftest import MockCrawlAdapter, make_crawl_result, make_curation_request, make_source_policy
+from tests.conftest import (
+    MockCrawlAdapter,
+    make_crawl_result,
+    make_curation_request,
+    make_source_policy,
+)
 
 
 def _config() -> CrawlConfig:
