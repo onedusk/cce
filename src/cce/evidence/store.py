@@ -51,6 +51,15 @@ class EvidenceStore(Protocol):
         """
         ...
 
+    async def get_by_urls(self, urls: list[str]) -> list[Evidence]:
+        """Return every Evidence object whose `url` is in `urls`.
+
+        Companion to `get_existing_urls`: after the discoverer skips a set of
+        already-indexed URLs, the pipeline reuses this to pull the stored
+        evidence back into the current run.
+        """
+        ...
+
     async def exists_by_hash(self, excerpt_hash: str) -> bool:
         """Check if evidence with this excerpt hash already exists."""
         ...

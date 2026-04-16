@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 from cce.config.types import CrawlConfig
 from cce.discovery.adapters.base import CrawlAdapter, CrawlRequest, CrawlResult
 from cce.discovery.embeddings import EmbeddingProvider, EmbeddingUnavailableError
+from cce.evidence.store import EvidenceStore
 from cce.models.evidence import Evidence, SourceQuality
 from cce.models.request import CurationConstraints, CurationRequest
 from cce.policy.types import ReputationRule, SourcePolicy
@@ -51,12 +52,40 @@ class Discoverer:
         config: CrawlConfig,
         embedding_provider: EmbeddingProvider | None = None,
         embedding_batch_size: int = 64,
+        evidence_store: EvidenceStore | None = None,
     ) -> None:
         self._adapter = adapter
         self._config = config
         self._embedding = embedding_provider
         self._embedding_batch_size = embedding_batch_size
+        self._evidence_store = evidence_store
         self.last_discover_metrics: dict = {}  # Metrics from most recent discover() call
+
+    async def _split_fresh_and_reusable(
+        self, candidates: list[str]
+    ) -> tuple[list[str], list[Evidence]]:
+        """Split candidates into (fresh_urls_to_crawl, reusable_stored_evidence).
+
+        When an evidence store is wired in, URLs already indexed are moved off
+        the crawl path (saving Firecrawl cost, audit P3) and their stored
+        Evidence objects are rehydrated into the run so the rest of the
+        pipeline has material to work with. No-op when no store is wired.
+        """
+        if not candidates or self._evidence_store is None:
+            return candidates, []
+        already = await self._evidence_store.get_existing_urls(candidates)
+        if not already:
+            return candidates, []
+        fresh = [u for u in candidates if u not in already]
+        reusable = await self._evidence_store.get_by_urls(list(already))
+        logger.info(
+            "URL dedup: %d/%d candidates already indexed "
+            "(reusing %d stored evidence rows)",
+            len(candidates) - len(fresh),
+            len(candidates),
+            len(reusable),
+        )
+        return fresh, reusable
 
     async def discover(
         self,
@@ -105,11 +134,22 @@ class Discoverer:
             url for url in candidate_urls if self._passes_policy(url, effective_policy)
         ]
 
-        # Cap at max sources
-        filtered_urls = filtered_urls[: policy.max_sources_per_run]
-        logger.info("Discovery: %d URLs after policy filter", len(filtered_urls))
+        # Step 3b: Split into fresh URLs (need crawling) and reusable stored evidence
+        # from previously-indexed URLs (audit P3). Happens before the max-sources cap
+        # so the crawl budget is spent only on URLs that are actually fresh.
+        fresh_urls, reusable_evidence = await self._split_fresh_and_reusable(
+            filtered_urls
+        )
 
-        if not filtered_urls:
+        # Cap fresh URLs at max sources
+        fresh_urls = fresh_urls[: policy.max_sources_per_run]
+        logger.info(
+            "Discovery: %d fresh URLs to crawl, %d reusable evidence rows",
+            len(fresh_urls),
+            len(reusable_evidence),
+        )
+
+        if not fresh_urls and not reusable_evidence:
             logger.warning("Discovery: no URLs survived policy filter")
             self.last_discover_metrics = {
                 "crawl_success": 0,
@@ -118,15 +158,17 @@ class Discoverer:
             }
             return []
 
-        # Step 4: Crawl
-        crawl_requests = [
-            CrawlRequest(
-                url=url,
-                timeout_seconds=self._config.timeout_seconds,
-            )
-            for url in filtered_urls
-        ]
-        crawl_results = await self._adapter.crawl_many(crawl_requests)
+        # Step 4: Crawl fresh URLs (skip entirely if there are none to crawl)
+        crawl_results: list[CrawlResult] = []
+        if fresh_urls:
+            crawl_requests = [
+                CrawlRequest(
+                    url=url,
+                    timeout_seconds=self._config.timeout_seconds,
+                )
+                for url in fresh_urls
+            ]
+            crawl_results = await self._adapter.crawl_many(crawl_requests)
 
         # Step 5: Extract, filter, and normalize (with in-run dedup by excerpt hash)
         evidence: list[Evidence] = []
@@ -155,6 +197,13 @@ class Discoverer:
                 if ev.excerpt_hash not in seen_hashes:
                     seen_hashes.add(ev.excerpt_hash)
                     evidence.append(ev)
+
+        # Merge reusable evidence from previously-crawled URLs (audit P3).
+        # Same excerpt-hash dedup applies so nothing is double-counted.
+        for ev in reusable_evidence:
+            if ev.excerpt_hash not in seen_hashes:
+                seen_hashes.add(ev.excerpt_hash)
+                evidence.append(ev)
 
         # Track crawl success/failure metrics
         total_crawls = crawl_success + crawl_failed

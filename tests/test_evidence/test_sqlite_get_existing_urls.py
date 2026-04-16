@@ -1,4 +1,4 @@
-"""Tests for SQLiteEvidenceStore.get_existing_urls — pre-crawl URL dedup (audit P3)."""
+"""Tests for SQLiteEvidenceStore.get_existing_urls + get_by_urls (audit P3)."""
 
 from __future__ import annotations
 
@@ -78,3 +78,56 @@ async def test_chunking_over_lookup_limit(sqlite_store):
     result = await sqlite_store.get_existing_urls(candidates)
     assert result == set(seeded)
     assert len(result) == 600
+
+
+# ---------------------------------------------------------------------------
+# get_by_urls
+# ---------------------------------------------------------------------------
+
+
+async def test_get_by_urls_empty_input(sqlite_store):
+    assert await sqlite_store.get_by_urls([]) == []
+
+
+async def test_get_by_urls_returns_matching_evidence(sqlite_store):
+    urls = ["https://a.example.com", "https://b.example.com"]
+    await _seed_urls(sqlite_store, urls)
+
+    result = await sqlite_store.get_by_urls(urls)
+
+    assert len(result) == 2
+    assert {ev.url for ev in result} == set(urls)
+
+
+async def test_get_by_urls_ignores_unknown_urls(sqlite_store):
+    await _seed_urls(sqlite_store, ["https://seeded.example.com"])
+
+    result = await sqlite_store.get_by_urls(
+        ["https://seeded.example.com", "https://missing.example.com"]
+    )
+
+    assert len(result) == 1
+    assert result[0].url == "https://seeded.example.com"
+
+
+async def test_get_by_urls_returns_multiple_per_url(sqlite_store):
+    """Same URL can back multiple evidence rows (chunks of one page)."""
+    url = "https://article.example.com"
+    # Two distinct excerpts at the same URL — simulates chunking.
+    from tests.conftest import make_evidence
+
+    ev_a = make_evidence(
+        id="ev_chunk_a",
+        url=url,
+        excerpt="First chunk of the article with enough distinct content here.",
+    )
+    ev_b = make_evidence(
+        id="ev_chunk_b",
+        url=url,
+        excerpt="Second chunk of the article with different distinct content.",
+    )
+    await sqlite_store.put_many([ev_a, ev_b])
+
+    result = await sqlite_store.get_by_urls([url])
+
+    assert {ev.id for ev in result} == {"ev_chunk_a", "ev_chunk_b"}

@@ -90,13 +90,14 @@ class Pipeline:
         self._config = config
         self._taxonomy_plugin = taxonomy_plugin
         self._path_configs = path_configs or {}
+        self._evidence_store = evidence_store
         self._discoverer = Discoverer(
             adapter=crawl_adapter,
             config=config.crawl,
             embedding_provider=embedding_provider,
             embedding_batch_size=config.embedding.batch_size,
+            evidence_store=evidence_store,
         )
-        self._evidence_store = evidence_store
         self._writer = Writer(llm=llm)
         self._verifier = Verifier(llm=llm)
 

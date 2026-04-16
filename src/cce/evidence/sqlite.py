@@ -212,6 +212,26 @@ class SQLiteEvidenceStore:
             found.update(row[0] for row in rows)
         return found
 
+    async def get_by_urls(self, urls: list[str]) -> list[Evidence]:
+        """Return every stored Evidence row whose url is in the given list.
+
+        Used by the discoverer to rehydrate evidence for URLs that were
+        skipped by `get_existing_urls`-driven dedup. Chunked like
+        `get_existing_urls` to stay under the SQLite parameter cap.
+        """
+        if not urls:
+            return []
+        assert self._db is not None
+        evidence: list[Evidence] = []
+        for start in range(0, len(urls), _URL_LOOKUP_CHUNK):
+            chunk = urls[start : start + _URL_LOOKUP_CHUNK]
+            placeholders = ",".join("?" * len(chunk))
+            query = f"SELECT * FROM evidence WHERE url IN ({placeholders})"
+            async with self._db.execute(query, chunk) as cursor:
+                rows = await cursor.fetchall()
+            evidence.extend(self._from_row(row) for row in rows)
+        return evidence
+
     async def count(self) -> int:
         assert self._db is not None
         async with self._db.execute("SELECT COUNT(*) FROM evidence") as cursor:
