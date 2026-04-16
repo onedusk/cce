@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from threading import Lock
 from typing import Any
 
 from firecrawl import FirecrawlApp
@@ -18,13 +19,49 @@ from cce.discovery.adapters.base import CrawlRequest, CrawlResult
 logger = logging.getLogger(__name__)
 
 
+# --- Process-global rate-limit registry (audit P4, ADR-002) ---------------
+# Per-instance semaphores silently doubled the combined RPS whenever two
+# jobs constructed their own FirecrawlAdapter. The registry here shares one
+# asyncio.Semaphore across all adapters targeting the same
+# (api_key, base_url) pair within a single process, so `rate_limit_rps` is
+# the real cap Firecrawl sees.
+
+_FIRECRAWL_DEFAULT_BASE_URL = "https://api.firecrawl.dev"
+_SEMAPHORES: dict[tuple[str, str], asyncio.Semaphore] = {}
+_REGISTRY_LOCK = Lock()  # guards first-time insert; the semaphore itself is async.
+
+
+def _get_shared_semaphore(
+    *, api_key: str, base_url: str, max_rps: int
+) -> asyncio.Semaphore:
+    """Return the shared asyncio.Semaphore for (api_key, base_url), creating it once."""
+    key = (api_key, base_url)
+    with _REGISTRY_LOCK:
+        sem = _SEMAPHORES.get(key)
+        if sem is None:
+            sem = asyncio.Semaphore(max(1, max_rps))
+            _SEMAPHORES[key] = sem
+    return sem
+
+
+def _reset_firecrawl_semaphores_for_tests() -> None:
+    """Clear the module-global semaphore registry. Tests only — never call in prod."""
+    with _REGISTRY_LOCK:
+        _SEMAPHORES.clear()
+
+
 class FirecrawlAdapter:
     """Firecrawl-backed crawl adapter (v4+ SDK)."""
 
     def __init__(self, config: CrawlConfig) -> None:
         self._config = config
         self._client = FirecrawlApp(api_key=config.api_key or "")
-        self._semaphore = asyncio.Semaphore(max(1, int(config.rate_limit_rps)))
+        base_url = getattr(config, "base_url", None) or _FIRECRAWL_DEFAULT_BASE_URL
+        self._semaphore = _get_shared_semaphore(
+            api_key=config.api_key or "",
+            base_url=base_url,
+            max_rps=int(config.rate_limit_rps),
+        )
 
     async def crawl(self, request: CrawlRequest) -> CrawlResult:
         """Fetch a single URL via Firecrawl's scrape endpoint."""
