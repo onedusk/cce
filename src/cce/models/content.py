@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from cce.models.style import StyleScores
+
 
 class Citation(BaseModel):
     """A reference from content to a stored evidence object."""
@@ -74,6 +76,10 @@ class ContentUnit(BaseModel):
         description="Claim-to-evidence mapping for auditability",
     )
     scores: ContentScores
+    style_scores: StyleScores | None = Field(
+        default=None,
+        description="Programmatic style metrics from H2 scorer. None if humanization disabled.",
+    )
     lineage: ContentLineage
 
     model_config = {"frozen": True}

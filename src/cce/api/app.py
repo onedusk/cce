@@ -257,14 +257,27 @@ def _build_pipeline(
             logger.info("Taxonomy loaded: %s", taxonomy_config.name)
 
     # Path configs (optional). load_path_configs returns an empty dict on
-    # any parse/structure failure (audit A4 / ADR-006).
+    # any parse/structure failure (audit A4 / ADR-006). Try the operator
+    # file first; fall back to the committed Tier B template.
     path_configs = None
-    path_configs_path = Path("path_configs/thnklabs.yaml")
-    if path_configs_path.exists():
-        loaded = load_path_configs(path_configs_path)
-        if loaded:
-            path_configs = loaded
-            logger.info("Path configs loaded: %s", list(path_configs.keys()))
+    for candidate in (Path("path_configs/thnklabs.yaml"), Path("path_configs/default.yaml")):
+        if candidate.exists():
+            loaded = load_path_configs(candidate)
+            if loaded:
+                path_configs = loaded
+                logger.info("Path configs loaded from %s: %s", candidate, list(path_configs.keys()))
+                break
+
+    # Humanization scorer (M02, optional). Constructed only when the master
+    # switch is on — markers YAML must exist, load_markers raises otherwise.
+    scorer = None
+    if config.humanization.enabled:
+        from cce.config.markers import load_markers
+        from cce.synthesis.scoring import Scorer
+
+        markers = load_markers(config.humanization.markers_path)
+        scorer = Scorer(thresholds=config.humanization.thresholds, markers=markers)
+        logger.info("Humanization scorer ready (markers: %s)", config.humanization.markers_path)
 
     return Pipeline(
         config=config,
@@ -274,6 +287,7 @@ def _build_pipeline(
         embedding_provider=embedding_provider,
         taxonomy_plugin=taxonomy_plugin,
         path_configs=path_configs,
+        scorer=scorer,
     )
 
 

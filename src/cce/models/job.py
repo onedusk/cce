@@ -29,6 +29,7 @@ class JobStage(StrEnum):
     EXTRACT = "extract"
     TAG = "tag"
     WRITE = "write"
+    SCORE = "score"  # Humanization M02 — programmatic style scorer
     VERIFY = "verify"
     PUBLISH = "publish"
 
@@ -101,6 +102,20 @@ class VerifyMetrics(TypedDict):
 
 class PublishMetrics(TypedDict):
     token_usage: dict[str, int]
+
+
+class ScoreMetrics(TypedDict):
+    """Per-iteration output of the programmatic style scorer (humanization M02)."""
+
+    path: str
+    sentence_length_stddev: float
+    suppressed_vocab_hits: int
+    type_token_ratio: float
+    formulaic_transition_count: int
+    contrastive_frame_count: int
+    hedging_phrase_count: int
+    word_count: int
+    humanization_pass: bool
 
 
 class Job(BaseModel):

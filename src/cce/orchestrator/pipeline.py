@@ -27,6 +27,7 @@ from cce.models.package import PackageLineage, PublishPackage
 from cce.models.paths import PathConfig
 from cce.models.request import CurationRequest
 from cce.policy.types import SourcePolicy
+from cce.synthesis.scoring import Scorer
 from cce.synthesis.writer import Writer
 from cce.tagging.base import TaxonomyPlugin, TaxonomyUnavailableError
 from cce.verification.gate import GateDecision, GateResult, QualityGate
@@ -162,6 +163,7 @@ class Pipeline:
         embedding_provider: EmbeddingProvider | None = None,
         taxonomy_plugin: TaxonomyPlugin | None = None,
         path_configs: dict[str, PathConfig] | None = None,
+        scorer: Scorer | None = None,
     ) -> None:
         self._config = config
         self._taxonomy_plugin = taxonomy_plugin
@@ -177,6 +179,8 @@ class Pipeline:
         )
         self._writer = Writer(llm=llm)
         self._verifier = Verifier(llm=llm)
+        # Humanization components (M02+). All optional — None = disabled.
+        self._scorer = scorer
 
     # DEFERRED (audit M1): extract _run_discovery / _run_tag /
     # _run_write_verify_paths / _build_package helpers when a non-cosmetic
@@ -616,6 +620,34 @@ class Pipeline:
                     )
                 )
 
+            # Programmatic style scoring (humanization M02). Soft signal in
+            # v1 — the gate still evaluates `unit.scores` (ContentScores)
+            # only; style scores inform M03 editor invocation and feed into
+            # StageRecord.metrics for threshold calibration. See ADR-002/004/006.
+            if self._scorer is not None:
+                score_start = datetime.now(UTC)
+                style_scores = self._scorer.score(unit.content)
+                unit = unit.model_copy(update={"style_scores": style_scores})
+                if job is not None:
+                    job.stages.append(
+                        StageRecord(
+                            stage=JobStage.SCORE,
+                            started_at=score_start,
+                            completed_at=datetime.now(UTC),
+                            metrics={
+                                "path": path,
+                                "sentence_length_stddev": style_scores.sentence_length_stddev,
+                                "suppressed_vocab_hits": style_scores.suppressed_vocab_hits,
+                                "type_token_ratio": style_scores.type_token_ratio,
+                                "formulaic_transition_count": style_scores.formulaic_transition_count,
+                                "contrastive_frame_count": style_scores.contrastive_frame_count,
+                                "hedging_phrase_count": style_scores.hedging_phrase_count,
+                                "word_count": style_scores.word_count,
+                                "humanization_pass": style_scores.humanization_pass,
+                            },
+                        )
+                    )
+
             # Verify
             verify_start = datetime.now(UTC)
             jurisdiction = (
@@ -660,7 +692,8 @@ class Pipeline:
                 }
             )
 
-            # Update unit scores from verification
+            # Update unit scores from verification. `style_scores` carries
+            # through from the humanization M02 scoring step above.
             unit = ContentUnit(
                 id=unit.id,
                 path=unit.path,
@@ -673,6 +706,7 @@ class Pipeline:
                     coverage=report.pass_rate,
                     source_diversity=unit.scores.source_diversity,
                 ),
+                style_scores=unit.style_scores,
                 lineage=unit.lineage,
             )
 
