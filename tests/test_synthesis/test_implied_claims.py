@@ -174,9 +174,7 @@ async def test_dismissed_topic_extraction_uses_zero_temperature(markers):
     cited = [make_evidence() for _ in range(10)]
     checker, llm, _store = _make_checker(markers=markers, counter_evidence=counter)
 
-    await checker.check(
-        "Unlike sleeping pills, CBT-I works.", cited_evidence=cited
-    )
+    await checker.check("Unlike sleeping pills, CBT-I works.", cited_evidence=cited)
 
     # The first (and only) LLM call is the topic extraction
     assert llm.calls
