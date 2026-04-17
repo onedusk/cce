@@ -272,6 +272,7 @@ def _build_pipeline(
     # switch is on — markers YAML must exist, load_markers raises otherwise.
     scorer = None
     editor = None
+    implied_claim_checker = None
     if config.humanization.enabled:
         from cce.config.markers import load_markers
         from cce.synthesis.scoring import Scorer
@@ -287,6 +288,23 @@ def _build_pipeline(
             editor = Editor(llm=llm, config=config.humanization.editor)
             logger.info("Humanization editor ready (temp=%s)", config.humanization.editor.temperature)
 
+        # Implied-claim checker (M04, optional). Triple-gate: master +
+        # per-stage. Reuses the markers loaded above for the scorer.
+        if config.humanization.implied_claims.enabled:
+            from cce.synthesis.implied_claims import ImpliedClaimChecker
+
+            implied_claim_checker = ImpliedClaimChecker(
+                llm=llm,
+                evidence_store=evidence_store,
+                config=config.humanization.implied_claims,
+                markers=markers,
+            )
+            logger.info(
+                "Implied-claim checker ready (strategy=%s, release_valve=%.2f)",
+                config.humanization.implied_claims.search_strategy,
+                config.humanization.implied_claims.dismissal_release_valve_ratio,
+            )
+
     return Pipeline(
         config=config,
         crawl_adapter=crawl_adapter,
@@ -297,6 +315,7 @@ def _build_pipeline(
         path_configs=path_configs,
         scorer=scorer,
         editor=editor,
+        implied_claim_checker=implied_claim_checker,
     )
 
 

@@ -29,6 +29,7 @@ from cce.models.request import CurationRequest
 from cce.models.style import StyleScores
 from cce.policy.types import SourcePolicy
 from cce.synthesis.editor import Editor
+from cce.synthesis.implied_claims import ImpliedClaimAnnotation, ImpliedClaimChecker
 from cce.synthesis.scoring import Scorer
 from cce.synthesis.writer import Writer
 from cce.tagging.base import TaxonomyPlugin, TaxonomyUnavailableError
@@ -167,6 +168,7 @@ class Pipeline:
         path_configs: dict[str, PathConfig] | None = None,
         scorer: Scorer | None = None,
         editor: Editor | None = None,
+        implied_claim_checker: ImpliedClaimChecker | None = None,
     ) -> None:
         self._config = config
         self._taxonomy_plugin = taxonomy_plugin
@@ -185,6 +187,7 @@ class Pipeline:
         # Humanization components (M02+). All optional — None = disabled.
         self._scorer = scorer
         self._editor = editor
+        self._implied_claim_checker = implied_claim_checker
 
     # DEFERRED (audit M1): extract _run_discovery / _run_tag /
     # _run_write_verify_paths / _build_package helpers when a non-cosmetic
@@ -663,12 +666,27 @@ class Pipeline:
                 and style_scores is not None
                 and not style_scores.humanization_pass
             ):
+                # Implied-claim annotations (humanization M04). Runs before
+                # the editor so its rewrite hints feed into the editor prompt.
+                # Skipped when the checker isn't wired — annotations stay [].
+                annotations: list[ImpliedClaimAnnotation] = []
+                if self._implied_claim_checker is not None:
+                    annotations = await self._implied_claim_checker.check(
+                        unit.content, cited_evidence=path_evidence
+                    )
+                    _log.info(
+                        "ImpliedClaimChecker: %d annotation(s) for path '%s' iter %d",
+                        len(annotations),
+                        path,
+                        iteration,
+                    )
+
                 edit_start = datetime.now(UTC)
                 editor_output = await self._editor.edit(
                     unit,
                     path_config=path_config,
                     scores=style_scores,
-                    annotations=None,  # M04 will populate this
+                    annotations=[a.rewrite_hint for a in annotations] or None,
                 )
                 if _tokens and editor_output.token_usage:
                     for key in _tokens:
