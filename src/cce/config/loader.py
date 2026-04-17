@@ -20,9 +20,13 @@ import yaml
 from cce.config.types import (
     APIConfig,
     CrawlConfig,
+    EditorConfig,
     EmbeddingConfig,
     EngineConfig,
     EvidenceStoreConfig,
+    HumanizationConfig,
+    HumanizationThresholds,
+    ImpliedClaimsConfig,
     LLMConfig,
     QualityGateConfig,
     default_quality_gate_profiles,
@@ -68,6 +72,7 @@ def load_config(config_path: str | Path | None = None) -> EngineConfig:
         embedding=_load_embedding_config(file_data.get("embedding", {})),
         quality_gate=_load_gate_config(file_data.get("quality_gate", {})),
         api=_load_api_config(file_data.get("api", {})),
+        humanization=_load_humanization_config(file_data.get("humanization", {})),
         engine_version=file_data.get("engine_version", "0.1.0"),
     )
 
@@ -159,6 +164,33 @@ def _load_gate_config(file: dict) -> dict[str, QualityGateConfig]:
         if isinstance(profile_data, dict):
             result[profile_name] = QualityGateConfig(**profile_data)
     return result
+
+
+def _load_humanization_config(file: dict) -> HumanizationConfig:
+    """Load HumanizationConfig from YAML, with env-var overlay for the coarse knobs.
+
+    Granular threshold tuning belongs in YAML where reviewers can see it diffed;
+    env vars are provided only for the master switch and the marker file path so
+    operators can flip humanization on/off without editing YAML.
+    """
+    enabled_raw = os.getenv("CCE_HUMANIZATION_ENABLED", file.get("enabled", False))
+
+    thresholds_data = file.get("thresholds", {}) or {}
+    editor_data = file.get("editor", {}) or {}
+    implied_data = file.get("implied_claims", {}) or {}
+
+    return HumanizationConfig(
+        enabled=_coerce_bool(enabled_raw),
+        markers_path=Path(
+            os.getenv(
+                "CCE_HUMANIZATION_MARKERS_PATH",
+                file.get("markers_path", "config/humanization_markers.yaml"),
+            )
+        ),
+        thresholds=HumanizationThresholds(**thresholds_data),
+        editor=EditorConfig(**editor_data),
+        implied_claims=ImpliedClaimsConfig(**implied_data),
+    )
 
 
 def _load_api_config(file: dict) -> APIConfig:

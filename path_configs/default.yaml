@@ -1,0 +1,46 @@
+# Default path-config template (Tier B word / evidence budgets).
+#
+# Tier B (2000 / 1500 / 1000 words, 40 / 30 / 20 evidence caps) is the
+# empirically validated sweet spot for this pipeline — see
+# docs/internal/research/content_length_tiers.md for the data. Copy this
+# file to your own <operator>.yaml and point at it via the pipeline's
+# path_configs_path; add operator-specific prompt addenda and section
+# requirements as needed.
+
+paths:
+  - id: learn
+    name: "Learn"
+    description: "Foundational understanding — what it is, how it works, why it matters"
+    tone: pedagogical
+    structure: essay
+    depth: foundational
+    section_requirements:
+      - "overview"
+      - "key_findings"
+      - "closing_frame"
+    max_words: 2000
+    max_evidence: 40          # Tier B cap (humanization M01)
+
+  - id: explore
+    name: "Explore"
+    description: "Context, culture, depth — where it shows up and what research says"
+    tone: conversational
+    structure: reference
+    depth: contextual
+    section_requirements:
+      - "cultural_context"
+      - "research_connections"
+      - "curated_resources"
+    max_words: 1500
+    max_evidence: 30          # Tier B cap (humanization M01)
+
+  - id: apply
+    name: "Apply"
+    description: "Practical, usable actions — what to do with this understanding"
+    tone: conversational
+    structure: actionable
+    depth: practical
+    section_requirements:
+      - "practical_actions"
+    max_words: 1000
+    max_evidence: 20          # Tier B cap (humanization M01)

@@ -52,6 +52,7 @@ The pipeline flows: `CurationRequest → SourcePolicy → Discoverer → Evidenc
 - Verifier is a separate role that checks every claim against evidence
 - Quality gate routes to PASS (publish), FAIL (rewrite loop), or REVIEW (human)
 - Writer-verifier loop iterates up to max iterations per risk profile (2–4)
+- **Humanization** (opt-in via `EngineConfig.humanization.enabled`, default off): programmatic style scorer + Editor agent + implied-claim checker sit between writer and verifier. Marker lists (suppressed vocabulary, hedging phrases, formulaic transitions, contrastive-frame regex) live in `config/humanization_markers.yaml` — operator-editable, updated without code changes to track the AI-marker coevolution problem. See `docs/decompose/humanization/` for full design.
 
 **Abstractions use `typing.Protocol`**, not ABC:
 - `LLMProvider` (`llm/base.py`) — implemented by `AnthropicProvider`

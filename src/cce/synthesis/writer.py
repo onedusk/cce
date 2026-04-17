@@ -45,6 +45,11 @@ not directly stated in the provided evidence excerpts.
 5. If evidence sources conflict, explicitly state the conflict and cite both sides.
 6. Use direct quotes sparingly -- paraphrase evidence accurately and cite it.
 
+STYLE GUIDANCE (light -- the editor handles details):
+- Vary sentence length. Mix short fragments with longer constructions.
+- Make declarative claims where the evidence is strong. Reserve hedging \
+("may", "suggests", "could") for genuinely uncertain claims.
+
 OUTPUT FORMAT:
 Return a JSON object with exactly these fields:
 {

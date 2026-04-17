@@ -1,0 +1,68 @@
+# Marker lists for the humanization scorer, editor, and implied-claim checker.
+#
+# Update this file (no code change required) when new AI-fingerprint markers
+# emerge or obsolete ones are confirmed declining. The research literature calls
+# this the coevolution problem — "delve" is already declining in AI output as
+# of 2025 because it got so much attention. See
+# docs/internal/research/ai_writing_vs_human_writing.md.
+
+suppressed_vocabulary:
+  # Juzek/Ward focal words (COLING 2025) — include plurals/inflections that
+  # the scorer matches case-insensitively via its word-boundary regex.
+  - delve
+  - delves
+  - delving
+  - intricate
+  - nuanced
+  - underscore
+  - underscores
+  - showcasing
+  - comprehensive
+  - multifaceted
+  - pivotal
+  - commendable
+  - meticulous
+  - realm
+  - landscape
+  - tapestry
+  - crucial
+  - robust
+  # Stanford HAI top-10 markers (Liang et al. 2024)
+  - across
+  - additionally
+  - enhancing
+  - exhibited
+  - insights
+  - notably
+  - particularly
+  - within
+
+hedging_phrases:
+  - "it should be noted that"
+  - "it is important to note"
+  - "this suggests that"
+  - "research suggests"
+  - "may be effective"
+  - "from a broader perspective"
+  - "generally speaking"
+  - "in many ways"
+
+formulaic_transitions:
+  - "Furthermore,"
+  - "Additionally,"
+  - "Moreover,"
+  - "In conclusion,"
+  - "On the other hand,"
+  - "In contrast,"
+  - "Firstly,"
+  - "Secondly,"
+
+contrastive_patterns:
+  # "Unlike X," — X may be multi-word; lazy to avoid crossing clause boundaries
+  - '\bunlike\s+[\w\s]+?,'
+  # "not just X but Y" / "not only X but Y"
+  - '\bnot\s+(just|only)\s+[\w\s]+?,?\s+but\b'
+  # "rather than X"
+  - '\brather than\s+'
+  # "it's not X, it's Y" (with or without apostrophe)
+  - "\\bit'?s not (about\\s+)?[\\w\\s]+?,?\\s+it'?s\\s+(about\\s+)?"

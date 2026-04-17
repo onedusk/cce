@@ -8,7 +8,7 @@ env vars or config files directly.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
 from pydantic import BaseModel, Field
 
@@ -184,6 +184,119 @@ class APIConfig(BaseModel):
     )
 
 
+class HumanizationThresholds(BaseModel):
+    """Pass/fail thresholds for the programmatic style scorer (H2)."""
+
+    min_sentence_length_stddev: float = Field(
+        default=8.0,
+        ge=0.0,
+        description="Below this is 'AI-flat'. Source: ai_writing_vs_human_writing.md.",
+    )
+    max_suppressed_vocab_hits_per_1000: float = Field(
+        default=3.0,
+        ge=0.0,
+        description="Density tolerance for suppressed vocabulary (per 1000 words).",
+    )
+    min_type_token_ratio: float = Field(
+        default=0.45,
+        ge=0.0,
+        le=1.0,
+        description="Lexical diversity floor. Provisional pre-calibration.",
+    )
+    max_formulaic_transitions_per_1000: float = Field(
+        default=2.0,
+        ge=0.0,
+        description="Density tolerance for 'Furthermore', 'Additionally', etc.",
+    )
+    max_contrastive_frames_per_1000: float = Field(
+        default=5.0,
+        ge=0.0,
+        description="Density tolerance for contrastive frames. Above triggers H4.",
+    )
+    max_hedging_density_per_1000: float = Field(
+        default=8.0,
+        ge=0.0,
+        description="Density tolerance for hedging phrases.",
+    )
+
+
+class EditorConfig(BaseModel):
+    """Editor agent configuration (H3)."""
+
+    enabled: bool = Field(
+        default=False,
+        description="Independent kill-switch — lets H1+H2 ship without H3.",
+    )
+    model: str | None = Field(
+        default=None,
+        description="Optional model override. None = inherit from LLMConfig.model.",
+    )
+    temperature: float = Field(
+        default=0.4,
+        ge=0.0,
+        le=2.0,
+        description="Higher than writer (0.2). Style work benefits from variance.",
+    )
+    max_words_drift_pct: float = Field(
+        default=0.10,
+        ge=0.0,
+        le=1.0,
+        description="Tolerance for word-count drift vs PathConfig.max_words.",
+    )
+
+
+class ImpliedClaimsConfig(BaseModel):
+    """Implied-claim checker configuration (H4)."""
+
+    enabled: bool = Field(
+        default=False,
+        description="Independent kill-switch for H4.",
+    )
+    search_strategy: Literal["keyword", "embedding", "llm_extract"] = Field(
+        default="llm_extract",
+        description=(
+            "How to find counter-evidence for a dismissed side. v1: extract "
+            "counter-topic via LLM, then call EvidenceStore.search(topic=...). "
+            "'embedding' is a future upgrade once Phase-2 vectors are addressable "
+            "per-claim."
+        ),
+    )
+    dismissal_release_valve_ratio: float = Field(
+        default=0.15,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "If counter-evidence <= this fraction of total cited evidence, the "
+            "contrast may stand with a brief qualifier rather than a full "
+            "spectrum rewrite."
+        ),
+    )
+    counter_evidence_search_limit: int = Field(
+        default=10,
+        ge=1,
+        description="Max evidence items fetched when checking the dismissed side.",
+    )
+
+
+class HumanizationConfig(BaseModel):
+    """Master humanization config attached to EngineConfig."""
+
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "Master switch. When False, scoring/editor/implied-claim stages "
+            "skip entirely — pipeline behaves identically to pre-humanization."
+        ),
+    )
+    markers_path: Path = Field(
+        default=Path("config/humanization_markers.yaml"),
+        description="Path to the marker-lists YAML (vocab, hedging, transitions, regex).",
+    )
+    thresholds: HumanizationThresholds = Field(default_factory=HumanizationThresholds)
+    editor: EditorConfig = Field(default_factory=EditorConfig)
+    implied_claims: ImpliedClaimsConfig = Field(default_factory=ImpliedClaimsConfig)
+
+
 class EngineConfig(BaseModel):
     """Top-level engine configuration. Constructed by config/loader.py."""
 
@@ -196,4 +309,5 @@ class EngineConfig(BaseModel):
         description="Quality gate thresholds keyed by risk profile name",
     )
     api: APIConfig = Field(default_factory=APIConfig)
+    humanization: HumanizationConfig = Field(default_factory=HumanizationConfig)
     engine_version: str = Field(default="0.1.0")
