@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 
 import pytest
@@ -40,8 +39,9 @@ def _editor(*scripted_responses: str) -> tuple[Editor, MockLLMProvider]:
     return editor, llm
 
 
-def _edit_response(content: str, notes: str = "rewritten for variance") -> str:
-    return json.dumps({"edited_content": content, "notes": notes})
+def _edit_response(content: str, _notes: str = "") -> str:
+    """Build a sentinel-delimited editor response for the new output format."""
+    return f"=== EDITED START ===\n{content}\n=== EDITED END ==="
 
 
 def test_editor_system_prompt_contains_hard_constraints():
@@ -144,8 +144,10 @@ async def test_editor_succeeded_requires_citations_preserved_and_content():
     assert out_drifted.succeeded is False
 
 
-async def test_editor_returns_failure_on_invalid_json():
-    editor, _llm = _editor("not JSON {{{{ malformed")
+async def test_editor_returns_failure_on_missing_sentinels():
+    """When the LLM ignores the sentinel format entirely, edited_content
+    is empty and the editor reports failure."""
+    editor, _llm = _editor("Some prose that ignored the sentinel format.")
     unit = _make_unit("Original [ev:abc].")
 
     out = await editor.edit(unit)
@@ -154,6 +156,37 @@ async def test_editor_returns_failure_on_invalid_json():
     assert out.succeeded is False
     # Original citations weren't preserved (output is empty set != {[ev:abc]})
     assert out.citations_preserved is False
+
+
+async def test_editor_tolerates_missing_end_sentinel():
+    """If the LLM emits the start sentinel but forgets the end one,
+    take everything after the start as the edited content. This is the
+    most common partial-format failure mode."""
+    editor, _llm = _editor(
+        "=== EDITED START ===\nRewritten body [ev:abc] without an end marker."
+    )
+    unit = _make_unit("Original body [ev:abc].")
+
+    out = await editor.edit(unit)
+
+    assert "Rewritten body" in out.edited_content
+    assert out.citations_preserved is True
+    assert out.succeeded is True
+
+
+async def test_editor_tolerates_preamble_before_start_sentinel():
+    """If the LLM adds chatty preamble before the start sentinel
+    (against instructions), still extract just the sentinel-bracketed part."""
+    editor, _llm = _editor(
+        "Sure, I'll rewrite this for you:\n\n"
+        "=== EDITED START ===\nClean body [ev:abc].\n=== EDITED END ==="
+    )
+    unit = _make_unit("Original [ev:abc].")
+
+    out = await editor.edit(unit)
+
+    assert out.edited_content == "Clean body [ev:abc]."
+    assert out.succeeded is True
 
 
 async def test_editor_uses_configured_temperature():

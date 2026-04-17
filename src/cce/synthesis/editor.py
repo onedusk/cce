@@ -26,7 +26,6 @@ from cce.llm.retry import with_llm_retry
 from cce.models.content import ContentUnit
 from cce.models.paths import PathConfig
 from cce.models.style import StyleScores
-from cce.parsing import extract_json
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +36,17 @@ logger = logging.getLogger(__name__)
 # silently treated as "preserved" by the citation drift check.
 _CITATION_RE = re.compile(r"\[ev:[^\]]+\]")
 _WORD_RE = re.compile(r"\b[\w'-]+\b")
+
+# Sentinel-delimited output format. Replaces JSON wrapping for the editor's
+# response (humanization 2026-04-17 follow-up): wrapping a 12 KB markdown
+# body with em dashes / code blocks / quotes inside JSON has a ~22% parse
+# failure rate per the live-run logs. Sentinels are escape-free.
+_EDITED_START = "=== EDITED START ==="
+_EDITED_END = "=== EDITED END ==="
+_EDITED_RE = re.compile(
+    rf"{re.escape(_EDITED_START)}\s*\n(.*?)\n\s*{re.escape(_EDITED_END)}",
+    re.DOTALL,
+)
 
 
 EDITOR_SYSTEM_PROMPT = """\
@@ -60,9 +70,11 @@ robust, comprehensive, multifaceted, pivotal, etc.) with natural alternatives.
 - Replace hyperbolic descriptors (groundbreaking, vital, invaluable, profound) \
 with calibrated language that matches the actual significance of the claim.
 - Reduce em dash (—) usage. AI prose overuses em dashes by roughly 5-10x \
-compared to typical human writing. Replace most em dashes with commas, \
-periods, parentheses, or full sentence breaks. Reserve em dashes for genuine \
-parenthetical asides where no other punctuation works as well.
+compared to typical human writing. When removing one, PREFER splitting the \
+result into a short fragment plus a longer sentence (which increases \
+sentence-length variance) over collapsing into a single medium sentence \
+with a comma. Reserve em dashes for genuine parenthetical asides where no \
+other punctuation works as well.
 - Vary sentence length — mix short fragments with longer constructions.
 - Restructure paragraphs that follow a rigid topic-sentence / evidence / \
 summary template.
@@ -75,11 +87,14 @@ suggests X may be effective" to "X works" where the evidence is strong.
 acknowledge where the dismissed side is valid in context.
 
 OUTPUT FORMAT:
-Return a JSON object with exactly these fields:
-{
-  "edited_content": "<rewritten markdown with all [ev:ID] markers preserved>",
-  "notes": "<brief summary of what you changed and why>"
-}\
+Output the rewritten content as plain markdown — no JSON wrapper, no \
+preamble, no explanation. Begin with this exact line on its own:
+=== EDITED START ===
+Then output the rewritten markdown body. Every [ev:ID] citation marker from \
+the input must appear in your output, attached to the same factual claim.
+End with this exact line on its own:
+=== EDITED END ===
+Output nothing after the end marker.\
 """
 
 
@@ -216,10 +231,14 @@ class Editor:
         word_count_before: int,
         token_usage: dict[str, int],
     ) -> EditorOutput:
-        """Parse JSON response and verify citation preservation."""
-        parsed = extract_json(raw) or {}
-        edited = str(parsed.get("edited_content", ""))
-        notes = str(parsed.get("notes", ""))
+        """Parse the sentinel-delimited response and verify citations preserved.
+
+        The editor's output format uses ``=== EDITED START ===`` /
+        ``=== EDITED END ===`` markers around the rewritten markdown — no
+        JSON wrapping. JSON wrapping had a ~22% parse failure rate on
+        long markdown bodies in the live run; sentinels are escape-free.
+        """
+        edited = _extract_edited_content(raw)
 
         edited_citations = _extract_citation_ids(edited)
         preserved = edited_citations == original_citations
@@ -237,7 +256,7 @@ class Editor:
 
         return EditorOutput(
             edited_content=edited,
-            notes=notes,
+            notes="",  # legacy field — sentinel format does not carry notes
             citations_preserved=preserved,
             word_count_before=word_count_before,
             word_count_after=_word_count(edited),
@@ -254,3 +273,22 @@ def _extract_citation_ids(content: str) -> set[str]:
 def _word_count(content: str) -> int:
     """Body word count with citation markers stripped."""
     return len(_WORD_RE.findall(_CITATION_RE.sub("", content)))
+
+
+def _extract_edited_content(raw: str) -> str:
+    """Extract the edited markdown body from a sentinel-delimited response.
+
+    Tolerates: preamble before the start sentinel, missing end sentinel
+    (takes everything after the start), and trailing whitespace. Returns
+    empty string only when the LLM ignored the format instructions
+    completely (no start sentinel anywhere).
+    """
+    raw = raw.replace("\r\n", "\n").strip()
+    match = _EDITED_RE.search(raw)
+    if match:
+        return match.group(1).strip()
+    # Graceful fallback: no end sentinel — take everything after the start.
+    start_idx = raw.find(_EDITED_START)
+    if start_idx != -1:
+        return raw[start_idx + len(_EDITED_START) :].strip()
+    return ""

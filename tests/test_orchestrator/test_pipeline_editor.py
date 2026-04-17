@@ -111,8 +111,9 @@ def _human_writer_json() -> str:
     )
 
 
-def _editor_response(content: str, notes: str = "rewritten") -> str:
-    return json.dumps({"edited_content": content, "notes": notes})
+def _editor_response(content: str, _notes: str = "") -> str:
+    """Build a sentinel-delimited editor response for the new output format."""
+    return f"=== EDITED START ===\n{content}\n=== EDITED END ==="
 
 
 def _llm(*scripted: str) -> MockLLMProvider:

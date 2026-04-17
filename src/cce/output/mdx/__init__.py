@@ -16,6 +16,38 @@ from cce.output.mdx.evidence import export_evidence
 from cce.output.mdx.formatter import format_mdx_page
 from cce.output.mdx.meta import merge_topic_meta
 
+# Writer's gap-acknowledgment marker — internal scaffolding that must NOT
+# leak into published MDX. The writer emits these instead of fabricating
+# when evidence is thin (per WRITER_SYSTEM_PROMPT rule 4). The MDX emitter
+# strips them from the body and reports the descriptions in meta.json so
+# operators can see what was missing without readers seeing literal
+# placeholder text in published copy.
+_GAP_RE = re.compile(r"\[INSUFFICIENT EVIDENCE:\s*([^\]]*)\]", re.DOTALL)
+
+
+def _strip_evidence_gaps(content: str) -> tuple[str, list[str]]:
+    """Remove [INSUFFICIENT EVIDENCE: ...] markers; return cleaned content + descriptions.
+
+    Inline markers leave a trailing punctuation hole in their host sentence
+    (e.g. "the mechanisms are ."). That's acceptable: the alternative is
+    to drop the entire enclosing sentence, which risks dropping cited
+    surrounding claims. Editorial review of the meta.json gap list is the
+    intended cleanup path before final publish.
+    """
+    gaps: list[str] = []
+
+    def _collect(m: re.Match) -> str:
+        text = m.group(1).strip()
+        if text:
+            gaps.append(text)
+        return ""
+
+    cleaned = _GAP_RE.sub(_collect, content)
+    # Collapse runs of 3+ newlines created by removed standalone markers
+    # back into the standard paragraph break.
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned, gaps
+
 
 @dataclass(frozen=True)
 class EmitResult:
@@ -78,9 +110,19 @@ def emit_mdx(
     paths_written: list[str] = []
 
     # Write page.mdx per ContentUnit
+    evidence_gaps_by_path: dict[str, list[str]] = {}
     for unit in package.units:
         path_dir = topic_dir / unit.path
         path_dir.mkdir(parents=True, exist_ok=True)
+
+        # Strip writer's gap-acknowledgment markers before rendering. The
+        # descriptions surface in meta.json so operators can audit gaps
+        # without readers seeing internal scaffolding in published copy.
+        cleaned_content, gaps = _strip_evidence_gaps(unit.content)
+        if gaps:
+            evidence_gaps_by_path[unit.path] = gaps
+        if cleaned_content != unit.content:
+            unit = unit.model_copy(update={"content": cleaned_content})
 
         mdx_content = format_mdx_page(
             unit,
@@ -105,6 +147,7 @@ def emit_mdx(
         lineage=package.lineage,
         job_id=package.job_id,
         curated_at=curated_at,
+        evidence_gaps=evidence_gaps_by_path or None,
     )
     files_written += 1
 

@@ -135,7 +135,8 @@ def _ai_flat_no_contrast() -> str:
 
 
 def _editor_response(content: str) -> str:
-    return json.dumps({"edited_content": content, "notes": "rewritten with spectrum"})
+    """Build a sentinel-delimited editor response for the new output format."""
+    return f"=== EDITED START ===\n{content}\n=== EDITED END ==="
 
 
 def _topic_extract_response(topic: str) -> str:

@@ -97,6 +97,92 @@ class TestEmitMdx:
         assert "scores" in meta
         assert "jobId" in meta
 
+    def test_strips_insufficient_evidence_markers_from_body(self, tmp_path):
+        """Writer's [INSUFFICIENT EVIDENCE: ...] markers must not leak into
+        published copy — they're internal scaffolding for the verifier."""
+        unit = make_content_unit(
+            path="learn",
+            content=(
+                "First claim [ev:ev_a] is supported.\n\n"
+                "[INSUFFICIENT EVIDENCE: No data on blue zone activity patterns.]\n\n"
+                "Inline mention before the gap [ev:ev_a] but the rest is "
+                "[INSUFFICIENT EVIDENCE: not detailed in the available evidence].\n\n"
+                "Final claim [ev:ev_a]."
+            ),
+            citations=[Citation(evidence_id="ev_a", url="https://a.com")],
+        )
+        pkg = make_publish_package(
+            units=[unit], evidence=[make_evidence(id="ev_a", url="https://a.com")]
+        )
+        emit_mdx(pkg, tmp_path, topic_slug="test")
+
+        mdx = (tmp_path / "test" / "learn" / "page.mdx").read_text()
+        assert "INSUFFICIENT EVIDENCE" not in mdx
+        # Surrounding cited claims must survive
+        assert "[^1]" in mdx
+        assert "First claim" in mdx
+        assert "Final claim" in mdx
+
+    def test_records_stripped_gaps_in_meta_json(self, tmp_path):
+        """Stripped gap descriptions surface in meta.json under evidenceGaps,
+        keyed by path, so operators can audit what was missing."""
+        unit_learn = make_content_unit(
+            path="learn",
+            content=(
+                "Body [ev:ev_a].\n"
+                "[INSUFFICIENT EVIDENCE: No coverage of blue zone activity patterns.]\n"
+                "[INSUFFICIENT EVIDENCE: Walking-creativity link not detailed.]"
+            ),
+            citations=[Citation(evidence_id="ev_a", url="https://a.com")],
+        )
+        unit_apply = make_content_unit(
+            path="apply",
+            content="Clean apply body [ev:ev_a].",
+            citations=[Citation(evidence_id="ev_a", url="https://a.com")],
+        )
+        pkg = make_publish_package(
+            units=[unit_learn, unit_apply],
+            evidence=[make_evidence(id="ev_a", url="https://a.com")],
+        )
+        emit_mdx(pkg, tmp_path, topic_slug="movement")
+
+        meta = json.loads((tmp_path / "movement" / "meta.json").read_text())
+        assert "evidenceGaps" in meta
+        assert "learn" in meta["evidenceGaps"]
+        assert len(meta["evidenceGaps"]["learn"]) == 2
+        assert "apply" not in meta["evidenceGaps"]  # no gaps -> no key
+
+    def test_reemit_clears_stale_evidence_gaps(self, tmp_path):
+        """A re-run with no gaps must remove a previous run's evidenceGaps,
+        not leave the stale list behind."""
+        unit_with_gap = make_content_unit(
+            path="learn",
+            content="Body [ev:ev_a]. [INSUFFICIENT EVIDENCE: stale issue.]",
+            citations=[Citation(evidence_id="ev_a", url="https://a.com")],
+        )
+        unit_clean = make_content_unit(
+            path="learn",
+            content="Body [ev:ev_a]. Now complete.",
+            citations=[Citation(evidence_id="ev_a", url="https://a.com")],
+        )
+        ev = [make_evidence(id="ev_a", url="https://a.com")]
+
+        emit_mdx(
+            make_publish_package(units=[unit_with_gap], evidence=ev),
+            tmp_path,
+            topic_slug="test",
+        )
+        meta = json.loads((tmp_path / "test" / "meta.json").read_text())
+        assert "evidenceGaps" in meta
+
+        emit_mdx(
+            make_publish_package(units=[unit_clean], evidence=ev),
+            tmp_path,
+            topic_slug="test",
+        )
+        meta = json.loads((tmp_path / "test" / "meta.json").read_text())
+        assert "evidenceGaps" not in meta
+
     def test_reemit_updates_meta(self, tmp_path):
         pkg1 = make_publish_package(
             units=[make_content_unit(path="learn")],

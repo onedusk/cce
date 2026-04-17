@@ -21,6 +21,7 @@ CCE_FIELDS = frozenset(
         "jobId",
         "policyId",
         "engineVersion",
+        "evidenceGaps",
     }
 )
 
@@ -31,6 +32,7 @@ def merge_topic_meta(
     lineage: PackageLineage,
     job_id: str,
     curated_at: str,
+    evidence_gaps: dict[str, list[str]] | None = None,
 ) -> None:
     """Read, merge, and write meta.json.
 
@@ -44,12 +46,16 @@ def merge_topic_meta(
         lineage: PackageLineage for provenance fields.
         job_id: The curation job ID.
         curated_at: ISO 8601 timestamp of this emit.
+        evidence_gaps: Optional per-path list of [INSUFFICIENT EVIDENCE: ...]
+            descriptions stripped from the rendered MDX bodies. Surfaced so
+            operators can audit gaps without readers seeing internal
+            scaffolding in published copy. ``None`` clears the field entirely.
     """
     existing: dict = {}
     if meta_path.exists():
         existing = json.loads(meta_path.read_text(encoding="utf-8"))
 
-    cce_data = {
+    cce_data: dict = {
         "scores": {
             "confidence": round(scores.confidence, 3),
             "coverage": round(scores.coverage, 3),
@@ -60,6 +66,12 @@ def merge_topic_meta(
         "policyId": lineage.policy_id,
         "engineVersion": lineage.engine_version,
     }
+    # evidenceGaps is set when present; cleared (key removed) when None
+    # to avoid stale gap reports lingering across re-runs.
+    if evidence_gaps:
+        cce_data["evidenceGaps"] = evidence_gaps
+    elif "evidenceGaps" in existing:
+        del existing["evidenceGaps"]
 
     existing.update(cce_data)
 
