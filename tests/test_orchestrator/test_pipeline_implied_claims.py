@@ -373,6 +373,22 @@ async def test_checker_factory_triple_gate(monkeypatch, tmp_path):
     assert pipe_all._editor is not None
     assert pipe_all._implied_claim_checker is not None
 
+    # Orphan config: implied_claims enabled without editor → factory
+    # refuses to build the checker (no consumer for its annotations).
+    cfg_orphan_checker = EngineConfig(
+        llm=LLMConfig(api_key="test"),
+        crawl=crawl,
+        humanization=HumanizationConfig(
+            enabled=True,
+            editor=EditorConfig(enabled=False),
+            implied_claims=ImpliedClaimsConfig(enabled=True),
+        ),
+    )
+    pipe_orphan = _build_pipeline(cfg_orphan_checker, store)
+    assert pipe_orphan._scorer is not None
+    assert pipe_orphan._editor is None
+    assert pipe_orphan._implied_claim_checker is None
+
 
 # --- helpers ---
 

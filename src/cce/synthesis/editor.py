@@ -31,7 +31,11 @@ from cce.parsing import extract_json
 logger = logging.getLogger(__name__)
 
 
-_CITATION_RE = re.compile(r"\[ev[_:][^\]]+\]")
+# Canonical citation format is [ev:ID] (colon). The writer prompt, the
+# verifier prompt, and the gate all emit/accept this form. Strict matching
+# here means a malformed [ev_ID] variant in the writer's output won't be
+# silently treated as "preserved" by the citation drift check.
+_CITATION_RE = re.compile(r"\[ev:[^\]]+\]")
 _WORD_RE = re.compile(r"\b[\w'-]+\b")
 
 
@@ -174,15 +178,11 @@ class Editor:
                     f"formulaic transitions: {scores.formulaic_transition_count}"
                 )
             if scores.contrastive_frame_count > 0:
-                flagged.append(
-                    f"contrastive frames: {scores.contrastive_frame_count}"
-                )
+                flagged.append(f"contrastive frames: {scores.contrastive_frame_count}")
             if scores.hedging_phrase_count > 0:
                 flagged.append(f"hedging phrases: {scores.hedging_phrase_count}")
             if flagged:
-                parts.append(
-                    "Scorer flags to focus on: " + "; ".join(flagged)
-                )
+                parts.append("Scorer flags to focus on: " + "; ".join(flagged))
 
         if annotations:
             parts.append("Implied-claim annotations (H4):")

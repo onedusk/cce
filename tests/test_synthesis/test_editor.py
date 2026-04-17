@@ -102,9 +102,7 @@ async def test_editor_flags_added_citation():
 
 async def test_editor_records_word_count_metrics():
     editor, _llm = _editor(_edit_response("Short output [ev:abc]."))
-    unit = _make_unit(
-        "This is a longer original draft with more words in it [ev:abc]."
-    )
+    unit = _make_unit("This is a longer original draft with more words in it [ev:abc].")
 
     out = await editor.edit(unit)
 
@@ -167,3 +165,18 @@ async def test_editor_uses_configured_temperature():
     # EditorConfig default temperature is 0.4
     assert llm.calls[0]["temperature"] == 0.4
     assert llm.calls[0]["system"] == EDITOR_SYSTEM_PROMPT
+
+
+async def test_editor_does_not_count_underscore_citation_variant():
+    """Canonical citation format is [ev:ID] (colon). The underscore variant
+    [ev_ID] must NOT be recognized — a malformed marker in the writer's
+    output should register as citation drift, not be silently accepted.
+    """
+    editor, _llm = _editor(_edit_response("Rewritten [ev_abc]."))  # underscore
+    unit = _make_unit("Original [ev:abc].")  # colon
+
+    out = await editor.edit(unit)
+
+    # Input had 1 colon-form citation; output has 0 colon-form citations
+    # (only the underscore variant, which the regex ignores). Drift detected.
+    assert out.citations_preserved is False

@@ -260,16 +260,28 @@ def _build_pipeline(
     # any parse/structure failure (audit A4 / ADR-006). Try the operator
     # file first; fall back to the committed Tier B template.
     path_configs = None
-    for candidate in (Path("path_configs/thnklabs.yaml"), Path("path_configs/default.yaml")):
+    for candidate in (
+        Path("path_configs/thnklabs.yaml"),
+        Path("path_configs/default.yaml"),
+    ):
         if candidate.exists():
             loaded = load_path_configs(candidate)
             if loaded:
                 path_configs = loaded
-                logger.info("Path configs loaded from %s: %s", candidate, list(path_configs.keys()))
+                logger.info(
+                    "Path configs loaded from %s: %s",
+                    candidate,
+                    list(path_configs.keys()),
+                )
                 break
 
     # Humanization scorer (M02, optional). Constructed only when the master
-    # switch is on — markers YAML must exist, load_markers raises otherwise.
+    # switch is on. `load_markers` raises FileNotFoundError on a missing YAML
+    # — intentional fail-fast (not graceful like taxonomy/embedding/path_configs
+    # above): silent humanization failure would be worse than a dead server.
+    # An operator who set `humanization.enabled = true` has explicitly opted
+    # in; booting with scoring silently disabled would leave them shipping
+    # unscored drafts under the impression the gate was measuring them.
     scorer = None
     editor = None
     implied_claim_checker = None
@@ -279,31 +291,47 @@ def _build_pipeline(
 
         markers = load_markers(config.humanization.markers_path)
         scorer = Scorer(thresholds=config.humanization.thresholds, markers=markers)
-        logger.info("Humanization scorer ready (markers: %s)", config.humanization.markers_path)
+        logger.info(
+            "Humanization scorer ready (markers: %s)", config.humanization.markers_path
+        )
 
         # Editor (M03, optional). Double-gate: master + per-stage switch.
         if config.humanization.editor.enabled:
             from cce.synthesis.editor import Editor
 
             editor = Editor(llm=llm, config=config.humanization.editor)
-            logger.info("Humanization editor ready (temp=%s)", config.humanization.editor.temperature)
-
-        # Implied-claim checker (M04, optional). Triple-gate: master +
-        # per-stage. Reuses the markers loaded above for the scorer.
-        if config.humanization.implied_claims.enabled:
-            from cce.synthesis.implied_claims import ImpliedClaimChecker
-
-            implied_claim_checker = ImpliedClaimChecker(
-                llm=llm,
-                evidence_store=evidence_store,
-                config=config.humanization.implied_claims,
-                markers=markers,
-            )
             logger.info(
-                "Implied-claim checker ready (strategy=%s, release_valve=%.2f)",
-                config.humanization.implied_claims.search_strategy,
-                config.humanization.implied_claims.dismissal_release_valve_ratio,
+                "Humanization editor ready (temp=%s)",
+                config.humanization.editor.temperature,
             )
+
+        # Implied-claim checker (M04, optional). Requires the editor — the
+        # editor is the only consumer of checker annotations. If an operator
+        # enables implied_claims without the editor, log a warning and skip
+        # construction rather than build a checker whose output has nowhere
+        # to land. (If a future audit-only mode ever needs the checker without
+        # the editor, add an explicit config flag for it.)
+        if config.humanization.implied_claims.enabled:
+            if editor is None:
+                logger.warning(
+                    "humanization.implied_claims.enabled=True but editor "
+                    "is not enabled; skipping checker construction. "
+                    "Enable humanization.editor to use implied-claim annotations."
+                )
+            else:
+                from cce.synthesis.implied_claims import ImpliedClaimChecker
+
+                implied_claim_checker = ImpliedClaimChecker(
+                    llm=llm,
+                    evidence_store=evidence_store,
+                    config=config.humanization.implied_claims,
+                    markers=markers,
+                )
+                logger.info(
+                    "Implied-claim checker ready (strategy=%s, release_valve=%.2f)",
+                    config.humanization.implied_claims.search_strategy,
+                    config.humanization.implied_claims.dismissal_release_valve_ratio,
+                )
 
     return Pipeline(
         config=config,

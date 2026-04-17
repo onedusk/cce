@@ -686,11 +686,13 @@ class Pipeline:
                     unit,
                     path_config=path_config,
                     scores=style_scores,
-                    annotations=[a.rewrite_hint for a in annotations] or None,
+                    # Explicit [] when the checker ran and produced nothing;
+                    # preserves the distinction from None ("checker not wired")
+                    # if a future caller ever needs it.
+                    annotations=[a.rewrite_hint for a in annotations],
                 )
                 if _tokens and editor_output.token_usage:
-                    for key in _tokens:
-                        _tokens[key] += editor_output.token_usage.get(key, 0)
+                    _merge_tokens(_tokens, editor_output.token_usage)
                 if editor_output.succeeded:
                     unit = unit.model_copy(
                         update={"content": editor_output.edited_content}

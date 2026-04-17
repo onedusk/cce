@@ -29,7 +29,11 @@ from cce.models.style import StyleScores
 logger = logging.getLogger(__name__)
 
 
-_CITATION_RE = re.compile(r"\[ev[_:][^\]]+\]")
+# Canonical citation format is [ev:ID] (colon). Matches the tightened regex
+# in cce.synthesis.editor — consistent canonical form across the humanization
+# surface. Stripped before scoring so citation markers don't inflate word
+# count or distort lexical diversity.
+_CITATION_RE = re.compile(r"\[ev:[^\]]+\]")
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z\"'])")
 _WORD_RE = re.compile(r"\b[\w'-]+\b")
 
@@ -99,12 +103,7 @@ class Scorer:
     def _count_transitions(self, body: str) -> int:
         """Only count transitions that open a paragraph — mid-sentence uses are fine."""
         paragraphs = [p.strip() for p in body.split("\n\n") if p.strip()]
-        return sum(
-            1
-            for p in paragraphs
-            for t in self._transitions
-            if p.startswith(t)
-        )
+        return sum(1 for p in paragraphs for t in self._transitions if p.startswith(t))
 
     def _count_contrastive(self, body: str) -> int:
         return sum(len(p.findall(body)) for p in self._contrastive_patterns)
