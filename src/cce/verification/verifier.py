@@ -139,9 +139,18 @@ class VerificationReport:
 
     @property
     def pass_rate(self) -> float:
-        """Fraction of claims that are supported or acknowledged gaps."""
+        """Fraction of claims that are supported or acknowledged gaps.
+
+        Clamped to [0.0, 1.0]. LLM-reported summary counts can be
+        inconsistent (e.g., a single claim counted as both ``supported``
+        and ``gaps_acknowledged``), which would otherwise push the ratio
+        above 1.0 and fail downstream Pydantic validation
+        (``ContentScores.coverage`` is ``le=1.0``). The clamp keeps the
+        contract correct without rejecting an otherwise-valid run.
+        """
         passing = self.supported + self.gaps_acknowledged
-        return passing / max(1, self.total_claims)
+        ratio = passing / max(1, self.total_claims)
+        return min(1.0, ratio)
 
 
 class Verifier:

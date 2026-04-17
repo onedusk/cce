@@ -33,6 +33,16 @@ class TestPassRate:
         report = VerificationReport(total_claims=0, supported=0)
         assert report.pass_rate == 0.0
 
+    def test_report_pass_rate_clamps_inconsistent_llm_counts(self):
+        """Regression: LLM-reported summary counts can be inconsistent (a
+        claim may be tallied as both supported and gap_acknowledged).
+        Without the clamp, downstream Pydantic ``coverage`` validation
+        (le=1.0) fails the whole pipeline run mid-flight.
+        """
+        # 27 supported + 1 gap_acknowledged out of 27 total = 28/27 = 1.037
+        report = VerificationReport(total_claims=27, supported=27, gaps_acknowledged=1)
+        assert report.pass_rate == 1.0
+
 
 # ---------------------------------------------------------------------------
 # Verifier._parse_response — unit tests (sync)
