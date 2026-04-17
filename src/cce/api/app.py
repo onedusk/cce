@@ -271,6 +271,7 @@ def _build_pipeline(
     # Humanization scorer (M02, optional). Constructed only when the master
     # switch is on — markers YAML must exist, load_markers raises otherwise.
     scorer = None
+    editor = None
     if config.humanization.enabled:
         from cce.config.markers import load_markers
         from cce.synthesis.scoring import Scorer
@@ -278,6 +279,13 @@ def _build_pipeline(
         markers = load_markers(config.humanization.markers_path)
         scorer = Scorer(thresholds=config.humanization.thresholds, markers=markers)
         logger.info("Humanization scorer ready (markers: %s)", config.humanization.markers_path)
+
+        # Editor (M03, optional). Double-gate: master + per-stage switch.
+        if config.humanization.editor.enabled:
+            from cce.synthesis.editor import Editor
+
+            editor = Editor(llm=llm, config=config.humanization.editor)
+            logger.info("Humanization editor ready (temp=%s)", config.humanization.editor.temperature)
 
     return Pipeline(
         config=config,
@@ -288,6 +296,7 @@ def _build_pipeline(
         taxonomy_plugin=taxonomy_plugin,
         path_configs=path_configs,
         scorer=scorer,
+        editor=editor,
     )
 
 

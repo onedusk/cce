@@ -26,7 +26,9 @@ from cce.models.job import Job, JobError, JobProgress, JobStage, JobStatus, Stag
 from cce.models.package import PackageLineage, PublishPackage
 from cce.models.paths import PathConfig
 from cce.models.request import CurationRequest
+from cce.models.style import StyleScores
 from cce.policy.types import SourcePolicy
+from cce.synthesis.editor import Editor
 from cce.synthesis.scoring import Scorer
 from cce.synthesis.writer import Writer
 from cce.tagging.base import TaxonomyPlugin, TaxonomyUnavailableError
@@ -164,6 +166,7 @@ class Pipeline:
         taxonomy_plugin: TaxonomyPlugin | None = None,
         path_configs: dict[str, PathConfig] | None = None,
         scorer: Scorer | None = None,
+        editor: Editor | None = None,
     ) -> None:
         self._config = config
         self._taxonomy_plugin = taxonomy_plugin
@@ -181,6 +184,7 @@ class Pipeline:
         self._verifier = Verifier(llm=llm)
         # Humanization components (M02+). All optional — None = disabled.
         self._scorer = scorer
+        self._editor = editor
 
     # DEFERRED (audit M1): extract _run_discovery / _run_tag /
     # _run_write_verify_paths / _build_package helpers when a non-cosmetic
@@ -624,6 +628,7 @@ class Pipeline:
             # v1 — the gate still evaluates `unit.scores` (ContentScores)
             # only; style scores inform M03 editor invocation and feed into
             # StageRecord.metrics for threshold calibration. See ADR-002/004/006.
+            style_scores: StyleScores | None = None
             if self._scorer is not None:
                 score_start = datetime.now(UTC)
                 style_scores = self._scorer.score(unit.content)
@@ -644,6 +649,58 @@ class Pipeline:
                                 "hedging_phrase_count": style_scores.hedging_phrase_count,
                                 "word_count": style_scores.word_count,
                                 "humanization_pass": style_scores.humanization_pass,
+                            },
+                        )
+                    )
+
+            # Conditional stylistic rewrite (humanization M03). Fires only
+            # when the scorer flagged the draft. Does NOT consume an iteration
+            # slot (ADR-005). Preserves citations as a hard constraint; on
+            # citation drift the writer's original draft is retained so the
+            # verifier still runs against known-good content.
+            if (
+                self._editor is not None
+                and style_scores is not None
+                and not style_scores.humanization_pass
+            ):
+                edit_start = datetime.now(UTC)
+                editor_output = await self._editor.edit(
+                    unit,
+                    path_config=path_config,
+                    scores=style_scores,
+                    annotations=None,  # M04 will populate this
+                )
+                if _tokens and editor_output.token_usage:
+                    for key in _tokens:
+                        _tokens[key] += editor_output.token_usage.get(key, 0)
+                if editor_output.succeeded:
+                    unit = unit.model_copy(
+                        update={"content": editor_output.edited_content}
+                    )
+                if job is not None:
+                    job.stages.append(
+                        StageRecord(
+                            stage=JobStage.EDIT,
+                            started_at=edit_start,
+                            completed_at=datetime.now(UTC),
+                            metrics={
+                                "path": path,
+                                "invoked": True,
+                                "citations_preserved": editor_output.citations_preserved,
+                                "word_count_before": editor_output.word_count_before,
+                                "word_count_after": editor_output.word_count_after,
+                                "tokens_input": editor_output.token_usage.get(
+                                    "input_tokens", 0
+                                ),
+                                "tokens_output": editor_output.token_usage.get(
+                                    "output_tokens", 0
+                                ),
+                                "tokens_cache_read": editor_output.token_usage.get(
+                                    "cache_read_input_tokens", 0
+                                ),
+                                "tokens_cache_write": editor_output.token_usage.get(
+                                    "cache_creation_input_tokens", 0
+                                ),
                             },
                         )
                     )

@@ -30,6 +30,7 @@ class JobStage(StrEnum):
     TAG = "tag"
     WRITE = "write"
     SCORE = "score"  # Humanization M02 — programmatic style scorer
+    EDIT = "edit"  # Humanization M03 — stylistic rewrite (conditional on SCORE fail)
     VERIFY = "verify"
     PUBLISH = "publish"
 
@@ -116,6 +117,26 @@ class ScoreMetrics(TypedDict):
     hedging_phrase_count: int
     word_count: int
     humanization_pass: bool
+
+
+class EditMetrics(TypedDict):
+    """Per-invocation output of the Editor agent (humanization M03).
+
+    ``invoked`` is always True when this record is present — absence of the
+    record means the scorer passed and the editor was skipped. ``citations_preserved``
+    False indicates the editor's output dropped or added an [ev:ID] marker and
+    the writer's original draft was retained for the verifier.
+    """
+
+    path: str
+    invoked: bool
+    citations_preserved: bool
+    word_count_before: int
+    word_count_after: int
+    tokens_input: int
+    tokens_output: int
+    tokens_cache_read: int
+    tokens_cache_write: int
 
 
 class Job(BaseModel):
