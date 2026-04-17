@@ -58,9 +58,7 @@ def test_passes_policy_deny_blocks():
 
 
 def test_passes_policy_deny_takes_priority():
-    policy = make_source_policy(
-        domains_allow=["spam.com"], domains_deny=["spam.com"]
-    )
+    policy = make_source_policy(domains_allow=["spam.com"], domains_deny=["spam.com"])
     assert Discoverer._passes_policy("https://spam.com/page", policy) is False
 
 
@@ -208,16 +206,14 @@ def test_assess_reputation_trusted():
 def test_assess_reputation_institutional():
     rules = ReputationRule(trusted_institutions=[])
     assert (
-        Discoverer._assess_reputation("https://mit.edu/paper", rules)
-        == "institutional"
+        Discoverer._assess_reputation("https://mit.edu/paper", rules) == "institutional"
     )
 
 
 def test_assess_reputation_unknown():
     rules = ReputationRule(trusted_institutions=[])
     assert (
-        Discoverer._assess_reputation("https://randomsite.com/page", rules)
-        == "unknown"
+        Discoverer._assess_reputation("https://randomsite.com/page", rules) == "unknown"
     )
 
 
@@ -461,7 +457,11 @@ def test_cap_evidence_global():
 def test_cap_evidence_no_op():
     # Already under both caps → returned unchanged
     evidence = [
-        make_evidence(id=f"ev_{i}", url=f"https://source{i}.com", excerpt=f"Excerpt {i} long enough.")
+        make_evidence(
+            id=f"ev_{i}",
+            url=f"https://source{i}.com",
+            excerpt=f"Excerpt {i} long enough.",
+        )
         for i in range(3)
     ]
     capped = Discoverer._cap_evidence(evidence, max_per_source=5, max_total=100)
@@ -549,7 +549,6 @@ def test_extract_evidence_creates_objects():
         ),
     )
 
-
     discoverer = Discoverer(
         adapter=None,  # type: ignore[arg-type]  # not used by _extract_evidence
         config=CrawlConfig(api_key="test"),
@@ -569,7 +568,6 @@ def test_extract_evidence_creates_objects():
 
 
 def test_extract_evidence_published_at_parsing():
-
 
     discoverer = Discoverer(
         adapter=None,  # type: ignore[arg-type]
@@ -648,7 +646,9 @@ async def test_discover_no_urls_after_filter():
     adapter = MockCrawlAdapter(
         search_map={"test topic": ["https://blocked.com/page"]},
         url_map={
-            "https://blocked.com/page": make_crawl_result(url="https://blocked.com/page"),
+            "https://blocked.com/page": make_crawl_result(
+                url="https://blocked.com/page"
+            ),
         },
     )
     discoverer = Discoverer(adapter=adapter, config=CrawlConfig(api_key="test"))
@@ -798,8 +798,12 @@ def test_cap_sort_key_relevance_beats_recency():
         excerpt="x" * 100,
     )
     scores = {"ev_old": 0.95, "ev_new": 0.3}
-    key_old = Discoverer._cap_sort_key(old_ev, prefer_recent=True, relevance_scores=scores)
-    key_new = Discoverer._cap_sort_key(new_ev, prefer_recent=True, relevance_scores=scores)
+    key_old = Discoverer._cap_sort_key(
+        old_ev, prefer_recent=True, relevance_scores=scores
+    )
+    key_new = Discoverer._cap_sort_key(
+        new_ev, prefer_recent=True, relevance_scores=scores
+    )
     # old_ev has higher relevance → should sort higher
     assert key_old > key_new
 
@@ -825,7 +829,9 @@ def test_cap_sort_key_without_relevance_matches_old_behavior():
 def test_cap_evidence_with_relevance_scores():
     """Top relevance evidence should be kept over longer but less relevant."""
     evidence = [
-        make_evidence(id=f"ev_{i}", url="https://source.com/page", excerpt="x" * (100 + i * 50))
+        make_evidence(
+            id=f"ev_{i}", url="https://source.com/page", excerpt="x" * (100 + i * 50)
+        )
         for i in range(5)
     ]
     # Give the shortest excerpt the highest relevance

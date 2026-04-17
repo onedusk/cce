@@ -41,23 +41,17 @@ class TestFormatEvidenceForPrompt:
         assert "Type:" not in result
 
     def test_writer_peer_reviewed(self):
-        ev = make_evidence(
-            source_quality=SourceQuality(is_peer_reviewed=True)
-        )
+        ev = make_evidence(source_quality=SourceQuality(is_peer_reviewed=True))
         result = format_evidence_for_prompt([ev], style="writer")
         assert "Type: peer-reviewed" in result
 
     def test_verifier_peer_reviewed_tag(self):
-        ev = make_evidence(
-            source_quality=SourceQuality(is_peer_reviewed=True)
-        )
+        ev = make_evidence(source_quality=SourceQuality(is_peer_reviewed=True))
         result = format_evidence_for_prompt([ev], style="verifier")
         assert "[peer-reviewed]" in result
 
     def test_verifier_coi_tag(self):
-        ev = make_evidence(
-            source_quality=SourceQuality(conflict_of_interest=True)
-        )
+        ev = make_evidence(source_quality=SourceQuality(conflict_of_interest=True))
         result = format_evidence_for_prompt([ev], style="verifier")
         assert "[potential-COI]" in result
 

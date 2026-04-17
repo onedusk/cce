@@ -57,9 +57,7 @@ def _run_emit(*args: str, db_path: Path, target: Path) -> object:
     """Invoke the emit-mdx CLI with a config pointing to the test DB."""
     # Write a minimal config YAML that points to our test DB
     config_path = db_path.parent / "config.yaml"
-    config_path.write_text(
-        f"evidence_store:\n  sqlite_path: {db_path}\n"
-    )
+    config_path.write_text(f"evidence_store:\n  sqlite_path: {db_path}\n")
     return runner.invoke(
         app,
         ["emit-mdx", *args, "--target", str(target), "--config", str(config_path)],
@@ -128,7 +126,8 @@ class TestEmitMdxCli:
         asyncio.run(_seed_store(db_path))
 
         result = _run_emit(
-            "--job", "job_any",
+            "--job",
+            "job_any",
             db_path=db_path,
             target=tmp_path / "nonexistent",
         )

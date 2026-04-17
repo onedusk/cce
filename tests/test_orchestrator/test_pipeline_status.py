@@ -8,6 +8,7 @@ accepts the optional metrics kwarg.
 from datetime import UTC, datetime
 
 import pytest
+from pydantic import ValidationError
 
 from cce.models.job import JobStage, JobStatus, StageRecord
 from cce.orchestrator.pipeline import _terminal_decisions
@@ -230,7 +231,7 @@ class TestStageRecordMetrics:
             started_at=datetime(2026, 1, 1, tzinfo=UTC),
             completed_at=datetime(2026, 1, 1, 0, 2, tzinfo=UTC),
         )
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             record.metrics = {"should": "fail"}  # type: ignore[misc]
 
     @pytest.mark.unit

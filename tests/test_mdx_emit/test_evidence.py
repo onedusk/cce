@@ -48,10 +48,13 @@ class TestExportEvidence:
 
         # Pass in reverse order — exporter should sort by path_order
         result = json.loads(
-            export_evidence([apply_unit, learn_unit], {
-                "ev_apply_only": ev_a,
-                "ev_learn_only": ev_l,
-            })
+            export_evidence(
+                [apply_unit, learn_unit],
+                {
+                    "ev_apply_only": ev_a,
+                    "ev_learn_only": ev_l,
+                },
+            )
         )
 
         assert result[0]["id"] == "ev_learn_only"
@@ -103,10 +106,13 @@ class TestExportEvidence:
         learn_unit = _unit_with_citations("learn", "ev_learn")
 
         result = json.loads(
-            export_evidence([custom_unit, learn_unit], {
-                "ev_custom": ev_c,
-                "ev_learn": ev_l,
-            })
+            export_evidence(
+                [custom_unit, learn_unit],
+                {
+                    "ev_custom": ev_c,
+                    "ev_learn": ev_l,
+                },
+            )
         )
 
         assert result[0]["id"] == "ev_learn"

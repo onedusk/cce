@@ -19,8 +19,12 @@ from tests.conftest import MockLLMProvider, make_curation_request, make_evidence
 
 @pytest.mark.unit
 def testformat_evidence_for_prompt_formatting():
-    ev1 = make_evidence(id="ev_001", url="https://a.com", title="Title A", author="Author A")
-    ev2 = make_evidence(id="ev_002", url="https://b.com", title="Title B", author="Author B")
+    ev1 = make_evidence(
+        id="ev_001", url="https://a.com", title="Title A", author="Author A"
+    )
+    ev2 = make_evidence(
+        id="ev_002", url="https://b.com", title="Title B", author="Author B"
+    )
     block = format_evidence_for_prompt([ev1, ev2])
     assert "--- EVIDENCE [ev_001] ---" in block
     assert "--- EVIDENCE [ev_002] ---" in block
@@ -169,9 +173,15 @@ class TestParseResponse:
         assert output.unit.evidence_map[0].claim == "Valid claim"
 
     def test_parse_response_diversity_calculation(self):
-        ev1 = make_evidence(id="ev_001", url="https://a.com", excerpt="Excerpt A is long enough.")
-        ev2 = make_evidence(id="ev_002", url="https://b.com", excerpt="Excerpt B is long enough.")
-        ev3 = make_evidence(id="ev_003", url="https://c.com", excerpt="Excerpt C is long enough.")
+        ev1 = make_evidence(
+            id="ev_001", url="https://a.com", excerpt="Excerpt A is long enough."
+        )
+        ev2 = make_evidence(
+            id="ev_002", url="https://b.com", excerpt="Excerpt B is long enough."
+        )
+        ev3 = make_evidence(
+            id="ev_003", url="https://c.com", excerpt="Excerpt C is long enough."
+        )
         # LLM cites 2 of 3 sources
         raw = _make_writer_json(citations_used=["ev_001", "ev_002"])
         response = LLMResponse(content=raw, model="mock")

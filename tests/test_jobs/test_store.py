@@ -145,7 +145,9 @@ async def test_delete_job_nonexistent(job_store: JobStore):
 async def test_delete_job_cascades_to_package(job_store: JobStore):
     """delete_job should remove associated package too."""
     await job_store.create_job(make_job(id="job_cascade"))
-    await job_store.store_package("job_cascade", make_publish_package(job_id="job_cascade"))
+    await job_store.store_package(
+        "job_cascade", make_publish_package(job_id="job_cascade")
+    )
 
     assert await job_store.get_package("job_cascade") is not None
     await job_store.delete_job("job_cascade")

@@ -63,8 +63,18 @@ def _mock_llm() -> MockLLMProvider:
 
     return MockLLMProvider(
         responses=[
-            LLMResponse(content=_writer_response(), model="mock", usage={}, stop_reason="end_turn"),
-            LLMResponse(content=_verifier_response(), model="mock", usage={}, stop_reason="end_turn"),
+            LLMResponse(
+                content=_writer_response(),
+                model="mock",
+                usage={},
+                stop_reason="end_turn",
+            ),
+            LLMResponse(
+                content=_verifier_response(),
+                model="mock",
+                usage={},
+                stop_reason="end_turn",
+            ),
         ]
     )
 
@@ -97,9 +107,13 @@ async def _run_pipeline(taxonomy_plugin=None, tmp_path=None):
     config = make_engine_config()
     crawl = MockCrawlAdapter(
         search_map={"test topic": ["https://example.com/1"]},
-        url_map={"https://example.com/1": make_crawl_result(url="https://example.com/1")},
+        url_map={
+            "https://example.com/1": make_crawl_result(url="https://example.com/1")
+        },
     )
-    store_config = EvidenceStoreConfig(backend="sqlite", sqlite_path=tmp_path / "test.db")
+    store_config = EvidenceStoreConfig(
+        backend="sqlite", sqlite_path=tmp_path / "test.db"
+    )
     store = SQLiteEvidenceStore(store_config)
     await store.connect()
 
@@ -111,7 +125,9 @@ async def _run_pipeline(taxonomy_plugin=None, tmp_path=None):
         embedding_provider=MockEmbeddingProvider(),
         taxonomy_plugin=taxonomy_plugin,
     )
-    request = CurationRequest(topic="test topic", paths=["blog"], policy_id="test-policy")
+    request = CurationRequest(
+        topic="test topic", paths=["blog"], policy_id="test-policy"
+    )
     result = await pipeline.run(request, make_source_policy())
     await store.close()
     return result

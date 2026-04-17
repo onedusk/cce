@@ -69,7 +69,9 @@ async def test_crawl_success(mock_fc_cls: MagicMock) -> None:
     mock_fc_cls.return_value = mock_app
 
     adapter = FirecrawlAdapter(_config())
-    result = await adapter.crawl(CrawlRequest(url="https://example.com/page", timeout_seconds=5))
+    result = await adapter.crawl(
+        CrawlRequest(url="https://example.com/page", timeout_seconds=5)
+    )
 
     assert result.url == "https://example.com/page"
     assert result.status_code == 200
@@ -84,7 +86,9 @@ async def test_crawl_failure(mock_fc_cls: MagicMock) -> None:
     mock_fc_cls.return_value = mock_app
 
     adapter = FirecrawlAdapter(_config())
-    result = await adapter.crawl(CrawlRequest(url="https://down.com/page", timeout_seconds=5))
+    result = await adapter.crawl(
+        CrawlRequest(url="https://down.com/page", timeout_seconds=5)
+    )
 
     assert result.url == "https://down.com/page"
     assert result.status_code == 0
@@ -154,7 +158,9 @@ async def test_crawl_none_response(mock_fc_cls: MagicMock) -> None:
     mock_fc_cls.return_value = mock_app
 
     adapter = FirecrawlAdapter(_config())
-    result = await adapter.crawl(CrawlRequest(url="https://null.com/page", timeout_seconds=5))
+    result = await adapter.crawl(
+        CrawlRequest(url="https://null.com/page", timeout_seconds=5)
+    )
 
     assert result.url == "https://null.com/page"
     assert result.status_code == 0

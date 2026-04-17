@@ -16,7 +16,9 @@ from tests.conftest import (
 
 
 def _config() -> CrawlConfig:
-    return CrawlConfig(adapter="firecrawl", api_key="test", rate_limit_rps=10.0, timeout_seconds=5)
+    return CrawlConfig(
+        adapter="firecrawl", api_key="test", rate_limit_rps=10.0, timeout_seconds=5
+    )
 
 
 class TestCrawlFailureTracking:
@@ -39,7 +41,9 @@ class TestCrawlFailureTracking:
         assert discoverer.last_discover_metrics["crawl_success"] == 2
         assert discoverer.last_discover_metrics["crawl_failure_rate"] == 0.0
         # No warning should be logged
-        assert not any("crawl failure rate" in r.message.lower() for r in caplog.records)
+        assert not any(
+            "crawl failure rate" in r.message.lower() for r in caplog.records
+        )
 
     async def test_50_percent_failure_warns(self, caplog):
         adapter = MockCrawlAdapter(
@@ -65,8 +69,12 @@ class TestCrawlFailureTracking:
         adapter = MockCrawlAdapter(
             search_map={"test topic": ["https://fail1.com", "https://fail2.com"]},
             url_map={
-                "https://fail1.com": CrawlResult(url="https://fail1.com", status_code=0),
-                "https://fail2.com": CrawlResult(url="https://fail2.com", status_code=0),
+                "https://fail1.com": CrawlResult(
+                    url="https://fail1.com", status_code=0
+                ),
+                "https://fail2.com": CrawlResult(
+                    url="https://fail2.com", status_code=0
+                ),
             },
         )
         discoverer = Discoverer(adapter=adapter, config=_config())

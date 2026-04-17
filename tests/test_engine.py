@@ -35,7 +35,9 @@ pytestmark = pytest.mark.integration
 # ---------------------------------------------------------------------------
 
 
-async def _make_engine(tmp_path: Path, llm_responses: list[str] | None = None) -> CurationEngine:
+async def _make_engine(
+    tmp_path: Path, llm_responses: list[str] | None = None
+) -> CurationEngine:
     """Build a CurationEngine with mock deps for testing."""
     config = make_engine_config(
         evidence_store=EvidenceStoreConfig(sqlite_path=tmp_path / "engine_test.db"),

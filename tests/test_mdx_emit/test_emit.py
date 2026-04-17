@@ -49,7 +49,7 @@ class TestSlugify:
 class TestEmitMdx:
     def test_full_emit(self, tmp_path):
         pkg = _package_with_paths("learn", "explore")
-        result = emit_mdx(pkg, tmp_path, topic_slug="anxiety")
+        emit_mdx(pkg, tmp_path, topic_slug="anxiety")
 
         assert (tmp_path / "anxiety" / "learn" / "page.mdx").exists()
         assert (tmp_path / "anxiety" / "explore" / "page.mdx").exists()
@@ -69,9 +69,7 @@ class TestEmitMdx:
         pkg = _package_with_paths("learn", "explore")
         emit_mdx(pkg, tmp_path, topic_slug="test")
 
-        evidence = json.loads(
-            (tmp_path / "test" / "_evidence.json").read_text()
-        )
+        evidence = json.loads((tmp_path / "test" / "_evidence.json").read_text())
         ids = [e["id"] for e in evidence]
         assert ids == list(dict.fromkeys(ids))  # no duplicates
 
@@ -79,11 +77,15 @@ class TestEmitMdx:
         topic_dir = tmp_path / "test"
         topic_dir.mkdir()
         meta_path = topic_dir / "meta.json"
-        meta_path.write_text(json.dumps({
-            "slug": "test",
-            "title": "Test Topic",
-            "orientationCopy": "Editorial text",
-        }))
+        meta_path.write_text(
+            json.dumps(
+                {
+                    "slug": "test",
+                    "title": "Test Topic",
+                    "orientationCopy": "Editorial text",
+                }
+            )
+        )
 
         pkg = _package_with_paths("learn")
         emit_mdx(pkg, tmp_path, topic_slug="test")
@@ -122,7 +124,9 @@ class TestEmitMdx:
         emit_mdx(pkg, tmp_path, topic_slug="test")
 
         assert (tmp_path / "test" / "learn" / "page.mdx").exists()
-        assert (tmp_path / "test" / "explore" / "page.mdx").read_text() == "existing explore content"
+        assert (
+            tmp_path / "test" / "explore" / "page.mdx"
+        ).read_text() == "existing explore content"
 
     def test_slugify_integration(self, tmp_path):
         pkg = _package_with_paths("learn")

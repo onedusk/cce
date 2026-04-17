@@ -199,10 +199,15 @@ def test_load_api_config_env_overrides(monkeypatch):
 
 def test_load_api_config_cors_env(monkeypatch):
     _clear_env(monkeypatch)
-    monkeypatch.setenv("CCE_API_CORS_ORIGINS", "http://localhost:3000, https://app.example.com")
+    monkeypatch.setenv(
+        "CCE_API_CORS_ORIGINS", "http://localhost:3000, https://app.example.com"
+    )
 
     config = load_config()
-    assert config.api.cors_origins == ["http://localhost:3000", "https://app.example.com"]
+    assert config.api.cors_origins == [
+        "http://localhost:3000",
+        "https://app.example.com",
+    ]
 
 
 def test_load_api_config_from_yaml(monkeypatch, tmp_path):

@@ -44,7 +44,11 @@ def _make_valid_response() -> str:
 class TestTrustWeighting:
     async def test_system_prompt_contains_trust_weighting(self):
         llm = MockLLMProvider(
-            [LLMResponse(content=_make_valid_response(), model="mock", stop_reason="end_turn")]
+            [
+                LLMResponse(
+                    content=_make_valid_response(), model="mock", stop_reason="end_turn"
+                )
+            ]
         )
         verifier = Verifier(llm)
         unit = make_content_unit(content="Test claim [ev:ev_001].")
@@ -57,7 +61,11 @@ class TestTrustWeighting:
 
     async def test_system_prompt_contains_coi_instruction(self):
         llm = MockLLMProvider(
-            [LLMResponse(content=_make_valid_response(), model="mock", stop_reason="end_turn")]
+            [
+                LLMResponse(
+                    content=_make_valid_response(), model="mock", stop_reason="end_turn"
+                )
+            ]
         )
         verifier = Verifier(llm)
         unit = make_content_unit(content="Test claim [ev:ev_001].")
@@ -70,7 +78,11 @@ class TestTrustWeighting:
 
     async def test_base_prompt_preserved(self):
         llm = MockLLMProvider(
-            [LLMResponse(content=_make_valid_response(), model="mock", stop_reason="end_turn")]
+            [
+                LLMResponse(
+                    content=_make_valid_response(), model="mock", stop_reason="end_turn"
+                )
+            ]
         )
         verifier = Verifier(llm)
         unit = make_content_unit(content="Test claim [ev:ev_001].")
@@ -87,7 +99,11 @@ class TestTrustWeighting:
 class TestJurisdiction:
     async def test_jurisdiction_in_user_prompt(self):
         llm = MockLLMProvider(
-            [LLMResponse(content=_make_valid_response(), model="mock", stop_reason="end_turn")]
+            [
+                LLMResponse(
+                    content=_make_valid_response(), model="mock", stop_reason="end_turn"
+                )
+            ]
         )
         verifier = Verifier(llm)
         unit = make_content_unit(content="Test claim [ev:ev_001].")
@@ -100,7 +116,11 @@ class TestJurisdiction:
 
     async def test_jurisdiction_absent_when_not_provided(self):
         llm = MockLLMProvider(
-            [LLMResponse(content=_make_valid_response(), model="mock", stop_reason="end_turn")]
+            [
+                LLMResponse(
+                    content=_make_valid_response(), model="mock", stop_reason="end_turn"
+                )
+            ]
         )
         verifier = Verifier(llm)
         unit = make_content_unit(content="Test claim [ev:ev_001].")
@@ -114,7 +134,11 @@ class TestJurisdiction:
     async def test_backward_compat_positional_args(self):
         """verify(unit, evidence) with positional args still works."""
         llm = MockLLMProvider(
-            [LLMResponse(content=_make_valid_response(), model="mock", stop_reason="end_turn")]
+            [
+                LLMResponse(
+                    content=_make_valid_response(), model="mock", stop_reason="end_turn"
+                )
+            ]
         )
         verifier = Verifier(llm)
         unit = make_content_unit(content="Test claim [ev:ev_001].")

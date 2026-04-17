@@ -82,7 +82,9 @@ async def test_put_duplicate_hash_returns_false(sqlite_store):
 
 async def test_put_many(sqlite_store):
     evidence = [
-        make_evidence(id=f"ev_{i}", excerpt=f"Unique excerpt number {i} with enough length.")
+        make_evidence(
+            id=f"ev_{i}", excerpt=f"Unique excerpt number {i} with enough length."
+        )
         for i in range(5)
     ]
     count = await sqlite_store.put_many(evidence)
@@ -92,9 +94,15 @@ async def test_put_many(sqlite_store):
 async def test_put_many_dedup(sqlite_store):
     shared_excerpt = "This excerpt is shared and will cause dedup by hash."
     evidence = [
-        make_evidence(id="ev_a", excerpt="Unique excerpt A that is long enough to pass."),
-        make_evidence(id="ev_b", excerpt="Unique excerpt B that is long enough to pass."),
-        make_evidence(id="ev_c", excerpt="Unique excerpt C that is long enough to pass."),
+        make_evidence(
+            id="ev_a", excerpt="Unique excerpt A that is long enough to pass."
+        ),
+        make_evidence(
+            id="ev_b", excerpt="Unique excerpt B that is long enough to pass."
+        ),
+        make_evidence(
+            id="ev_c", excerpt="Unique excerpt C that is long enough to pass."
+        ),
         make_evidence(id="ev_d", excerpt=shared_excerpt),
         make_evidence(id="ev_e", excerpt=shared_excerpt),
     ]
@@ -105,7 +113,10 @@ async def test_put_many_dedup(sqlite_store):
 async def test_put_many_batch_insert(sqlite_store):
     """Batch insert 50 unique evidence objects, verify all stored and retrievable."""
     evidence = [
-        make_evidence(id=f"ev_batch_{i}", excerpt=f"Unique batch excerpt number {i} for large insert test.")
+        make_evidence(
+            id=f"ev_batch_{i}",
+            excerpt=f"Unique batch excerpt number {i} for large insert test.",
+        )
         for i in range(50)
     ]
     count = await sqlite_store.put_many(evidence)
@@ -120,7 +131,10 @@ async def test_put_many_batch_insert(sqlite_store):
 async def test_put_many_batch_all_duplicates(sqlite_store):
     """Insert 10 evidence objects, then re-insert the same 10 — returns 0."""
     evidence = [
-        make_evidence(id=f"ev_dup_{i}", excerpt=f"Duplicate batch excerpt number {i} for dedup test.")
+        make_evidence(
+            id=f"ev_dup_{i}",
+            excerpt=f"Duplicate batch excerpt number {i} for dedup test.",
+        )
         for i in range(10)
     ]
     first = await sqlite_store.put_many(evidence)
@@ -133,14 +147,20 @@ async def test_put_many_batch_all_duplicates(sqlite_store):
 async def test_put_many_batch_mixed(sqlite_store):
     """Insert 10 unique, then re-insert those 10 plus 5 new — returns 5."""
     original = [
-        make_evidence(id=f"ev_orig_{i}", excerpt=f"Original batch excerpt number {i} for mixed test.")
+        make_evidence(
+            id=f"ev_orig_{i}",
+            excerpt=f"Original batch excerpt number {i} for mixed test.",
+        )
         for i in range(10)
     ]
     first = await sqlite_store.put_many(original)
     assert first == 10
 
     new_ones = [
-        make_evidence(id=f"ev_new_{i}", excerpt=f"Brand new batch excerpt number {i} for mixed test.")
+        make_evidence(
+            id=f"ev_new_{i}",
+            excerpt=f"Brand new batch excerpt number {i} for mixed test.",
+        )
         for i in range(5)
     ]
     combined = original + new_ones
@@ -179,8 +199,12 @@ async def test_get_many_empty_list(sqlite_store):
 
 
 async def test_get_many_partial_miss(sqlite_store):
-    await sqlite_store.put(make_evidence(id="ev_exists_1", excerpt="Exists one long enough."))
-    await sqlite_store.put(make_evidence(id="ev_exists_2", excerpt="Exists two long enough."))
+    await sqlite_store.put(
+        make_evidence(id="ev_exists_1", excerpt="Exists one long enough.")
+    )
+    await sqlite_store.put(
+        make_evidence(id="ev_exists_2", excerpt="Exists two long enough.")
+    )
     results = await sqlite_store.get_many(["ev_exists_1", "ev_exists_2", "ev_missing"])
     assert len(results) == 2
 
@@ -192,10 +216,18 @@ async def test_get_many_partial_miss(sqlite_store):
 
 async def test_search_by_url(sqlite_store):
     await sqlite_store.put(
-        make_evidence(id="ev_a", url="https://example.com/article", excerpt="Excerpt A for URL search test.")
+        make_evidence(
+            id="ev_a",
+            url="https://example.com/article",
+            excerpt="Excerpt A for URL search test.",
+        )
     )
     await sqlite_store.put(
-        make_evidence(id="ev_b", url="https://other.org/page", excerpt="Excerpt B for URL search test.")
+        make_evidence(
+            id="ev_b",
+            url="https://other.org/page",
+            excerpt="Excerpt B for URL search test.",
+        )
     )
     results = await sqlite_store.search(url="https://example.com")
     assert len(results) == 1
@@ -225,7 +257,9 @@ async def test_search_by_topic(sqlite_store):
 async def test_search_limit(sqlite_store):
     for i in range(10):
         await sqlite_store.put(
-            make_evidence(id=f"ev_{i}", excerpt=f"Search limit test excerpt number {i}.")
+            make_evidence(
+                id=f"ev_{i}", excerpt=f"Search limit test excerpt number {i}."
+            )
         )
     results = await sqlite_store.search(limit=3)
     assert len(results) == 3

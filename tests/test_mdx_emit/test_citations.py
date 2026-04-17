@@ -10,10 +10,7 @@ from tests.conftest import make_evidence
 
 def _make_lookup(*ids: str) -> dict:
     """Build an evidence_by_id dict with known IDs."""
-    return {
-        eid: make_evidence(id=eid, url=f"https://example.com/{eid}")
-        for eid in ids
-    }
+    return {eid: make_evidence(id=eid, url=f"https://example.com/{eid}") for eid in ids}
 
 
 class TestBuildCitationIndex:
@@ -108,9 +105,7 @@ class TestBuildCitationIndex:
 
     def test_mixed_colon_and_bare_formats(self):
         lookup = _make_lookup("ev_a", "ev_b")
-        result = build_citation_index(
-            "Colon [ev:ev_a] and bare [ev_b].", lookup
-        )
+        result = build_citation_index("Colon [ev:ev_a] and bare [ev_b].", lookup)
 
         assert result.content == "Colon [^1] and bare [^2]."
         assert len(result.citations) == 2

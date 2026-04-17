@@ -85,7 +85,9 @@ class TestWellBeingTaxonomy:
         assert r_many.confidence <= 1.0
 
     async def test_tag_many_ordering(self, wellbeing_taxonomy):
-        ev1 = make_evidence(id="ev_1", excerpt="Financial budgeting and debt management.")
+        ev1 = make_evidence(
+            id="ev_1", excerpt="Financial budgeting and debt management."
+        )
         ev2 = make_evidence(id="ev_2", excerpt="Sleep and exercise improve health.")
         results = await wellbeing_taxonomy.tag_many([ev1, ev2])
         assert len(results) == 2

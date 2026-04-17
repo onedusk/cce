@@ -1,6 +1,7 @@
 """Tests for taxonomy data models (Dimension, TaxonomyConfig)."""
 
 import pytest
+from pydantic import ValidationError
 
 from cce.models.taxonomy import Dimension, TaxonomyConfig
 
@@ -44,7 +45,7 @@ class TestDimension:
 
     def test_frozen(self):
         d = _make_dimension()
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             d.id = "changed"
 
 
@@ -57,7 +58,7 @@ class TestTaxonomyConfig:
 
     def test_frozen(self):
         tc = _make_taxonomy()
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             tc.id = "changed"
 
     def test_dimension_ids(self):

@@ -107,7 +107,6 @@ async def test_ev_lookup_built_once_across_paths_and_iterations(
     (audit P8).
     """
     rebuild_count = 0
-    real_dict = dict
 
     import cce.synthesis.writer as writer_module
 

@@ -1,6 +1,7 @@
 """Tests for PathConfig data model."""
 
 import pytest
+from pydantic import ValidationError
 
 from cce.models.paths import PathConfig
 
@@ -41,7 +42,7 @@ class TestPathConfig:
 
     def test_frozen(self):
         pc = PathConfig(id="learn", name="Learn")
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             pc.id = "changed"
 
     def test_section_requirements_default_factory(self):

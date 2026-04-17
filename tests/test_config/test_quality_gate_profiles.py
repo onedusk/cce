@@ -7,7 +7,6 @@ import pytest
 from cce.config.loader import _load_gate_config
 from cce.config.types import (
     QUALITY_GATE_PROFILES,
-    QualityGateConfig,
     default_quality_gate_profiles,
 )
 

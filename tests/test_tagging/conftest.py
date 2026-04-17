@@ -11,7 +11,9 @@ from cce.tagging.loader import load_taxonomy
 from cce.tagging.wellbeing import WellBeingTaxonomy
 
 # Resolve taxonomy YAML relative to project root
-_TAXONOMY_PATH = Path(__file__).resolve().parents[2] / "taxonomies" / "wellbeing-8d.yaml"
+_TAXONOMY_PATH = (
+    Path(__file__).resolve().parents[2] / "taxonomies" / "wellbeing-8d.yaml"
+)
 
 # Re-use the global make_evidence factory from tests/conftest.py
 from tests.conftest import make_evidence  # noqa: E402

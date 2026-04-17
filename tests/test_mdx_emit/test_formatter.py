@@ -79,9 +79,7 @@ class TestFormatMdxPage:
                 Citation(evidence_id="ev_b", url="https://b.com"),
             ],
         )
-        meta = _parse_metadata(
-            format_mdx_page(unit, {"ev_a": ev_a, "ev_b": ev_b}, "j")
-        )
+        meta = _parse_metadata(format_mdx_page(unit, {"ev_a": ev_a, "ev_b": ev_b}, "j"))
 
         assert len(meta["citations"]) == 2
         assert meta["citations"][0]["id"] == "ev_a"
@@ -113,14 +111,17 @@ class TestFormatMdxPage:
         assert "author" not in cit
         assert "publishedAt" not in cit
 
-
     def test_topic_slug_and_curated_at_passthrough(self):
         unit = make_content_unit(content="Body text.")
-        meta = _parse_metadata(format_mdx_page(
-            unit, {}, "j",
-            topic_slug="anxiety",
-            curated_at="2026-04-01T12:00:00+00:00",
-        ))
+        meta = _parse_metadata(
+            format_mdx_page(
+                unit,
+                {},
+                "j",
+                topic_slug="anxiety",
+                curated_at="2026-04-01T12:00:00+00:00",
+            )
+        )
 
         assert meta["topic"] == "anxiety"
         assert meta["curatedAt"] == "2026-04-01T12:00:00+00:00"

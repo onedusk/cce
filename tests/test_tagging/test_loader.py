@@ -177,7 +177,9 @@ class TestLoaderDegradation:
         assert first is not second  # cache miss -> fresh instance
         assert first.id == second.id  # but equivalent content
 
-    def test_path_configs_malformed_item_keeps_valid_predecessors(self, tmp_path, caplog):
+    def test_path_configs_malformed_item_keeps_valid_predecessors(
+        self, tmp_path, caplog
+    ):
         """If item 2 is malformed, items before it stay in the result."""
         import logging
 
@@ -195,6 +197,4 @@ class TestLoaderDegradation:
         # because the for-loop raised. This is intentional — we preserve
         # predecessors but stop on the first bad one.
         assert "never-reached" not in result
-        assert any(
-            "Malformed path config" in r.getMessage() for r in caplog.records
-        )
+        assert any("Malformed path config" in r.getMessage() for r in caplog.records)

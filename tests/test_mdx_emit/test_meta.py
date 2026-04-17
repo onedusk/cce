@@ -33,7 +33,9 @@ class TestMergeTopicMeta:
         }
         meta_path.write_text(json.dumps(editorial))
 
-        merge_topic_meta(meta_path, _scores(), _lineage(), "job_1", "2026-04-01T12:00:00Z")
+        merge_topic_meta(
+            meta_path, _scores(), _lineage(), "job_1", "2026-04-01T12:00:00Z"
+        )
 
         result = json.loads(meta_path.read_text())
         assert result["slug"] == "anxiety"
@@ -49,7 +51,9 @@ class TestMergeTopicMeta:
         meta_path = tmp_path / "meta.json"
         assert not meta_path.exists()
 
-        merge_topic_meta(meta_path, _scores(), _lineage(), "job_new", "2026-04-01T00:00:00Z")
+        merge_topic_meta(
+            meta_path, _scores(), _lineage(), "job_new", "2026-04-01T00:00:00Z"
+        )
 
         result = json.loads(meta_path.read_text())
         assert result["jobId"] == "job_new"
@@ -63,7 +67,9 @@ class TestMergeTopicMeta:
         meta_path = tmp_path / "meta.json"
 
         merge_topic_meta(meta_path, _scores(0.7, 0.6, 0.5), _lineage(), "job_1", "t1")
-        merge_topic_meta(meta_path, _scores(0.95, 0.92, 0.88), _lineage(), "job_2", "t2")
+        merge_topic_meta(
+            meta_path, _scores(0.95, 0.92, 0.88), _lineage(), "job_2", "t2"
+        )
 
         result = json.loads(meta_path.read_text())
         assert result["scores"]["confidence"] == 0.95

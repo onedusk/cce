@@ -117,7 +117,11 @@ def test_parse_policy_topic_overrides(tmp_path):
 
 @pytest.mark.integration
 def test_load_real_peer_reviewed_policy():
-    policy_path = Path(__file__).resolve().parent.parent.parent / "policies" / "peer-reviewed.yaml"
+    policy_path = (
+        Path(__file__).resolve().parent.parent.parent
+        / "policies"
+        / "peer-reviewed.yaml"
+    )
     if not policy_path.exists():
         pytest.skip("policies/peer-reviewed.yaml not found")
 

@@ -26,9 +26,7 @@ class TestPassRate:
         assert report.pass_rate == 1.0
 
     def test_report_pass_rate_mixed(self):
-        report = VerificationReport(
-            total_claims=10, supported=6, gaps_acknowledged=2
-        )
+        report = VerificationReport(total_claims=10, supported=6, gaps_acknowledged=2)
         assert report.pass_rate == 0.8
 
     def test_report_pass_rate_zero_claims(self):

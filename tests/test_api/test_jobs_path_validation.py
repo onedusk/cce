@@ -12,8 +12,6 @@ path name and lets the pipeline route it.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import httpx
 import pytest
 

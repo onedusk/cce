@@ -126,8 +126,12 @@ def test_gate_feedback_citation_density():
         "This is a substantive paragraph with more than fifteen words "
         "but it does not contain any evidence citations at all anywhere."
     )
-    result = _evaluate(content=content, confidence_score=0.5, unsupported=1, iteration=1)
-    assert "Citation density" in result.feedback or "citation" in result.feedback.lower()
+    result = _evaluate(
+        content=content, confidence_score=0.5, unsupported=1, iteration=1
+    )
+    assert (
+        "Citation density" in result.feedback or "citation" in result.feedback.lower()
+    )
 
 
 def test_gate_feedback_no_issues():
@@ -272,9 +276,7 @@ def test_has_fixable_issues_true():
 
 
 def test_has_fixable_issues_false():
-    report = make_verification_report(
-        unsupported=0, uncited=0, leakage=0, conflicts=0
-    )
+    report = make_verification_report(unsupported=0, uncited=0, leakage=0, conflicts=0)
     assert QualityGate._has_fixable_issues(report) is False
 
 

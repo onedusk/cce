@@ -11,9 +11,7 @@ def writer_json(*, content: str = "Draft with citation [ev:ev_001].") -> str:
         {
             "content": content,
             "citations_used": ["ev_001"],
-            "evidence_map": [
-                {"claim": "Draft claim", "evidence_ids": ["ev_001"]}
-            ],
+            "evidence_map": [{"claim": "Draft claim", "evidence_ids": ["ev_001"]}],
             "gaps": [],
         }
     )
@@ -76,5 +74,8 @@ def make_adapter():
 
 def llm(*json_strings: str) -> MockLLMProvider:
     return MockLLMProvider(
-        [LLMResponse(content=s, model="mock", stop_reason="end_turn") for s in json_strings]
+        [
+            LLMResponse(content=s, model="mock", stop_reason="end_turn")
+            for s in json_strings
+        ]
     )

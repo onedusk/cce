@@ -35,7 +35,9 @@ async def test_pipeline_happy_path(sqlite_store):
     adapter = _make_adapter()
     llm = _llm(_writer_json(), _verifier_json())
 
-    pipeline = Pipeline(config=config, crawl_adapter=adapter, evidence_store=sqlite_store, llm=llm)
+    pipeline = Pipeline(
+        config=config, crawl_adapter=adapter, evidence_store=sqlite_store, llm=llm
+    )
     result = await pipeline.run(make_curation_request(), make_source_policy())
 
     assert result.succeeded is True
@@ -51,7 +53,9 @@ async def test_pipeline_no_evidence(sqlite_store):
     adapter = MockCrawlAdapter(search_map={}, url_map={})
     llm = _llm()  # no LLM calls expected
 
-    pipeline = Pipeline(config=config, crawl_adapter=adapter, evidence_store=sqlite_store, llm=llm)
+    pipeline = Pipeline(
+        config=config, crawl_adapter=adapter, evidence_store=sqlite_store, llm=llm
+    )
     result = await pipeline.run(make_curation_request(), make_source_policy())
 
     assert result.failed is True
@@ -65,7 +69,9 @@ async def test_pipeline_single_pass(sqlite_store):
     # High confidence → PASS on first iteration
     llm = _llm(_writer_json(), _verifier_json(supported=10, total=10, gaps=0))
 
-    pipeline = Pipeline(config=config, crawl_adapter=adapter, evidence_store=sqlite_store, llm=llm)
+    pipeline = Pipeline(
+        config=config, crawl_adapter=adapter, evidence_store=sqlite_store, llm=llm
+    )
     result = await pipeline.run(make_curation_request(), make_source_policy())
 
     assert result.succeeded is True
@@ -86,7 +92,9 @@ async def test_pipeline_rewrite_loop(sqlite_store):
         _verifier_json(supported=10, total=10, gaps=0),
     )
 
-    pipeline = Pipeline(config=config, crawl_adapter=adapter, evidence_store=sqlite_store, llm=llm)
+    pipeline = Pipeline(
+        config=config, crawl_adapter=adapter, evidence_store=sqlite_store, llm=llm
+    )
     result = await pipeline.run(make_curation_request(), make_source_policy())
 
     assert result.succeeded is True
@@ -110,7 +118,9 @@ async def test_pipeline_review_max_iterations(sqlite_store):
         responses.append(_verifier_json(supported=3, total=10, unsupported=5, gaps=2))
     llm = _llm(*responses)
 
-    pipeline = Pipeline(config=config, crawl_adapter=adapter, evidence_store=sqlite_store, llm=llm)
+    pipeline = Pipeline(
+        config=config, crawl_adapter=adapter, evidence_store=sqlite_store, llm=llm
+    )
     result = await pipeline.run(make_curation_request(), make_source_policy())
 
     assert result.needs_review is True
@@ -129,7 +139,9 @@ async def test_pipeline_multiple_paths(sqlite_store):
         _verifier_json(),
     )
 
-    pipeline = Pipeline(config=config, crawl_adapter=adapter, evidence_store=sqlite_store, llm=llm)
+    pipeline = Pipeline(
+        config=config, crawl_adapter=adapter, evidence_store=sqlite_store, llm=llm
+    )
     request = make_curation_request(paths=["blog", "newsletter"])
     result = await pipeline.run(request, make_source_policy())
 
@@ -150,7 +162,9 @@ async def test_pipeline_exception_handling(sqlite_store):
     adapter = FailingAdapter()
     llm = _llm()
 
-    pipeline = Pipeline(config=config, crawl_adapter=adapter, evidence_store=sqlite_store, llm=llm)
+    pipeline = Pipeline(
+        config=config, crawl_adapter=adapter, evidence_store=sqlite_store, llm=llm
+    )
     result = await pipeline.run(make_curation_request(), make_source_policy())
 
     assert result.failed is True

@@ -30,9 +30,7 @@ def _make_writer_json() -> str:
         {
             "content": "# Test\nSome content [ev:ev_001].",
             "citations_used": ["ev_001"],
-            "evidence_map": [
-                {"claim": "Some content", "evidence_ids": ["ev_001"]}
-            ],
+            "evidence_map": [{"claim": "Some content", "evidence_ids": ["ev_001"]}],
             "gaps": [],
         }
     )
@@ -47,9 +45,7 @@ class TestBuildPathAddendum:
         assert "Depth: foundational" in addendum
 
     def test_includes_section_requirements(self):
-        pc = _make_learn_config(
-            section_requirements=["overview", "closing"]
-        )
+        pc = _make_learn_config(section_requirements=["overview", "closing"])
         addendum = Writer._build_path_addendum(pc)
         assert "Required sections: overview, closing" in addendum
 
@@ -70,7 +66,9 @@ class TestBuildPathAddendum:
         assert "--- END PATH GUIDANCE ---" in addendum
 
     def test_no_section_requirements(self):
-        pc = _make_learn_config(section_requirements=[], max_words=None, prompt_addendum=None)
+        pc = _make_learn_config(
+            section_requirements=[], max_words=None, prompt_addendum=None
+        )
         addendum = Writer._build_path_addendum(pc)
         assert "Required sections" not in addendum
         assert "Target length" not in addendum
@@ -91,7 +89,11 @@ class TestWriteWithPathConfig:
     async def test_system_prompt_contains_addendum(self):
         ev = make_evidence(id="ev_001")
         llm = MockLLMProvider(
-            [LLMResponse(content=_make_writer_json(), model="mock", stop_reason="end_turn")]
+            [
+                LLMResponse(
+                    content=_make_writer_json(), model="mock", stop_reason="end_turn"
+                )
+            ]
         )
         writer = Writer(llm)
         pc = _make_learn_config()
@@ -106,7 +108,11 @@ class TestWriteWithPathConfig:
     async def test_audience_override(self):
         ev = make_evidence(id="ev_001")
         llm = MockLLMProvider(
-            [LLMResponse(content=_make_writer_json(), model="mock", stop_reason="end_turn")]
+            [
+                LLMResponse(
+                    content=_make_writer_json(), model="mock", stop_reason="end_turn"
+                )
+            ]
         )
         writer = Writer(llm)
         pc = _make_learn_config(audience_override="expert")
@@ -122,7 +128,11 @@ class TestWriteWithPathConfig:
     async def test_audience_fallback_to_request(self):
         ev = make_evidence(id="ev_001")
         llm = MockLLMProvider(
-            [LLMResponse(content=_make_writer_json(), model="mock", stop_reason="end_turn")]
+            [
+                LLMResponse(
+                    content=_make_writer_json(), model="mock", stop_reason="end_turn"
+                )
+            ]
         )
         writer = Writer(llm)
         pc = _make_learn_config(audience_override=None)
@@ -137,7 +147,11 @@ class TestWriteWithPathConfig:
     async def test_subtopic_limit(self):
         ev = make_evidence(id="ev_001")
         llm = MockLLMProvider(
-            [LLMResponse(content=_make_writer_json(), model="mock", stop_reason="end_turn")]
+            [
+                LLMResponse(
+                    content=_make_writer_json(), model="mock", stop_reason="end_turn"
+                )
+            ]
         )
         writer = Writer(llm)
         pc = _make_learn_config(subtopic_limit=1)
@@ -157,7 +171,11 @@ class TestWriteWithPathConfig:
     async def test_subtopic_limit_none_uses_all(self):
         ev = make_evidence(id="ev_001")
         llm = MockLLMProvider(
-            [LLMResponse(content=_make_writer_json(), model="mock", stop_reason="end_turn")]
+            [
+                LLMResponse(
+                    content=_make_writer_json(), model="mock", stop_reason="end_turn"
+                )
+            ]
         )
         writer = Writer(llm)
         pc = _make_learn_config(subtopic_limit=None)

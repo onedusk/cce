@@ -90,7 +90,9 @@ async def _poll_until(
         if data["status"] in terminal_statuses:
             return data
         await asyncio.sleep(0.05)
-    raise TimeoutError(f"Job {job_id} did not reach {terminal_statuses} within {timeout}s")
+    raise TimeoutError(
+        f"Job {job_id} did not reach {terminal_statuses} within {timeout}s"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +111,11 @@ async def test_full_lifecycle_post_to_package(tmp_path: Path):
             # Submit
             resp = await client.post(
                 "/v1/curate/jobs",
-                json={"topic": "test topic", "paths": ["blog"], "policy_id": "test-policy"},
+                json={
+                    "topic": "test topic",
+                    "paths": ["blog"],
+                    "policy_id": "test-policy",
+                },
             )
             assert resp.status_code == 202
             job_id = resp.json()["data"]["id"]
@@ -169,7 +175,11 @@ async def test_delete_running_job(tmp_path: Path):
         ) as client:
             resp = await client.post(
                 "/v1/curate/jobs",
-                json={"topic": "test topic", "paths": ["blog"], "policy_id": "test-policy"},
+                json={
+                    "topic": "test topic",
+                    "paths": ["blog"],
+                    "policy_id": "test-policy",
+                },
             )
             job_id = resp.json()["data"]["id"]
             await asyncio.sleep(0.05)
@@ -201,7 +211,11 @@ async def test_retry_completed_job(tmp_path: Path):
             # First run
             resp = await client.post(
                 "/v1/curate/jobs",
-                json={"topic": "test topic", "paths": ["blog"], "policy_id": "test-policy"},
+                json={
+                    "topic": "test topic",
+                    "paths": ["blog"],
+                    "policy_id": "test-policy",
+                },
             )
             job_id = resp.json()["data"]["id"]
             data = await _poll_until(client, job_id, {"completed", "failed"})
@@ -276,7 +290,11 @@ async def test_pipeline_error_sets_failed_status(tmp_path: Path):
         ) as client:
             resp = await client.post(
                 "/v1/curate/jobs",
-                json={"topic": "test topic", "paths": ["blog"], "policy_id": "test-policy"},
+                json={
+                    "topic": "test topic",
+                    "paths": ["blog"],
+                    "policy_id": "test-policy",
+                },
             )
             job_id = resp.json()["data"]["id"]
 
