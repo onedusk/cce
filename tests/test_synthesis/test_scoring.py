@@ -84,14 +84,16 @@ def test_score_ai_flat_sample_fails(scorer):
 
 def test_score_human_bursty_sample_passes(scorer):
     """Mixed sentence lengths, organic transitions, declarative claims -> pass."""
+    # Note: no em dashes — the calibrated default threshold is 4.0/1000,
+    # which a 166-word fixture cannot satisfy with even one em dash.
     body = (
         "It works. Six to eight sessions, usually, with homework between, aimed "
         "at the habits and thought patterns that keep a person awake at the exact "
-        "moment they want most to sleep — and the pattern holds up through long "
+        "moment they want most to sleep. The pattern holds up through long "
         "follow-up studies running a year out, two years out, five years out, "
         "which is frankly more than can be said of most sleep medications whose "
         "effects tend to wane once the body adapts. Worth knowing.\n\n"
-        "Sleep is layered. REM, deep, light, all doing different work — repair, "
+        "Sleep is layered. REM, deep, light, all doing different work: repair, "
         "memory consolidation, things we still cannot name with any precision. "
         "Wake someone mid-REM and they will describe a vivid dream in detail "
         "that evaporates after a minute or two of full consciousness returning. "
@@ -139,6 +141,34 @@ def test_score_contrastive_pattern_matches(scorer):
     scores = scorer.score(body)
 
     assert scores.contrastive_frame_count >= 1
+
+
+def test_score_counts_em_dashes(scorer):
+    """Em dashes (U+2014) are counted; threshold catches overuse."""
+    body = (
+        "Sleep is layered — REM, deep, light — each doing different work. "
+        "Wake someone mid-REM and they will report a vivid dream — "
+        "evaporating within minutes. The pattern holds — "
+        "across decades of work."
+    )
+    scores = scorer.score(body)
+
+    # 4 em dashes in this body
+    assert scores.em_dash_count == 4
+    # At ~30 words, that's >100/1000 — well above default 4.0 threshold
+    assert scores.density_per_1000(scores.em_dash_count) > 4.0
+
+
+def test_score_no_em_dashes_clears_threshold(scorer):
+    """A draft without em dashes does not fail on the em dash metric."""
+    body = (
+        "Sleep is layered. REM, deep, light, each doing different work. "
+        "Wake someone mid-REM and they will report a vivid dream that "
+        "evaporates within minutes. The pattern holds across decades of work."
+    )
+    scores = scorer.score(body)
+
+    assert scores.em_dash_count == 0
 
 
 def test_score_formulaic_transitions_only_at_paragraph_opening(scorer):

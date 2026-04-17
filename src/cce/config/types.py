@@ -234,7 +234,23 @@ class HumanizationThresholds(BaseModel):
     max_hedging_density_per_1000: float = Field(
         default=8.0,
         ge=0.0,
-        description="Density tolerance for hedging phrases.",
+        description=(
+            "Density tolerance for hedging + stock phrases. Category covers "
+            "both ('it should be noted', 'a testament to', 'in today's fast-"
+            "paced world', etc.) — both share the same substring-match logic."
+        ),
+    )
+    max_em_dashes_per_1000: float = Field(
+        default=4.0,
+        ge=0.0,
+        description=(
+            "Density tolerance for em dash characters (U+2014). The engine's "
+            "natural distribution is ~17/1000 (median) on archival output — "
+            "well above human-writing norms. 4.0 is an editorial-target "
+            "threshold, not a calibrated-to-engine threshold: em dash overuse "
+            "is precisely the AI fingerprint we want the editor to address. "
+            "Source: Goedecke 2025; Plagiarism Today 2025."
+        ),
     )
 
 

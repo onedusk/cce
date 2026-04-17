@@ -141,6 +141,11 @@ def failed_metrics(
         > thresholds.max_hedging_density_per_1000
     ):
         flags.append("hedging")
+    if (
+        scores.density_per_1000(scores.em_dash_count)
+        > thresholds.max_em_dashes_per_1000
+    ):
+        flags.append("emdash")
     return flags
 
 
@@ -155,6 +160,7 @@ def format_row(topic: str, path: str, scores: StyleScores, flags: list[str]) -> 
         f"trans={scores.formulaic_transition_count:>2}  "
         f"contr={scores.contrastive_frame_count:>2}  "
         f"hedge={scores.hedging_phrase_count:>2}  "
+        f"emdash={scores.em_dash_count:>3}  "
         f"fail={flagstr}"
     )
 
@@ -235,6 +241,7 @@ def main() -> int:
     print(
         f"  max_hedging_density/1000       = {thresholds.max_hedging_density_per_1000}"
     )
+    print(f"  max_em_dashes/1000             = {thresholds.max_em_dashes_per_1000}")
     print()
 
     for mdx_path in mdx_files:
@@ -275,6 +282,7 @@ def main() -> int:
         "transitions",
         "contrastive",
         "hedging",
+        "emdash",
     ):
         count = metric_fails.get(metric, 0)
         pct = 100.0 * count / total if total else 0.0
@@ -328,6 +336,10 @@ def main() -> int:
             for r in results
         ],
     )
+    print_percentiles(
+        "em_dashes / 1000",
+        [r["scores"].density_per_1000(r["scores"].em_dash_count) for r in results],
+    )
 
     if args.csv:
         with args.csv.open("w", newline="") as f:
@@ -345,6 +357,7 @@ def main() -> int:
                     "formulaic_transition_count",
                     "contrastive_frame_count",
                     "hedging_phrase_count",
+                    "em_dash_count",
                 ]
             )
             for r in results:
@@ -362,6 +375,7 @@ def main() -> int:
                         s.formulaic_transition_count,
                         s.contrastive_frame_count,
                         s.hedging_phrase_count,
+                        s.em_dash_count,
                     ]
                 )
         print(f"\nCSV written to {args.csv}")

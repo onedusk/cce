@@ -115,6 +115,7 @@ class ScoreMetrics(TypedDict):
     formulaic_transition_count: int
     contrastive_frame_count: int
     hedging_phrase_count: int
+    em_dash_count: int
     word_count: int
     humanization_pass: bool
 

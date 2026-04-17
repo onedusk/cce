@@ -62,6 +62,7 @@ class _AlwaysPassingScorer:
             formulaic_transition_count=0,
             contrastive_frame_count=0,
             hedging_phrase_count=0,
+            em_dash_count=0,
             word_count=len(content.split()),
             humanization_pass=True,
         )

@@ -36,16 +36,32 @@ suppressed_vocabulary:
   - notably
   - particularly
   - within
+  # Hyperbolic descriptors (Steere 2024) — AI applies these to mundane topics
+  - groundbreaking
+  - vital
+  - invaluable
+  - profound
 
 hedging_phrases:
+  # This category covers BOTH hedging proper AND inline AI stock phrases —
+  # they share the same case-insensitive substring-match logic. Keep the
+  # YAML key name for backward compatibility with existing configs.
+  #
+  # Hedges:
   - "it should be noted that"
   - "it is important to note"
+  - "it's important to note that"
   - "this suggests that"
   - "research suggests"
   - "may be effective"
   - "from a broader perspective"
   - "generally speaking"
   - "in many ways"
+  # AI stock phrases (Pantcheva 2025; common across LLM output):
+  - "a testament to"
+  - "in today's fast-paced world"
+  - "at the intersection of"
+  - "navigate the complex landscape"
 
 formulaic_transitions:
   - "Furthermore,"

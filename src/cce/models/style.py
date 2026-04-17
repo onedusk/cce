@@ -44,6 +44,14 @@ class StyleScores(BaseModel):
         ge=0,
         description="Count of hedging-phrase matches in the body.",
     )
+    em_dash_count: int = Field(
+        ge=0,
+        description=(
+            "Count of em dash characters (U+2014) in the body. AI writers — "
+            "especially GPT-4o, but also Claude — overuse em dashes vs. typical "
+            "human prose. Source: Goedecke 2025; Plagiarism Today 2025."
+        ),
+    )
     word_count: int = Field(
         ge=0,
         description="Total body word count (citations stripped). Density denominator.",

@@ -36,6 +36,9 @@ logger = logging.getLogger(__name__)
 _CITATION_RE = re.compile(r"\[ev:[^\]]+\]")
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z\"'])")
 _WORD_RE = re.compile(r"\b[\w'-]+\b")
+# Em dash (U+2014). The engine overuses em dashes ~17/1000 words; threshold
+# in HumanizationThresholds catches drafts that need editorial reduction.
+_EM_DASH = "\u2014"
 
 
 class Scorer:
@@ -71,6 +74,7 @@ class Scorer:
         transition_count = self._count_transitions(body)
         contrastive_count = self._count_contrastive(body)
         hedging_count = self._count_hedging(body.lower())
+        em_dash_count = body.count(_EM_DASH)
 
         per_1000 = (1000.0 / word_count) if word_count else 0.0
         passes = (
@@ -84,6 +88,7 @@ class Scorer:
             <= self._thresholds.max_contrastive_frames_per_1000
             and (hedging_count * per_1000)
             <= self._thresholds.max_hedging_density_per_1000
+            and (em_dash_count * per_1000) <= self._thresholds.max_em_dashes_per_1000
         )
 
         return StyleScores(
@@ -93,6 +98,7 @@ class Scorer:
             formulaic_transition_count=transition_count,
             contrastive_frame_count=contrastive_count,
             hedging_phrase_count=hedging_count,
+            em_dash_count=em_dash_count,
             word_count=word_count,
             humanization_pass=passes,
         )
@@ -138,6 +144,7 @@ def _empty_scores() -> StyleScores:
         formulaic_transition_count=0,
         contrastive_frame_count=0,
         hedging_phrase_count=0,
+        em_dash_count=0,
         word_count=0,
         humanization_pass=True,
     )

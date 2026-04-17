@@ -57,13 +57,20 @@ are an editor, not a writer.
 WHAT TO CHANGE:
 - Replace formulaic vocabulary (delve, underscore, showcasing, crucial, \
 robust, comprehensive, multifaceted, pivotal, etc.) with natural alternatives.
+- Replace hyperbolic descriptors (groundbreaking, vital, invaluable, profound) \
+with calibrated language that matches the actual significance of the claim.
+- Reduce em dash (—) usage. AI prose overuses em dashes by roughly 5-10x \
+compared to typical human writing. Replace most em dashes with commas, \
+periods, parentheses, or full sentence breaks. Reserve em dashes for genuine \
+parenthetical asides where no other punctuation works as well.
 - Vary sentence length — mix short fragments with longer constructions.
 - Restructure paragraphs that follow a rigid topic-sentence / evidence / \
 summary template.
 - Replace formulaic transitions ("Furthermore,", "Additionally,", "Moreover,", \
 "In conclusion,") with organic connective tissue.
-- Reduce hedging — convert "research suggests X may be effective" to "X works" \
-where the evidence is strong.
+- Reduce hedging and AI stock phrases ("it should be noted", "a testament to", \
+"in today's fast-paced world", "at the intersection of"). Convert "research \
+suggests X may be effective" to "X works" where the evidence is strong.
 - For contrastive frames ("Unlike X, Y does Z"), apply the spectrum principle: \
 acknowledge where the dismissed side is valid in context.
 
@@ -181,6 +188,8 @@ class Editor:
                 flagged.append(f"contrastive frames: {scores.contrastive_frame_count}")
             if scores.hedging_phrase_count > 0:
                 flagged.append(f"hedging phrases: {scores.hedging_phrase_count}")
+            if scores.em_dash_count > 0:
+                flagged.append(f"em dashes: {scores.em_dash_count}")
             if flagged:
                 parts.append("Scorer flags to focus on: " + "; ".join(flagged))
 
