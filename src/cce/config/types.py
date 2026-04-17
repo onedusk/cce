@@ -185,23 +185,41 @@ class APIConfig(BaseModel):
 
 
 class HumanizationThresholds(BaseModel):
-    """Pass/fail thresholds for the programmatic style scorer (H2)."""
+    """Pass/fail thresholds for the programmatic style scorer (H2).
+
+    Calibrated 2026-04-17 against 36 existing MDX drafts (run_score_sweep.py).
+    Defaults reflect the engine's observed distribution on 1000-2000-word
+    single-topic essays, not general-prose baselines from the research.
+    """
 
     min_sentence_length_stddev: float = Field(
-        default=8.0,
+        default=10.0,
         ge=0.0,
-        description="Below this is 'AI-flat'. Source: ai_writing_vs_human_writing.md.",
+        description=(
+            "Below this is 'AI-flat'. Raised from 8.0 (research default) "
+            "to the observed p25 on CCE output, where stddev < 10 reliably "
+            "indicates genuinely flat prose rather than the natural floor."
+        ),
     )
     max_suppressed_vocab_hits_per_1000: float = Field(
         default=3.0,
         ge=0.0,
-        description="Density tolerance for suppressed vocabulary (per 1000 words).",
+        description=(
+            "Density tolerance for suppressed vocabulary (per 1000 words). "
+            "At 3.0 the scorer catches the top quartile of engine output "
+            "(p75 density = 3.42); well-calibrated."
+        ),
     )
     min_type_token_ratio: float = Field(
-        default=0.45,
+        default=0.38,
         ge=0.0,
         le=1.0,
-        description="Lexical diversity floor. Provisional pre-calibration.",
+        description=(
+            "Lexical diversity floor. Lowered from 0.45 (research default) "
+            "to 0.38 (engine p25). Single-topic 1500-2000-word essays reuse "
+            "topic-specific vocabulary mechanically — 0.45 was a general-"
+            "prose baseline that flagged 86% of CCE drafts as false positives."
+        ),
     )
     max_formulaic_transitions_per_1000: float = Field(
         default=2.0,

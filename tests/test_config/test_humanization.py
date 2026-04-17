@@ -40,7 +40,8 @@ def test_humanization_config_defaults():
     assert isinstance(cfg.thresholds, HumanizationThresholds)
     assert isinstance(cfg.editor, EditorConfig)
     assert isinstance(cfg.implied_claims, ImpliedClaimsConfig)
-    assert cfg.thresholds.min_sentence_length_stddev == 8.0
+    assert cfg.thresholds.min_sentence_length_stddev == 10.0
+    assert cfg.thresholds.min_type_token_ratio == 0.38
     assert cfg.editor.enabled is False
     assert cfg.editor.temperature == 0.4
     assert cfg.implied_claims.enabled is False
@@ -67,8 +68,8 @@ def test_humanization_config_yaml_overlay(monkeypatch, tmp_path):
     assert cfg.humanization.enabled is True
     assert cfg.humanization.thresholds.min_sentence_length_stddev == 6.5
     assert cfg.humanization.editor.temperature == 0.7
-    # Unspecified threshold stays at default
-    assert cfg.humanization.thresholds.min_type_token_ratio == 0.45
+    # Unspecified threshold stays at the calibrated default (0.38, not 0.45)
+    assert cfg.humanization.thresholds.min_type_token_ratio == 0.38
     # Unspecified editor field stays at default
     assert cfg.humanization.editor.enabled is False
 

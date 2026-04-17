@@ -28,6 +28,7 @@ from cce.config.types import (
 from cce.evidence.sqlite import SQLiteEvidenceStore
 from cce.llm.base import LLMResponse
 from cce.models.job import JobStage
+from cce.models.style import StyleScores
 from cce.orchestrator.pipeline import Pipeline
 from cce.synthesis.editor import Editor
 from cce.synthesis.implied_claims import ImpliedClaimChecker
@@ -54,6 +55,27 @@ def _markers():
 
 def _scorer() -> Scorer:
     return Scorer(thresholds=HumanizationThresholds(), markers=_markers())
+
+
+class _AlwaysPassingScorer:
+    """Stub Scorer that always returns humanization_pass=True.
+
+    Decouples tests that verify pipeline gating ("when scorer passes,
+    downstream stages skip") from the real scorer's threshold calibration,
+    so a future retune doesn't break gating tests.
+    """
+
+    def score(self, content: str) -> StyleScores:
+        return StyleScores(
+            sentence_length_stddev=20.0,
+            suppressed_vocab_hits=0,
+            type_token_ratio=0.80,
+            formulaic_transition_count=0,
+            contrastive_frame_count=0,
+            hedging_phrase_count=0,
+            word_count=len(content.split()),
+            humanization_pass=True,
+        )
 
 
 def _editor(llm: MockLLMProvider) -> Editor:
@@ -237,7 +259,7 @@ async def test_checker_skipped_when_score_passes(sqlite_store):
         crawl_adapter=adapter,
         evidence_store=sqlite_store,
         llm=llm,
-        scorer=_scorer(),
+        scorer=_AlwaysPassingScorer(),  # type: ignore[arg-type]
         editor=_editor(llm),
         implied_claim_checker=_checker(llm, store),
     )

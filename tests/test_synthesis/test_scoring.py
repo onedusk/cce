@@ -85,24 +85,30 @@ def test_score_ai_flat_sample_fails(scorer):
 def test_score_human_bursty_sample_passes(scorer):
     """Mixed sentence lengths, organic transitions, declarative claims -> pass."""
     body = (
-        "Sleep breaks down into stages. Each one does different work — some repair "
-        "the body, some consolidate memory, some don't seem to do much we can name. "
-        "Wake someone mid-REM and they'll report vivid dreams.\n\n"
-        "CBT-I targets the habits that keep people awake. It works. Six to eight "
-        "sessions, usually, with homework between. The pattern shows up in the "
-        "research: people who finish the course sleep better a year later, two years "
-        "later, five years later, which is more than you can say for most sleep "
-        "medications. Medication can still help during an acute episode, but it's "
-        "not a long-term strategy on its own.\n\n"
-        "Why does this work? Because the habits are load-bearing. You fix the habits, "
-        "the sleep follows. Short feedback loop, measurable outcome."
+        "It works. Six to eight sessions, usually, with homework between, aimed "
+        "at the habits and thought patterns that keep a person awake at the exact "
+        "moment they want most to sleep — and the pattern holds up through long "
+        "follow-up studies running a year out, two years out, five years out, "
+        "which is frankly more than can be said of most sleep medications whose "
+        "effects tend to wane once the body adapts. Worth knowing.\n\n"
+        "Sleep is layered. REM, deep, light, all doing different work — repair, "
+        "memory consolidation, things we still cannot name with any precision. "
+        "Wake someone mid-REM and they will describe a vivid dream in detail "
+        "that evaporates after a minute or two of full consciousness returning. "
+        "Why?\n\n"
+        "Because the habits are load-bearing. Fix the habits, the sleep follows "
+        "quietly and without ceremony. Short feedback loop, measurable outcome, "
+        "and the gains compound quarter after quarter in a way that medications "
+        "alone simply do not replicate for most chronic insomnia patients over "
+        "the long term. No magic."
     )
 
     scores = scorer.score(body)
 
     assert scores.word_count > 100
-    assert scores.sentence_length_stddev >= 8.0
-    assert scores.type_token_ratio >= 0.45
+    # Fixture clears the calibrated defaults (stddev >= 10.0, TTR >= 0.38).
+    assert scores.sentence_length_stddev >= 10.0
+    assert scores.type_token_ratio >= 0.38
     assert scores.humanization_pass is True
 
 
