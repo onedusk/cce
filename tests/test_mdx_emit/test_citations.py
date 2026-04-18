@@ -109,3 +109,34 @@ class TestBuildCitationIndex:
 
         assert result.content == "Colon [^1] and bare [^2]."
         assert len(result.citations) == 2
+
+    def test_writer_drops_ev_prefix_in_marker(self):
+        """Writer prompt says [ev:EVIDENCE_ID] but evidence block shows IDs as
+        [ev_HASH]. The LLM frequently interprets EVIDENCE_ID as just the HASH
+        and emits [ev:HASH] without the ev_ prefix. Regression: this caused
+        every learn-path footnote to render as [^?] in the loneliness rewrite
+        run. Lookup must transparently retry with `ev_` prepended."""
+        # Evidence is stored with the canonical `ev_` prefix:
+        lookup = _make_lookup("ev_abc123", "ev_xyz789")
+        # Writer cited without the prefix:
+        result = build_citation_index(
+            "First claim [ev:abc123] and second [ev:xyz789].", lookup
+        )
+
+        assert result.content == "First claim [^1] and second [^2]."
+        assert "[^?]" not in result.content
+        assert len(result.citations) == 2
+        # Citations should be canonicalized to the `ev_`-prefixed form
+        # so downstream consumers see one form, not a mix.
+        assert {c.id for c in result.citations} == {"ev_abc123", "ev_xyz789"}
+
+    def test_unprefixed_marker_repeated_collapses_to_one_index(self):
+        """A repeated [ev:HASH] marker (no `ev_` prefix) should reuse the
+        same footnote index across all occurrences — not allocate a new one."""
+        lookup = _make_lookup("ev_abc")
+        result = build_citation_index(
+            "First [ev:abc] and again [ev:abc] and third time [ev:abc].", lookup
+        )
+
+        assert result.content == "First [^1] and again [^1] and third time [^1]."
+        assert len(result.citations) == 1

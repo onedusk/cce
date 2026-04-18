@@ -61,10 +61,22 @@ def build_citation_index(
         # group(1) = colon format [ev:ID], group(2) = bare format [ev_ID]
         ev_id = match.group(1) or match.group(2)
 
+        # The writer's prompt says "use [ev:EVIDENCE_ID]" while the evidence
+        # block displays IDs as [ev_HASH] — the LLM frequently interprets
+        # "EVIDENCE_ID" as just the HASH part (without the `ev_` prefix) and
+        # emits [ev:HASH]. Try the literal lookup first, then re-try with
+        # the `ev_` prefix added. Canonicalize ev_id so the seen[] cache
+        # collapses both forms onto one footnote index.
+        evidence = evidence_by_id.get(ev_id)
+        if evidence is None and not ev_id.startswith("ev_"):
+            prefixed = f"ev_{ev_id}"
+            evidence = evidence_by_id.get(prefixed)
+            if evidence is not None:
+                ev_id = prefixed
+
         if ev_id in seen:
             return f"[^{seen[ev_id]}]"
 
-        evidence = evidence_by_id.get(ev_id)
         if evidence is None:
             return "[^?]"
 
