@@ -5,6 +5,22 @@ All notable changes to the Content Curation Engine (CCE).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] — 2026-04-22
+
+Patch release: closes a HIGH-severity authentication gap on jobs read
+routes discovered in a same-day security review.
+
+### Security
+- **Protect jobs read routes** (`get_job`, `list_jobs`, `get_package` in `src/cce/api/routes/jobs.py`). Before this release, three GET handlers on the jobs router were reachable unauthenticated while every other sensitive route was authed. An unauthenticated client could enumerate all job ids via `GET /v1/curate/jobs` and exfiltrate full `PublishPackage` content (draft text, evidence references with source URLs, verification report) via `GET /v1/curate/jobs/{id}/package` — the same data the authed evidence endpoints defend.
+- **Breaking change.** Clients polling job status without a bearer token will now receive `401`. Pass `Authorization: Bearer <key>` on all jobs + evidence requests.
+
+### Changed
+- Auth is now attached at the router level via `app.include_router(jobs_router, dependencies=[Depends(auth_dependency)])` (same for `evidence_router`). Per-route `_auth: str | None = Depends(auth_dependency)` params were dropped as redundant on `create_job`, `delete_job`, `retry_job`, `get_evidence`, `search_evidence`. The meta router (`/v1/health`, `/v1/meta`) remains intentionally unauthed.
+- `tests/test_api/test_auth_parameterized.py`: `PROTECTED_ROUTES` grew to 8 entries; `UNPROTECTED_ROUTES_EXPECTED` reduced to health + meta only. The file's explicit-inventory philosophy was preserved (no auto-enumeration of `app.routes`).
+
+### Dismissed (recorded, not acted on)
+- CORS `allow_credentials=True` with default `allow_origins=["*"]` was identified in the same review but dismissed as a standalone finding. The API uses bearer tokens in the `Authorization` header only (no cookies), so browsers don't auto-attach credentials on cross-origin fetches. Once the auth gap above is closed, the CORS misconfiguration has no exploitable credentialed surface. It remains a hardening improvement should the API ever gain cookie-based auth.
+
 ## [0.1.0] — 2026-04-22
 
 Initial release. Phases 1-3 shipped end-to-end: an evidence-first pipeline
