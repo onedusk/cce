@@ -55,6 +55,7 @@ evidence_live.db
 *thnk*
 docs/decompose/
 docs/internal/
+docs/security/
 .decompose/
 .ctxt_out/
 logs/
