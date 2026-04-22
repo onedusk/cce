@@ -6,22 +6,33 @@ The engine discovers sources, extracts verbatim evidence with provenance, synthe
 
 ## Architecture
 
-```
-CurationRequest
-  -> Source Policy (filter bad inputs early)
-  -> Discover + Extract (crawl, normalize, store evidence)
-  -> Embedding Ranking (semantic relevance scoring via Ollama + sqlite-vec)
-  -> Date + Reputation Filters (recency, peer-review, COI enforcement)
-  -> Taxonomy Tagging (classify evidence by domain dimensions)
-  -> Evidence Store (verbatim excerpts + provenance + tags)
-  -> Per-Path Synthesis (writer adapts tone/structure/depth per output path)
-  -> Humanization (opt-in: scorer -> editor -> implied-claim checker)
-  -> Verifier (check every claim against evidence, trust-weighted)
-  -> Quality Gate (pass / fix gaps / human review)
-  -> Publish Package (content + evidence map + scores + lineage)
+```mermaid
+flowchart TD
+    Req([CurationRequest]) --> Policy[Source Policy]
+    Policy --> Disc[Discover + Extract]
+    Disc --> Rank[Embedding Ranking<br/><sub>Ollama + sqlite-vec</sub>]
+    Rank --> Filt[Date + Reputation Filters]
+    Filt --> Tag[Taxonomy Tagging]
+    Tag --> Store[(Evidence Store)]
+
+    Store --> Fork{{Per-path loop<br/>learn · explore · apply}}
+    Fork --> Writer[Writer<br/><sub>evidence-constrained draft</sub>]
+    Writer -->|humanization<br/>enabled| Scorer[Scorer<br/><sub>7 style metrics</sub>]
+    Scorer --> Editor[Editor<br/><sub>citation-preserving rewrite</sub>]
+    Editor --> Implied[Implied-Claim Checker<br/><sub>contrastive-frame audit</sub>]
+    Implied --> Verifier
+    Writer -.->|humanization<br/>disabled| Verifier[Verifier<br/><sub>trust-weighted fact-check</sub>]
+
+    Verifier --> Gate{Quality Gate}
+    Gate -->|FAIL| Writer
+    Gate -->|REVIEW| Human([Human Review])
+    Gate -->|PASS| Package([Publish Package])
+
+    classDef humanization fill:#fff4e6,stroke:#d97706
+    class Scorer,Editor,Implied humanization
 ```
 
-**Core invariant:** the writer produces drafts _only_ from stored evidence objects. The verifier is a separate role that checks every claim. The quality gate enforces "no citation, no ship."
+**Core invariant:** the writer produces drafts _only_ from stored evidence objects. The verifier is a separate role that checks every claim. The quality gate enforces "no citation, no ship." Humanization stages (highlighted) are opt-in via `EngineConfig.humanization.enabled` and never extend the writer-iteration budget.
 
 ## Package Structure
 
