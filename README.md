@@ -27,17 +27,23 @@ CurationRequest
 
 ```
 src/cce/
-  config/         # Engine configuration (env vars, YAML -> typed objects)
-  models/         # Pydantic data contracts (shared across all modules)
-  policy/         # Source policy (domain rules, reputation, recency)
-  discovery/      # Source discovery + extraction + crawl adapters + embeddings
-  evidence/       # Evidence store (SQLite + sqlite-vec, dedup, retrieval)
-  tagging/        # Taxonomy plugin protocol + YAML loaders
-  synthesis/      # Writer agent (evidence-constrained, path-aware drafts)
-  verification/   # Verifier agent (trust-weighted) + quality gate
-  orchestrator/   # Pipeline execution, writer-verifier loop
-  llm/            # LLM provider adapters (Anthropic)
-  api/            # REST API via FastAPI (Phase 3)
+  config/           # Engine configuration (env vars, YAML -> typed objects)
+  models/           # Pydantic data contracts (shared across all modules)
+  policy/           # Source policy (domain rules, reputation, recency)
+  discovery/        # Source discovery + extraction + crawl adapters + embeddings
+  evidence/         # Evidence store (SQLite + sqlite-vec, dedup, retrieval)
+  tagging/          # Taxonomy plugin protocol + YAML loaders
+  synthesis/        # Writer, Editor (humanization), Scorer, ImpliedClaimChecker
+  verification/     # Verifier agent (trust-weighted) + quality gate
+  orchestrator/     # Pipeline execution, per-path write-verify loop
+  llm/              # LLM provider adapters (Anthropic)
+  jobs/             # Job store (lifecycle state, stage records)
+  output/           # Publish-package writer + MDX emitter
+  api/              # REST API via FastAPI
+  engine.py         # CurationEngine facade (embedded/remote mode dispatch)
+  cli.py            # `cce` CLI (run, batch, emit-mdx, api key generate)
+  logging_config.py # JSON/plain log formatter + request-id contextvar
+  parsing.py        # Shared JSON extraction helpers for LLM responses
 ```
 
 ## Key Design Points
