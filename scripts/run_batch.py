@@ -1,7 +1,7 @@
 """Batch pipeline runner — runs multiple topics sequentially.
 
 Usage:
-    PYTHONPATH=src uv run python run_batch.py
+    PYTHONPATH=src uv run python scripts/run_batch.py
 """
 
 import asyncio
@@ -9,8 +9,10 @@ import logging
 import os
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parent.parent
+
 # Load .env
-env_path = Path(__file__).parent / ".env"
+env_path = ROOT / ".env"
 if env_path.exists():
     for line in env_path.read_text().splitlines():
         line = line.strip()
@@ -86,7 +88,7 @@ async def main():
                     result = PipelineResult(
                         package=package, job=job, gate_results=[]
                     )
-                    output_dir = Path(__file__).parent / "output"
+                    output_dir = ROOT / "output"
                     run_dir = write_output(result, output_dir)
                     logger.info("Output written to: %s", run_dir)
 

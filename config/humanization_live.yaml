@@ -1,0 +1,27 @@
+# Reference operator config with the full humanization stack enabled.
+# Pass this path to CurationEngine.embedded(config_path=...) to run pipelines
+# with scorer + editor + implied-claim checker all wired up.
+#
+# Calibrated defaults (set via code in HumanizationThresholds, 2026-04-17):
+#   min_sentence_length_stddev:        10.0
+#   max_suppressed_vocab_hits/1000:     3.0
+#   min_type_token_ratio:               0.38
+#   max_formulaic_transitions/1000:     2.0
+#   max_contrastive_frames/1000:        5.0
+#   max_hedging_density/1000:           8.0
+#   max_em_dashes/1000:                 4.0  (editorial-target; engine median is ~17)
+#
+# Override any threshold here to retune for a specific environment.
+
+humanization:
+  enabled: true
+  markers_path: config/humanization_markers.yaml
+  editor:
+    enabled: true
+    temperature: 0.4
+    max_words_drift_pct: 0.10
+  implied_claims:
+    enabled: true
+    search_strategy: llm_extract
+    dismissal_release_valve_ratio: 0.15
+    counter_evidence_search_limit: 10

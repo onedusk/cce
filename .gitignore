@@ -56,3 +56,5 @@ evidence_live.db
 docs/decompose/
 docs/internal/
 .decompose/
+.ctxt_out/
+logs/

@@ -12,8 +12,11 @@ from cce.models.package import PublishPackage
 from cce.output.mdx import emit_mdx
 
 
+ROOT = Path(__file__).resolve().parent.parent
+
+
 def main() -> None:
-    output_dir = Path("output")
+    output_dir = ROOT / "output"
     target_dir = output_dir / "mdx"
     target_dir.mkdir(exist_ok=True)
 

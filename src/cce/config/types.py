@@ -187,7 +187,7 @@ class APIConfig(BaseModel):
 class HumanizationThresholds(BaseModel):
     """Pass/fail thresholds for the programmatic style scorer (H2).
 
-    Calibrated 2026-04-17 against 36 existing MDX drafts (run_score_sweep.py).
+    Calibrated 2026-04-17 against 36 existing MDX drafts (scripts/run_score_sweep.py).
     Defaults reflect the engine's observed distribution on 1000-2000-word
     single-topic essays, not general-prose baselines from the research.
     """

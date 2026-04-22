@@ -2,7 +2,7 @@
 
 Usage:
     cd /path/to/cce
-    PYTHONPATH=src python run_live.py
+    PYTHONPATH=src python scripts/run_live.py
 """
 
 import asyncio
@@ -11,8 +11,10 @@ from pathlib import Path
 
 from cce import load_env_file
 
+ROOT = Path(__file__).resolve().parent.parent
+
 # Load .env (shared helper; see src/cce/__init__.py).
-load_env_file(Path(__file__).parent / ".env")
+load_env_file(ROOT / ".env")
 
 from cce.engine import CurationEngine  # noqa: E402
 from cce.models.request import CurationRequest  # noqa: E402
@@ -65,7 +67,7 @@ async def main():
                 job=job,
                 gate_results=[],
             )
-            output_dir = Path(__file__).parent / "output"
+            output_dir = ROOT / "output"
             run_dir = write_output(result, output_dir)
             logger.info("Output written to: %s", run_dir)
 

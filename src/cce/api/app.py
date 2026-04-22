@@ -225,7 +225,7 @@ def create_app(
 def _build_pipeline(
     config: EngineConfig, evidence_store: SQLiteEvidenceStore
 ) -> Pipeline:
-    """Build the full pipeline from config (mirrors run_live.py wiring)."""
+    """Build the full pipeline from config (mirrors scripts/run_live.py wiring)."""
     from cce.discovery.adapters.firecrawl import FirecrawlAdapter
     from cce.discovery.embeddings import EmbeddingUnavailableError
     from cce.discovery.ollama import OllamaEmbeddingProvider

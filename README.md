@@ -15,6 +15,7 @@ CurationRequest
   -> Taxonomy Tagging (classify evidence by domain dimensions)
   -> Evidence Store (verbatim excerpts + provenance + tags)
   -> Per-Path Synthesis (writer adapts tone/structure/depth per output path)
+  -> Humanization (opt-in: scorer -> editor -> implied-claim checker)
   -> Verifier (check every claim against evidence, trust-weighted)
   -> Quality Gate (pass / fix gaps / human review)
   -> Publish Package (content + evidence map + scores + lineage)
@@ -55,10 +56,12 @@ src/cce/
 |-------|-------|--------|
 | 1 | Core loop -- discover, extract, store, write, verify, gate | Complete |
 | 2 | Embedding ranking, taxonomy tagging, path-aware writer, policy enforcement | Complete |
-| 3 | API layer -- REST endpoints, job orchestration, SDK | Not started |
+| 3 | API layer -- REST endpoints, job orchestration, CLI, MDX emit | Complete |
 | 4 | Platform integration -- storage adapter, feedback loop, rendering | Not started |
 
-**Phase 1** delivered the full pipeline loop across 8 live runs. **Phase 2** added semantic evidence ranking (Ollama + sqlite-vec), rules-based taxonomy classification, per-path writer modulation, verifier trust weighting, jurisdiction pass-through, and domain policy templates.
+**Phase 1** delivered the full pipeline loop across 8 live runs. **Phase 2** added semantic evidence ranking (Ollama + sqlite-vec), rules-based taxonomy classification, per-path writer modulation, verifier trust weighting, jurisdiction pass-through, and domain policy templates. **Phase 3** shipped the FastAPI REST layer, `CurationEngine` embedded/remote dispatch, the `cce` CLI, and post-hoc MDX export.
+
+**Humanization stack** (opt-in via `EngineConfig.humanization.enabled`): programmatic style scorer, LLM editor with citation-preservation checks, and an implied-claim checker that catches unfair contrastive framing. See `docs/decompose/humanization/` for full design.
 
 ## Tech Stack
 
@@ -68,7 +71,7 @@ src/cce/
 - **Ollama** -- local embedding generation (nomic-embed-text-v2-moe)
 - **Anthropic Claude** -- LLM provider for writer and verifier
 - **Firecrawl** -- crawl adapter for source discovery
-- **pytest** -- async test suite (256 tests)
+- **pytest** -- async test suite (677 tests, 90% coverage floor)
 
 ## Quick Start
 
@@ -86,7 +89,7 @@ uv run pytest
 uv run ruff check src/
 
 # Run a live pipeline
-PYTHONPATH=src uv run python run_live.py
+PYTHONPATH=src uv run python scripts/run_live.py
 ```
 
 ## Configuration
