@@ -6,10 +6,9 @@ GET /v1/curate/evidence              — search evidence store
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
-from cce.api.auth import auth_dependency
 from cce.api.middleware import get_request_id
 from cce.api.schemas import APIEnvelope, envelope, error_envelope
 
@@ -20,9 +19,8 @@ router = APIRouter(prefix="/v1/curate/evidence", tags=["evidence"])
 async def get_evidence(
     evidence_id: str,
     request: Request,
-    _auth: str | None = Depends(auth_dependency),
 ) -> JSONResponse:
-    """Get a single evidence object by ID. Requires auth."""
+    """Get a single evidence object by ID. Requires auth (router-level)."""
     evidence = await request.app.state.evidence_store.get(evidence_id)
     if evidence is None:
         return JSONResponse(
@@ -42,9 +40,8 @@ async def search_evidence(
     url: str | None = Query(default=None),
     topic: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
-    _auth: str | None = Depends(auth_dependency),
 ) -> JSONResponse:
-    """Search evidence store with optional filters. Requires auth."""
+    """Search evidence store with optional filters. Requires auth (router-level)."""
     results = await request.app.state.evidence_store.search(
         url=url, topic=topic, limit=limit
     )

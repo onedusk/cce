@@ -11,9 +11,9 @@ Structure:
       B) bearer-invalid request  -> 401 (auth_invalid branch)
       C) valid key request       -> anything EXCEPT 401 (auth passed)
   - UNPROTECTED_ROUTES is a single test that asserts the inventory
-    matches the set of routes known to be public today (health, meta,
-    job-read). A new public endpoint addition has to pass through
-    this list or the test fails — forces an explicit decision.
+    matches the set of routes known to be public today (health, meta
+    only). A new public endpoint addition has to pass through this
+    list or the test fails — forces an explicit decision.
 
 The exists/valid-resource concern is sidestepped: for the "valid key"
 branch we accept any non-401 status because the routes we're exercising
@@ -34,14 +34,18 @@ from tests.test_api.test_jobs_lifecycle import _make_lifecycle_app
 pytestmark = pytest.mark.integration
 
 
-# (method, path, body-or-None). Routes declared protected by Depends(auth_dependency)
-# in src/cce/api/routes/**. Order matches grep output for traceability.
+# (method, path, body-or-None). Routes protected by the router-level
+# dependencies=[Depends(auth_dependency)] applied in src/cce/api/app.py
+# (jobs_router + evidence_router). Meta router stays bare.
 PROTECTED_ROUTES: list[tuple[str, str, dict | None]] = [
     (
         "POST",
         "/v1/curate/jobs",
         {"topic": "test", "paths": ["blog"], "policy_id": "test-policy"},
     ),
+    ("GET", "/v1/curate/jobs", None),
+    ("GET", "/v1/curate/jobs/job_nonexistent", None),
+    ("GET", "/v1/curate/jobs/job_nonexistent/package", None),
     ("DELETE", "/v1/curate/jobs/job_nonexistent", None),
     ("POST", "/v1/curate/jobs/job_nonexistent/retry", None),
     ("GET", "/v1/curate/evidence/ev_nonexistent", None),
@@ -52,9 +56,6 @@ PROTECTED_ROUTES: list[tuple[str, str, dict | None]] = [
 UNPROTECTED_ROUTES_EXPECTED: set[tuple[str, str]] = {
     ("GET", "/v1/health"),
     ("GET", "/v1/meta"),
-    ("GET", "/v1/curate/jobs/job_nonexistent"),
-    ("GET", "/v1/curate/jobs"),
-    ("GET", "/v1/curate/jobs/job_nonexistent/package"),
 }
 
 

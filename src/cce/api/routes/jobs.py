@@ -14,10 +14,9 @@ import asyncio
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
-from cce.api.auth import auth_dependency
 from cce.api.middleware import get_request_id
 from cce.api.schemas import (
     APIEnvelope,
@@ -46,7 +45,6 @@ router = APIRouter(prefix="/v1/curate/jobs", tags=["jobs"])
 async def create_job(
     body: JobCreateRequest,
     request: Request,
-    _auth: str | None = Depends(auth_dependency),
 ) -> JSONResponse:
     """Submit a curation request. Returns 202 with job ID."""
     state = request.app.state
@@ -191,7 +189,6 @@ async def list_jobs(
 async def delete_job(
     job_id: str,
     request: Request,
-    _auth: str | None = Depends(auth_dependency),
 ) -> JSONResponse:
     """Cancel and delete a job."""
     state = request.app.state
@@ -227,7 +224,6 @@ async def delete_job(
 async def retry_job(
     job_id: str,
     request: Request,
-    _auth: str | None = Depends(auth_dependency),
 ) -> JSONResponse:
     """Re-run a completed or failed job."""
     state = request.app.state

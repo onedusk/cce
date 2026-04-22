@@ -8,11 +8,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from cce.api.auth import make_auth_dependency
+from cce.api.auth import auth_dependency, make_auth_dependency
 from cce.api.middleware import (
     RequestIdMiddleware,
     RequestLoggingMiddleware,
@@ -210,9 +210,9 @@ def create_app(
     from cce.api.routes.jobs import router as jobs_router
     from cce.api.routes.meta import router as meta_router
 
-    app.include_router(jobs_router)
-    app.include_router(evidence_router)
-    app.include_router(meta_router)
+    app.include_router(jobs_router, dependencies=[Depends(auth_dependency)])
+    app.include_router(evidence_router, dependencies=[Depends(auth_dependency)])
+    app.include_router(meta_router)  # intentionally unauthed (health, meta)
 
     return app
 
