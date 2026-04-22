@@ -58,3 +58,5 @@ docs/internal/
 .decompose/
 .ctxt_out/
 logs/
+.claude/
+.mcp.json
