@@ -106,7 +106,13 @@ class PublishMetrics(TypedDict):
 
 
 class ScoreMetrics(TypedDict):
-    """Per-iteration output of the programmatic style scorer (humanization M02)."""
+    """Per-iteration output of the programmatic style scorer (humanization M02).
+
+    ``contrastive_frame_count`` is the subtype total and equals
+    ``contrastive_parasitic_count + contrastive_alternative_count``. Both
+    subtype fields were added in 0.2.0; threshold-based gating still runs
+    against the total (``max_contrastive_frames_per_1000``).
+    """
 
     path: str
     sentence_length_stddev: float
@@ -114,6 +120,8 @@ class ScoreMetrics(TypedDict):
     type_token_ratio: float
     formulaic_transition_count: int
     contrastive_frame_count: int
+    contrastive_parasitic_count: int
+    contrastive_alternative_count: int
     hedging_phrase_count: int
     em_dash_count: int
     word_count: int

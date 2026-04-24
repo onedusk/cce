@@ -5,6 +5,42 @@ All notable changes to the Content Curation Engine (CCE).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] — 2026-04-24
+
+Minor bump: Phase B Layer 2 — contrastive-frame subtype tagging. Schema
+change on `StyleScores`, `HumanizationMarkers`, `ContrastiveFrame`, and
+the `ScoreMetrics` TypedDict. Backward-compatible YAML and backward-
+compatible external consumers (the total count field is preserved).
+
+### Added — Phase B Layer 2 (contrastive subtype architecture)
+- **`HumanizationMarkers.contrastive_parasitic_patterns`** (`src/cce/config/markers.py`) — new field for parasitic regexes ("X is not A. It is B"). `contrastive_patterns` retained for genuine-alternative regexes. Additive; operator YAMLs that define only the old key still load.
+- **`HumanizationMarkers.compiled_contrastive_patterns()`** now returns `list[tuple[Pattern, subtype]]` where subtype is `"parasitic"` or `"genuine_alternative"`. Consumers in `Scorer` and `ImpliedClaimChecker` updated.
+- **`StyleScores.contrastive_parasitic_count`** + **`contrastive_alternative_count`** (`src/cce/models/style.py`). The existing `contrastive_frame_count` is preserved as the sum for backward compatibility; the threshold gate (`max_contrastive_frames_per_1000`) still runs against the total.
+- **`ContrastiveFrame.kind`** (`src/cce/synthesis/implied_claims.py`) — `"parasitic"` | `"genuine_alternative"`. Default: `"genuine_alternative"` for existing callers.
+- **`ScoreMetrics` TypedDict** (`src/cce/models/job.py`) carries the subtype split; `Pipeline` populates both fields on `JobStage.SCORE` records.
+- **Production parasitic patterns** added to `config/humanization_markers.yaml` (period-split + comma-split "X is not A. It is B"). Promoted from the Phase B corpus census (46 matches, 0/46 confirmed false positives, 2/46 ambiguous — see 0.1.2 discussion and `output/parasitic_matches_review.md`).
+
+### Changed — Editor behavior
+- **`EDITOR_SYSTEM_PROMPT`** now has distinct directives for the two subtypes (`src/cce/synthesis/editor.py`):
+  - Genuine-alternative: apply the spectrum principle (unchanged, now explicitly scoped).
+  - Parasitic: collapse to the direct claim. Explicit anti-attribution guard ("Do not attribute to 'some argue'"). Ambiguous-case caveat preserves the "not A" half when it carries independent factual weight (covers the 4.3% ambiguous class from Diagnostic 1 — e.g., clinical-safety contrasts).
+- **Per-call flag list** in `_build_user_prompt` surfaces the subtype split so the editor knows which directive applies.
+
+### Changed — Implied-claim checker
+- **`ImpliedClaimChecker.check()`** skips LLM topic extraction for parasitic frames (`src/cce/synthesis/implied_claims.py`). Parasitic frames have no dismissed topic to counter-search against; skipping saves one LLM request per parasitic frame and eliminates the "fragment too short" warnings the extractor logs on them.
+
+### Tests
+- `tests/test_config/test_humanization.py` — new `test_parasitic_patterns_tagged_and_match_reframe_construction`; existing `test_compiled_contrastive_patterns_match_known_ai_prose` updated for the tuple return shape.
+- `tests/test_synthesis/test_scoring.py` — new `test_score_subtype_split_parasitic_vs_alternative` and `test_score_parasitic_only_body`.
+- `tests/test_synthesis/test_implied_claims.py` — new `test_detect_frames_tags_parasitic_vs_genuine`, `test_check_skips_parasitic_frames_no_llm_call`, `test_check_still_processes_genuine_alternative_when_parasitic_present`.
+- `tests/test_synthesis/test_editor.py` — new `test_editor_system_prompt_has_parasitic_directive`.
+- Suite: **692 passed, 3 skipped** (was 685).
+
+### Not in scope (deliberate)
+- LLM-based classification token (`parasitic | factual | unsure` per frame). Diagnostic 1 showed 0/46 confirmed false positives on real corpus; the editor-prompt "preserve 'not A' when it carries independent factual weight" caveat covers the 2/46 ambiguous class at zero LLM cost.
+- Per-subtype thresholds on `HumanizationThresholds`. Only the total `max_contrastive_frames_per_1000` gates today; subtype counts are informational until calibration data warrants separate thresholds.
+- `EditorConfig.contrastive_strategy` research-IV hook. Deferred until the combined-layer verification run (next step) measures residual parasitic frequency.
+
 ## [0.1.2] — 2026-04-24
 
 Opportunistic patch release. Bundles one hardening fix from the 2026-04-22

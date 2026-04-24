@@ -649,6 +649,8 @@ class Pipeline:
                                 "type_token_ratio": style_scores.type_token_ratio,
                                 "formulaic_transition_count": style_scores.formulaic_transition_count,
                                 "contrastive_frame_count": style_scores.contrastive_frame_count,
+                                "contrastive_parasitic_count": style_scores.contrastive_parasitic_count,
+                                "contrastive_alternative_count": style_scores.contrastive_alternative_count,
                                 "hedging_phrase_count": style_scores.hedging_phrase_count,
                                 "em_dash_count": style_scores.em_dash_count,
                                 "word_count": style_scores.word_count,

@@ -222,3 +222,73 @@ def test_contrastive_frame_is_frozen():
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
         frame.matched_text = "changed"  # type: ignore[misc]
+
+
+# --- Subtype handling (0.2.0 — Phase B Layer 2) ---
+
+
+def test_detect_frames_tags_parasitic_vs_genuine(markers):
+    """Parasitic and genuine-alternative regexes tag frames with the
+    corresponding ``kind`` field."""
+    checker = ImpliedClaimChecker(
+        llm=MockLLMProvider(),
+        evidence_store=StubStore(),
+        config=ImpliedClaimsConfig(enabled=True),
+        markers=markers,
+    )
+    body = (
+        "Unlike sleeping pills, CBT-I addresses root causes. "
+        "This is not a quick fix. It is a durable intervention."
+    )
+    frames = checker._detect_frames(body)
+
+    kinds = {f.kind for f in frames}
+    assert "genuine_alternative" in kinds
+    assert "parasitic" in kinds
+
+
+async def test_check_skips_parasitic_frames_no_llm_call(markers):
+    """Parasitic frames bypass LLM topic extraction entirely — saves one
+    request per frame and avoids the fragment-too-short warnings the
+    extractor logs on them."""
+    cited = [make_evidence() for _ in range(10)]
+    llm = MockLLMProvider([])  # no scripted responses — any call would raise
+    store = StubStore(results=[])
+    checker = ImpliedClaimChecker(
+        llm=llm,
+        evidence_store=store,
+        config=ImpliedClaimsConfig(enabled=True),
+        markers=markers,
+    )
+
+    annotations = await checker.check(
+        "Boredom is not a problem to be solved. It is a signal to be heard.",
+        cited_evidence=cited,
+    )
+
+    assert annotations == []
+    assert llm.calls == [], "parasitic frames must not trigger LLM topic extraction"
+    assert store.search_calls == [], "parasitic frames must not hit the store"
+
+
+async def test_check_still_processes_genuine_alternative_when_parasitic_present(markers):
+    """Mixed body: parasitic frames are skipped; genuine_alternative
+    frames still go through the normal topic-extract → counter-search pipeline."""
+    cited = [make_evidence() for _ in range(10)]
+    counter = [make_evidence() for _ in range(3)]  # ratio 0.3 > 0.15
+    checker, llm, store = _make_checker(
+        markers=markers,
+        counter_evidence=counter,
+        extracted_topics=["sleeping pills"],
+    )
+
+    annotations = await checker.check(
+        "Unlike sleeping pills, CBT-I works. "
+        "This is not a shortcut. It is a longer investment.",
+        cited_evidence=cited,
+    )
+
+    assert len(annotations) == 1  # only the genuine_alternative frame triggered
+    assert annotations[0].frame.kind == "genuine_alternative"
+    # LLM was called exactly once — for the genuine-alternative frame only.
+    assert len(llm.calls) == 1

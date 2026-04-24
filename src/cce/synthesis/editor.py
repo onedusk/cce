@@ -83,8 +83,18 @@ summary template.
 - Reduce hedging and AI stock phrases ("it should be noted", "a testament to", \
 "in today's fast-paced world", "at the intersection of"). Convert "research \
 suggests X may be effective" to "X works" where the evidence is strong.
-- For contrastive frames ("Unlike X, Y does Z"), apply the spectrum principle: \
-acknowledge where the dismissed side is valid in context.
+- For genuine-alternative contrastive frames ("Unlike X, Y does Z" — Y is a \
+real alternative to X with independent evidence), apply the spectrum \
+principle: acknowledge where the dismissed side is valid in context. When the \
+caller provides implied-claim annotations, use them to cite the counter-evidence \
+directly instead of a vague qualifier.
+- For parasitic contrastive frames ("X is not A. It is B" where B is a \
+degraded or reframed form of A — e.g. "not wisdom. It is the illusion of \
+it"), collapse to the direct claim: "X is B". Do not add hedges. Do not \
+attribute to "some argue" or "critics contend" (that leaks uncited \
+assertions into the body). PRESERVE the "not A" half only when it carries \
+independent factual weight the collapse would destroy (e.g. clinical "the \
+drug is not dangerous. It is essential") — this is rare; lean toward collapse.
 
 OUTPUT FORMAT:
 Output the rewritten content as plain markdown — no JSON wrapper, no \
@@ -200,7 +210,13 @@ class Editor:
                     f"formulaic transitions: {scores.formulaic_transition_count}"
                 )
             if scores.contrastive_frame_count > 0:
-                flagged.append(f"contrastive frames: {scores.contrastive_frame_count}")
+                # Surface the subtype split so the editor knows whether to
+                # apply spectrum (genuine_alternative) or collapse (parasitic).
+                flagged.append(
+                    f"contrastive frames: {scores.contrastive_frame_count} "
+                    f"(parasitic={scores.contrastive_parasitic_count}, "
+                    f"genuine_alternative={scores.contrastive_alternative_count})"
+                )
             if scores.hedging_phrase_count > 0:
                 flagged.append(f"hedging phrases: {scores.hedging_phrase_count}")
             if scores.em_dash_count > 0:

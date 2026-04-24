@@ -74,6 +74,10 @@ formulaic_transitions:
   - "Secondly,"
 
 contrastive_patterns:
+  # Genuine-alternative contrasts: Y is a real alternative to X with its own
+  # evidence potential. Editor applies the spectrum principle when
+  # ImpliedClaimChecker annotates with counter-evidence.
+  #
   # "Unlike X," — X may be multi-word; lazy to avoid crossing clause boundaries
   - '\bunlike\s+[\w\s]+?,'
   # "not just X but Y" / "not only X but Y"
@@ -83,6 +87,20 @@ contrastive_patterns:
   # "it's not X, it's Y" (with or without apostrophe)
   - "\\bit'?s not (about\\s+)?[\\w\\s]+?,?\\s+it'?s\\s+(about\\s+)?"
   # "by contrast" — opener or mid-sentence; 14 real hits found in the corpus
-  # census (scripts/run_contrastive_census.py, 2026-04-22). Added without
-  # subtype-tagging — the tagged-structure refactor comes with Phase B.
+  # census (scripts/run_contrastive_census.py, 2026-04-22).
   - '\bby contrast\b'
+
+contrastive_parasitic_patterns:
+  # Parasitic contrasts: Y is a degraded or reframed form of A, not an
+  # independent alternative ("X is not A. It is B"). Editor collapses to
+  # "X is B"; ImpliedClaimChecker skips the LLM topic-extraction call
+  # because there is no dismissed topic with its own literature.
+  #
+  # 46 real matches across the 36-draft learn corpus (2026-04-22 census);
+  # 0/46 confirmed false positives, 2/46 ambiguous (see the 0.2.0 changelog
+  # entry and docs/security/2026-04-22-review.md analysis).
+  #
+  # Period-split: "X is not A. It is B"
+  - '\b(is|are|was|were)\s+not\s+[\w\s]+?\.\s+(It|They)\s+(is|are|was|were)\b'
+  # Comma-split: "X is not A, it is B"
+  - '\b(is|are)\s+not\s+[\w\s]+?,\s+(it|they)\s+(is|are)\b'

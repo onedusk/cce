@@ -52,6 +52,23 @@ def test_editor_system_prompt_contains_hard_constraints():
     assert "MUST NOT remove or relocate" in EDITOR_SYSTEM_PROMPT
 
 
+def test_editor_system_prompt_has_parasitic_directive():
+    """0.2.0: the system prompt carries separate guidance for parasitic
+    contrastive frames (collapse to direct claim) and genuine_alternative
+    frames (spectrum principle), with the ambiguous-case caveat."""
+    # Genuine-alternative directive preserved
+    assert "genuine-alternative contrastive frames" in EDITOR_SYSTEM_PROMPT
+    assert "spectrum principle" in EDITOR_SYSTEM_PROMPT
+    # Parasitic directive added
+    assert "parasitic contrastive frames" in EDITOR_SYSTEM_PROMPT
+    assert "collapse to the direct claim" in EDITOR_SYSTEM_PROMPT
+    # Anti-attribution guard
+    assert "Do not attribute to" in EDITOR_SYSTEM_PROMPT
+    # Ambiguous-case caveat (protects the 4.3% class surfaced in Diagnostic 1)
+    assert "PRESERVE" in EDITOR_SYSTEM_PROMPT
+    assert "clinical" in EDITOR_SYSTEM_PROMPT.lower()
+
+
 async def test_editor_preserves_all_citations():
     editor, _llm = _editor(
         _edit_response(

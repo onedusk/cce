@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
-from cce.config.markers import HumanizationMarkers
+from cce.config.markers import ContrastiveSubtype, HumanizationMarkers
 from cce.config.types import ImpliedClaimsConfig
 from cce.evidence.store import EvidenceStore
 from cce.llm.base import LLMMessage, LLMProvider
@@ -35,12 +35,20 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class ContrastiveFrame:
-    """A detected contrastive construction in a draft body."""
+    """A detected contrastive construction in a draft body.
+
+    ``kind`` distinguishes parasitic frames ("X is not A. It is B" where B is
+    a degraded/reframed form of A) from genuine-alternative frames ("Unlike
+    X, Y does Z" where Y is a real alternative). Parasitic frames bypass the
+    LLM topic-extraction step since there is no dismissed topic to search
+    counter-evidence against.
+    """
 
     matched_text: str
     char_start: int
     char_end: int
     pattern_index: int
+    kind: ContrastiveSubtype = "genuine_alternative"
 
 
 @dataclass
@@ -107,6 +115,13 @@ class ImpliedClaimChecker:
 
         annotations: list[ImpliedClaimAnnotation] = []
         for frame in frames:
+            # Parasitic frames have no dismissed topic to search on —
+            # "illusion of wisdom" is a rhetorical reframe of "wisdom",
+            # not a topic with its own evidence. Skipping the LLM topic
+            # extraction saves one request per parasitic frame and avoids
+            # the fragment-too-short warnings the extractor logs on them.
+            if frame.kind == "parasitic":
+                continue
             dismissed = await self._extract_dismissed_topic(frame)
             if not dismissed:
                 continue
@@ -135,7 +150,7 @@ class ImpliedClaimChecker:
     def _detect_frames(self, content: str) -> list[ContrastiveFrame]:
         """Run every compiled contrastive regex over the body."""
         results: list[ContrastiveFrame] = []
-        for idx, pattern in enumerate(self._patterns):
+        for idx, (pattern, subtype) in enumerate(self._patterns):
             for m in pattern.finditer(content):
                 results.append(
                     ContrastiveFrame(
@@ -143,6 +158,7 @@ class ImpliedClaimChecker:
                         char_start=m.start(),
                         char_end=m.end(),
                         pattern_index=idx,
+                        kind=subtype,
                     )
                 )
         return sorted(results, key=lambda f: f.char_start)

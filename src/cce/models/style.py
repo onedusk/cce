@@ -38,7 +38,32 @@ class StyleScores(BaseModel):
     )
     contrastive_frame_count: int = Field(
         ge=0,
-        description="Count of contrastive-frame regex matches in the body.",
+        description=(
+            "Total count of contrastive-frame regex matches (both subtypes). "
+            "Equals contrastive_parasitic_count + contrastive_alternative_count; "
+            "kept as a real field for backward compatibility with pre-0.2.0 "
+            "consumers and for the existing humanization threshold gate."
+        ),
+    )
+    contrastive_parasitic_count: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Subtype count: parasitic contrasts — Y is a degraded/reframed form "
+            "of A rather than an independent alternative. Editor collapses "
+            "these; ImpliedClaimChecker skips the LLM topic-extraction call."
+        ),
+    )
+    contrastive_alternative_count: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Subtype count: genuine-alternative contrasts — Y is a real "
+            "alternative to X with its own evidence potential. Editor applies "
+            "the spectrum principle when ImpliedClaimChecker annotates with "
+            "counter-evidence; otherwise the frame is fair game for the "
+            "strategy menu."
+        ),
     )
     hedging_phrase_count: int = Field(
         ge=0,

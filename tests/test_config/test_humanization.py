@@ -111,14 +111,19 @@ def test_load_markers_missing_file_raises(tmp_path):
 
 def test_compiled_contrastive_patterns_match_known_ai_prose():
     """Regex compiles AND the patterns catch the exemplars from
-    docs/internal/research/contrastive_framing_as_implied_claims.md."""
+    docs/internal/research/contrastive_framing_as_implied_claims.md.
+
+    After 0.2.0 the compiled list is ``list[tuple[Pattern, subtype]]``
+    where subtype is ``"parasitic"`` or ``"genuine_alternative"``.
+    """
     markers = load_markers("config/humanization_markers.yaml")
     patterns = markers.compiled_contrastive_patterns()
 
     assert patterns
-    assert all(isinstance(p, re.Pattern) for p in patterns)
+    assert all(isinstance(p, re.Pattern) and s in {"parasitic", "genuine_alternative"}
+               for p, s in patterns)
 
-    # Each exemplar should match at least one compiled pattern
+    # Each exemplar should match at least one compiled pattern (any subtype).
     exemplars = [
         "Unlike sleeping pills, CBT-I addresses the underlying causes",
         "it's not about speed, it's about quality",
@@ -126,4 +131,34 @@ def test_compiled_contrastive_patterns_match_known_ai_prose():
         "not just insomnia, but sleep hygiene broadly",
     ]
     for text in exemplars:
-        assert any(p.search(text) for p in patterns), f"no pattern matched: {text!r}"
+        assert any(p.search(text) for p, _ in patterns), (
+            f"no pattern matched: {text!r}"
+        )
+
+
+def test_parasitic_patterns_tagged_and_match_reframe_construction():
+    """Parasitic period-split and comma-split patterns land under the
+    ``parasitic`` subtype and catch the canonical reframe shape."""
+    markers = load_markers("config/humanization_markers.yaml")
+    patterns = markers.compiled_contrastive_patterns()
+
+    parasitic = [p for p, s in patterns if s == "parasitic"]
+    genuine = [p for p, s in patterns if s == "genuine_alternative"]
+    assert len(parasitic) >= 2, "expected ≥2 parasitic patterns (period + comma split)"
+    assert len(genuine) >= 4, "expected existing genuine_alternative patterns preserved"
+
+    # Canonical parasitic exemplar (the original trigger case — Phase B analysis)
+    assert any(
+        p.search("What replaces the open question is not wisdom. It is the illusion of it.")
+        for p in parasitic
+    )
+    # Canonical corpus-drawn parasitic
+    assert any(
+        p.search("boredom is not a problem to be solved. It is a signal to be heard.")
+        for p in parasitic
+    )
+    # Genuine-alternative exemplar must NOT be caught by parasitic patterns
+    assert not any(
+        p.search("Unlike sleeping pills, CBT-I addresses the underlying causes")
+        for p in parasitic
+    )

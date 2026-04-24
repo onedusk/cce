@@ -143,6 +143,39 @@ def test_score_contrastive_pattern_matches(scorer):
     assert scores.contrastive_frame_count >= 1
 
 
+def test_score_subtype_split_parasitic_vs_alternative(scorer):
+    """Parasitic and genuine-alternative matches are counted into their
+    respective subtype fields; the total stays in contrastive_frame_count."""
+    body = (
+        # genuine_alternative: "Unlike X,"
+        "CBT-I behaves differently from medication. Unlike sleeping pills, it builds skills. "
+        # parasitic: "X is not A. It is B"
+        "This is not a quick fix. It is a durable behavioral intervention. "
+        # genuine_alternative: "rather than"
+        "Clinicians often choose it rather than extended benzodiazepine use."
+    )
+    scores = scorer.score(body)
+
+    assert scores.contrastive_parasitic_count >= 1
+    assert scores.contrastive_alternative_count >= 2
+    assert scores.contrastive_frame_count == (
+        scores.contrastive_parasitic_count + scores.contrastive_alternative_count
+    )
+
+
+def test_score_parasitic_only_body(scorer):
+    """Pure parasitic prose: alternative count stays at 0."""
+    body = (
+        "Boredom is not a problem to be solved. It is a signal to be heard. "
+        "This is not a breakdown. It is a handoff."
+    )
+    scores = scorer.score(body)
+
+    assert scores.contrastive_parasitic_count == 2
+    assert scores.contrastive_alternative_count == 0
+    assert scores.contrastive_frame_count == 2
+
+
 def test_score_counts_em_dashes(scorer):
     """Em dashes (U+2014) are counted; threshold catches overuse."""
     body = (

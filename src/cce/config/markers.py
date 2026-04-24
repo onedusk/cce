@@ -10,9 +10,12 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, Field
+
+ContrastiveSubtype = Literal["parasitic", "genuine_alternative"]
 
 
 class HumanizationMarkers(BaseModel):
@@ -24,14 +27,42 @@ class HumanizationMarkers(BaseModel):
     formulaic_transitions: list[str] = Field(default_factory=list)
     contrastive_patterns: list[str] = Field(
         default_factory=list,
-        description="Raw regex strings; compiled by callers via compiled_contrastive_patterns().",
+        description=(
+            "Genuine-alternative contrastive regexes — Y is a real "
+            "alternative to X with its own evidence potential (e.g. "
+            "'Unlike X, Y' / 'rather than X'). Existing shape preserved "
+            "for backward compatibility; loader keeps this key's contents "
+            "tagged as genuine_alternative."
+        ),
+    )
+    contrastive_parasitic_patterns: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Parasitic contrastive regexes — Y is a degraded/reframed form "
+            "of A rather than an independent alternative (e.g. 'X is not A. "
+            "It is B'). Editor collapses these; ImpliedClaimChecker skips "
+            "the LLM topic-extraction call since there is no dismissed "
+            "topic with its own literature."
+        ),
     )
 
     model_config = {"frozen": True}
 
-    def compiled_contrastive_patterns(self) -> list[re.Pattern[str]]:
-        """Compile contrastive regex patterns once for repeated scoring."""
-        return [re.compile(p, re.IGNORECASE) for p in self.contrastive_patterns]
+    def compiled_contrastive_patterns(
+        self,
+    ) -> list[tuple[re.Pattern[str], ContrastiveSubtype]]:
+        """Compile contrastive regexes with their subtype tags.
+
+        Genuine-alternative patterns (``contrastive_patterns``) come first so
+        downstream deterministic iteration order matches the pre-refactor
+        behavior for the overlap of regexes that existed before.
+        """
+        out: list[tuple[re.Pattern[str], ContrastiveSubtype]] = []
+        for p in self.contrastive_patterns:
+            out.append((re.compile(p, re.IGNORECASE), "genuine_alternative"))
+        for p in self.contrastive_parasitic_patterns:
+            out.append((re.compile(p, re.IGNORECASE), "parasitic"))
+        return out
 
 
 def load_markers(path: str | Path) -> HumanizationMarkers:
@@ -52,4 +83,7 @@ def load_markers(path: str | Path) -> HumanizationMarkers:
         hedging_phrases=list(data.get("hedging_phrases", [])),
         formulaic_transitions=list(data.get("formulaic_transitions", [])),
         contrastive_patterns=list(data.get("contrastive_patterns", [])),
+        contrastive_parasitic_patterns=list(
+            data.get("contrastive_parasitic_patterns", [])
+        ),
     )
