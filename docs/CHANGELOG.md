@@ -5,6 +5,23 @@ All notable changes to the Content Curation Engine (CCE).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] — 2026-04-24
+
+Opportunistic patch release. Bundles one hardening fix from the 2026-04-22
+security review (previously dismissed as not-currently-exploitable), one
+marker-list expansion grounded in corpus evidence, and one operator-config
+addendum for the learn path. No API breaks.
+
+### Security (hardening)
+- **CORS — disable `allow_credentials` when `allow_origins` contains `"*"`** (`src/cce/api/app.py`). Starlette's `CORSMiddleware` otherwise reflects the inbound `Origin` header + emits `Access-Control-Allow-Credentials: true`, defeating the browser's wildcard-vs-credentials safety rule. Bearer-header auth doesn't travel on cross-origin fetches today (the 2026-04-22 review dismissed this as a standalone finding), but closes the door for any future cookie-auth or session surface. Regression test covers both branches (`tests/test_api/test_cors.py`).
+
+### Humanization
+- **Add `\bby contrast\b` to `config/humanization_markers.yaml` `contrastive_patterns`**. The corpus census (`scripts/run_contrastive_census.py`, 2026-04-22) found 14 real genuine-alternative matches uncaught by the existing four patterns. No subtype tagging yet — the tagged-structure refactor is scoped for Phase B.
+- **Operator config: `path_configs/thnklabs.yaml` learn `prompt_addendum`** — added a 3-sentence directive to avoid the "X is not A. It is B" reframe pattern when B restates or expands X. Empirically validated by a 3-topic test run (curiosity/boredom/stress): parasitic frame count dropped from 20 → 12 (-40%) with the addendum; learn-path max dropped from 10 to 6. See `output/parasitic_matches_review.md` (local/gitignored). This file is gitignored as client-specific; the change ships to the operator environment, not to main.
+
+### Changed
+- Test suite: **685 passed, 3 skipped** (was 683 — +2 CORS regression cases).
+
 ## [0.1.1] — 2026-04-22
 
 Patch release: closes a HIGH-severity authentication gap on jobs read

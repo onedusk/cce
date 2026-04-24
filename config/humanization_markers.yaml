@@ -82,3 +82,7 @@ contrastive_patterns:
   - '\brather than\s+'
   # "it's not X, it's Y" (with or without apostrophe)
   - "\\bit'?s not (about\\s+)?[\\w\\s]+?,?\\s+it'?s\\s+(about\\s+)?"
+  # "by contrast" — opener or mid-sentence; 14 real hits found in the corpus
+  # census (scripts/run_contrastive_census.py, 2026-04-22). Added without
+  # subtype-tagging — the tagged-structure refactor comes with Phase B.
+  - '\bby contrast\b'

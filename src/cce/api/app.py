@@ -170,11 +170,17 @@ def create_app(
         if v is not None
     }
 
-    # CORS
+    # CORS — defensive: if origins is wildcard, credentials must be off.
+    # Starlette's CORSMiddleware otherwise reflects the inbound Origin back
+    # alongside `Access-Control-Allow-Credentials: true`, defeating the
+    # browser's wildcard-vs-credentials safety rule. Bearer-token auth
+    # doesn't travel on cross-origin fetches today (no exploit), but this
+    # closes the door if cookie auth is ever added. See docs/security/.
+    cors_allow_credentials = "*" not in config.api.cors_origins
     app.add_middleware(
         CORSMiddleware,
         allow_origins=config.api.cors_origins,
-        allow_credentials=True,
+        allow_credentials=cors_allow_credentials,
         allow_methods=["*"],
         allow_headers=["*"],
     )
