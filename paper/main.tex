@@ -1,0 +1,635 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage[round]{natbib}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!50!black,
+  citecolor=blue!50!black,
+  urlcolor=blue!50!black,
+}
+
+\title{Persona Prompting and Sycophancy Compound:\\
+       Evidence from a Production Evidence-Grounded Synthesis System}
+
+\author{Jacob\thanks{Code, data, and per-run telemetry available at
+        \url{https://github.com/onedusk/cce}. Reproduction notes in
+        \texttt{paper/README.md} of the repository.}}
+
+\date{April 30, 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+% TODO: 150--250 words.
+% Frame: persona prompting and sycophancy share a root cause (RLHF preference
+% optimization overriding factual grounding) and should compound when combined.
+% State the experimental result and the novel contribution (implied uncited
+% claims via rhetorical structure).
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+
+Three findings about large language models have accumulated independently
+in the recent literature. First, expert persona prompting that improves
+alignment, tone, and format compliance also degrades factual accuracy on
+discriminative tasks: \citet{hu_prism_2026} report all persona variants
+reduced MMLU accuracy from a 71.6\% baseline to a 68.0\% best, and
+\citet{basil_pretend_2025} replicate the effect on GPQA Diamond and
+MMLU-Pro across six models. Second, production language models exhibit
+systematic sycophancy: \citet{cheng_sycophantic_2025} test 11 frontier
+models in two preregistered experiments (N=1{,}604) and find AI affirms
+users 50\% more than human comparators, and 80\% or more on inputs the
+authors classified as clearly wrong, against 40\% for humans.
+\citet{shapira_rlhf_2026} provide a mathematical account of the
+amplification mechanism: RLHF optimization against a learned reward
+mechanically biases policy outputs toward agreement when human preference
+data carries any agreement signal. Third, instruction-following operates
+as compositional coordination of specialized skills with finite
+representational capacity, with verification concentrated at generation
+boundaries \citep{rocchetti_instructions_2026}.
+
+Each of these effects is documented in isolation. Their compounding
+interaction is not. The compositional-coordination account predicts that
+adding a persona prompt should consume monitoring bandwidth that would
+otherwise support factual grounding, and that the consumption should be
+worse under additional resource pressure. The RLHF-amplification account
+predicts that when monitoring capacity is consumed, the surface-compliance
+signal that the reward model has learned to value should dominate over
+factual accuracy. The two predictions converge: a sycophancy-prone model
+given an expert persona, especially under word-budget compression that
+creates conflicting constraints, should exhibit accuracy degradation
+beyond either effect alone.
+
+We test the converged prediction in a production
+evidence-grounded synthesis system, the Content Curation Engine (CCE).
+CCE was built for citation-backed content production, not as an
+experimental apparatus, but the variables required for this study are
+already present in its production telemetry: a per-path persona prompt
+field that can be toggled on or off, per-unit metrics for confidence,
+citation coverage, source diversity, claim count, and training-data
+leakage rate, and a fixed evidence store that holds source material
+constant across persona conditions. Section~\ref{sec:cce} describes the
+apparatus.
+
+% TODO: contribution-claims paragraph — fill after the persona on/off
+% experiment (task #6) lands. Will state: (1) magnitude and direction of
+% the persona-on vs. persona-off delta on leakage; (2) the compounding
+% interaction with word-budget tier; (3) the implied-uncited-claim rate
+% reported in §7 as an undocumented category of persona-induced accuracy
+% loss; (4) the spectrum-principle mitigation that closes the gap.
+
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{Persona prompting and accuracy.}
+\citet{hu_prism_2026} (PRISM) document that every expert persona variant
+they tested reduced MMLU accuracy below the 71.6\% baseline, with the best
+variant landing at 68.0\%. They attribute the loss to the model becoming
+reluctant to express uncertainty under persona instructions and instead
+confabulating confidently. PRISM proposes a gated LoRA adapter that
+applies the persona only when downstream task type is a generative one.
+\citet{basil_pretend_2025} replicate the persona-degradation effect on
+GPQA Diamond and MMLU-Pro across six models, finding persona prompts
+generally did not improve accuracy and sometimes reduced it. The two
+results together rule out the possibility that the effect is an artifact
+of MMLU specifically.
+
+\paragraph{Sycophancy in production systems.}
+\citet{cheng_sycophantic_2025} measure sycophancy across 11 frontier
+LLMs using two preregistered experiments with 1{,}604 participants.
+Models affirm user actions 50\% more often than human comparators; on
+inputs classified as clearly wrong, models agree 80\% or more of the time
+against 40\% for humans. Users rated sycophantic responses as higher
+quality and reported greater trust, creating a reinforcing feedback loop
+in any system that uses user feedback as a training signal.
+\citet{chandra_spiraling_2026} formalize the downstream user-cognition
+risk: across 10{,}000 simulated conversations, even Bayesian-optimal
+users developed high confidence in false beliefs from sycophantic
+chatbots, and the effect persisted when false claims were eliminated and
+users were warned about sycophancy. The OpenAI GPT-4o incident of April-May
+2025 is the production-scale instance: a model update combining user
+feedback signals, persistent memory, and fresher training data compounded
+into behavior that validated delusions and urged impulsive actions, with
+at least 14 reported deaths and 5 lawsuits before the model was retired
+\citep{openai_gpt4o_sycophancy_2025}.
+
+\paragraph{Mechanism.}
+\citet{shapira_rlhf_2026} provide a mathematical account of the
+amplification mechanism. RLHF optimization against a learned reward
+mechanically biases policy outputs toward agreement when human preference
+data carries any agreement signal; the bias direction is characterized by
+the covariance between agreement features and reward features under the
+base policy. \citet{wang_overridden_2025} complement this with a
+mechanistic-interpretability analysis showing sycophancy is a structural
+override of learned knowledge in deeper layers, not a surface artifact;
+they also report that first-person opinion statements (``I believe...'')
+induce higher sycophancy than third-person framings, while user-expertise
+framing has negligible impact. \citet{rocchetti_instructions_2026} provide
+converging evidence that instruction-following is not a single
+constraint-satisfaction mechanism but compositional coordination of
+specialized skills with finite capacity. Through diagnostic probing across
+nine tasks in three models, they find general probes underperform
+task-specific specialists, cross-task transfer is weak, causal ablation
+reveals sparse asymmetric dependencies rather than shared representations,
+and constraint-satisfaction operates as dynamic monitoring during
+generation with a verification spike at the EOS token. Their account
+predicts that adding a persona constraint should consume coordination
+bandwidth that would otherwise support factual grounding skills.
+
+\paragraph{Measurement under constraint.}
+\citet{baxi_compliance_2025} build a benchmark that independently measures
+constraint compliance and semantic accuracy under output-length
+compression. The two dimensions are statistically near-orthogonal
+(Pearson r = 0.193). Removing RLHF helpfulness signals improved constraint
+compliance by 598\%, identifying RLHF-trained helpfulness as the dominant
+cause of constraint violation under resource pressure.
+\citet{sun_length_2025} test 30 LLMs under varying output-length budgets
+and report a U-curve: too-short and too-long budgets both degrade
+performance, with the optimal model size and prompt style varying by
+budget. \citet{hong_sycon_2025} introduce SYCON Bench for multi-turn
+sycophancy, finding that alignment tuning amplifies sycophantic
+behavior while model scaling and reasoning optimization reduce it; a
+third-person persona designed to resist user pressure increased
+sycophancy resistance by up to 63.8\% in debate scenarios.
+\citet{qiu_rhetorical_2025} provide a methodology for separating
+rhetorical style from content via counterfactual generation, which we
+build on in Section~\ref{sec:implied} when measuring contrastive-frame
+prevalence independent of the topical content of the contrast.
+
+\section{Hypothesis}
+\label{sec:hypothesis}
+
+We hypothesize that persona prompting and sycophancy share a root cause
+(RLHF preference optimization that values surface compliance over factual
+grounding) and that they should compound rather than add when combined.
+The qualitative form of the prediction follows from
+\citet{rocchetti_instructions_2026}: if instruction-following is
+coordination of specialized skills with finite capacity and verification
+concentrated at generation boundaries, a persona constraint introduces a
+persistent coordination burden that competes with factual-grounding
+skills throughout generation. Under additional resource pressure (a tight
+word budget that forces the writer to prioritize among required
+sections), the coordination should fail in a direction consistent with
+the bias trained into the reward model. \citet{shapira_rlhf_2026}
+characterize that direction: when the reward model has learned an
+agreement-is-good heuristic from human preference data, the policy's
+optimization gradient favors stance-affirming outputs over truth-tracking
+ones at the margin.
+
+Concretely, with a sycophancy-prone base model, an expert persona prompt
+that suppresses uncertainty expression, and a word-budget tier that
+creates contention between required-section coverage and citation density,
+we expect (i) higher training-data leakage rate when persona is on than
+when persona is stripped; (ii) the leakage gap to widen at tighter word
+budgets, with persona-on confidence holding steady or improving while
+leakage rises (the surface-compliance signal eats accuracy); and
+(iii) higher density of contrastive frames carrying implied uncited
+claims (Section~\ref{sec:implied}) when persona is on, because the
+persona instructions reward the rhetorical posture the frames produce.
+In the language of \citet{baxi_compliance_2025}, persona prompting should
+move output toward the constraint-compliant, semantic-accuracy-degraded
+quadrant of the joint distribution.
+
+% TODO: quantitative pre-registered predictions — derive specific
+% effect-size point estimates from the Shapira covariance characterization
+% applied to CCE's measured agreement-feature distribution. Worked through
+% in task #2 and committed (with timestamp) before the experiment runs.
+
+\section{The Content Curation Engine: An Evidence-Grounded Synthesis System}
+\label{sec:cce}
+
+\subsection{Pipeline architecture}
+
+The Content Curation Engine is a production system for citation-backed
+content synthesis. The pipeline flow is: a curation request invokes a
+Discoverer that retrieves candidate sources subject to a configurable
+source policy (domain allow/deny rules, reputation weighting, recency
+constraints); each retrieved source is parsed into evidence objects with
+full provenance (source URL, hash, excerpt offsets) and stored in an
+EvidenceStore; a Writer produces a draft conditioned on the stored
+evidence and the path-specific configuration; a Verifier checks every
+claim in the draft against the evidence store; a quality gate routes the
+draft to PASS (publish), FAIL (rewrite, up to a per-risk-profile
+iteration cap of 2-4), or REVIEW (human moderation).
+
+The pipeline enforces a single foundational invariant: \emph{no citation,
+no ship}. The Writer's prompt restricts generation to claims grounded in
+stored evidence objects, which the Writer cites by ID. The Verifier reads
+each cited claim against the corresponding evidence excerpt and assigns
+a status (supported, unsupported, uncited, or leakage, where leakage is
+defined as a claim with no corresponding evidence object that appears
+to derive from training data). The gate computes coverage (fraction of
+claims with positive Verifier status) and confidence (the citation-density
+weighted aggregate) per content unit, and refuses to publish below
+threshold. The invariant is what makes CCE useful as an experimental
+apparatus for studying accuracy: leakage is measured continuously in
+production, not as a synthetic eval.
+
+The closest related system in the published literature is STORM
+\citep{shao_storm_2024}, a long-form Wikipedia-style writing system that
+also retrieves grounded sources and synthesizes article-length output.
+STORM concentrates on the pre-writing stage, modelling research as
+multi-perspective question generation against simulated topic experts and
+producing an outline before any prose is written. The authors note
+``source bias transfer and over-association of unrelated facts'' as
+problems they identified but did not solve. CCE differs in scope and
+emphasis: where STORM optimizes the breadth and organization of
+pre-writing, CCE operates the full writer-verifier-gate loop in
+production with the trust-contract invariant enforced at the gate, and
+treats the over-association problem (in our terminology, implied claims
+carried by rhetorical structure) as a verifiable category rather than an
+acknowledged limitation. Section~\ref{sec:implied} extends STORM's
+observation by quantifying one specific form of the over-association
+pattern in production output.
+
+\subsection{Per-unit telemetry}
+
+Each content unit produced by CCE carries the following measurements,
+recorded per generation iteration with full lineage:
+\textit{confidence} (citation-density weighted verification score),
+\textit{coverage} (claim pass rate),
+\textit{source\_diversity} (independent-source count weighted by reputation),
+\textit{citation\_count} and \textit{claim\_count} (raw counts),
+\textit{leakage} (count and rate of training-data hallucinations
+detected), and per-stage timing. Iteration-level deltas allow direct
+observation of how the writer-verifier loop moves the unit through the
+quality space across rewrites.
+
+A separate humanization layer, opt-in via the engine configuration,
+captures style-level metrics: sentence-length variance, lexical
+diversity, suppressed-vocabulary count, formulaic-transition density,
+contrastive-frame density, hedging frequency, and em-dash density per
+1000 words. These ride on the same per-iteration record and are logged
+as \texttt{JobStage.SCORE} entries for threshold calibration. The scorer
+is purely programmatic; an Editor agent applies stylistic rewrites
+conditional on the scorer's pass/fail; a downstream implied-claim
+checker (described in Section~\ref{sec:implied}) extends the trust
+contract from explicit to implied claims.
+
+\subsection{The persona variable}
+
+Each content path (Learn, Explore, Apply in the current taxonomy) carries
+a \texttt{prompt\_addendum} field that applies a path-distinct persona
+instruction to the Writer's system prompt. The current production values
+specify ``calm authority,'' ``intellectual credibility,'' and ``thoughtful,
+warm,'' respectively. The field is an ordinary part of the path
+configuration: it can be set, cleared, or varied without modifying engine
+code, which makes it directly available as the independent variable for
+the persona on/off experiment.
+
+\subsection{Operational baseline}
+
+For grounding the apparatus, an early autonomous run completed with 66
+cited claims drawn from 15 independent sources, a 98.6\% verification
+score, and zero training-data fabrications detected. The first draft of
+that run produced two weak claims that the gate flagged; the
+writer-verifier loop produced a rewrite that cleared the gate without
+human intervention. We use this to set expectations for the
+persona-stripped condition in later sections: at the operating point of
+the current production system, the engine is capable of zero-leakage
+output, so observed leakage in the persona-on condition is attributable
+to the persona prompt and word-budget tier rather than to a generally
+broken pipeline.
+
+\section{Experimental Design}
+\label{sec:design}
+% Persona on/off across topics and path types (Learn/Explore/Apply), word-budget
+% tier crossing. Dependent variables: confidence, coverage, leakage,
+% contrastive-frame density, implied-uncited-claim count. Statistical tests.
+% Pre-registered predictions from Section~\ref{sec:hypothesis}.
+
+\section{Results}
+\label{sec:results}
+% Persona-on vs.\ persona-off deltas, broken out by path and word-budget tier.
+% Test pre-registered predictions. Headline tables / figures:
+%   - persona effect on leakage
+%   - compounding interaction with resource pressure
+%   - implied-uncited-claim count delta
+
+\section{Implied Claims via Rhetorical Structure}
+\label{sec:implied}
+
+A citation-grounded synthesis pipeline that checks every explicit claim
+against its evidence can still produce confidently false output when some
+claims are encoded implicitly in rhetorical structure. This section
+identifies one such category, measures its prevalence in the CCE corpus, and
+argues that closing the gap requires extending the trust contract from
+explicit to implied claims.
+
+\subsection{The pattern}
+\label{sec:implied-pattern}
+
+A contrastive frame asserts a position by dismissing an alternative.
+Constructions of the form ``\textit{X is not A. It is B}'' or ``\textit{Unlike
+X, Y does Z}'' are common in persuasive prose and frequent in
+LLM output \citep{qiu_rhetorical_2025}. Each instance carries two claims: a
+positive claim about the writer's preferred concept, and a negative claim
+about the dismissed alternative. The positive claim is typically backed by an
+explicit citation in our corpus. The negative claim usually is not, because
+the writer treats the dismissed alternative as obvious rather than as a claim
+requiring evidence.
+
+Consider a sleep-treatment example from the CCE evidence store: ``Unlike
+sleeping pills, CBT-I addresses the underlying causes of sleep problems
+rather than just relieving symptoms.'' The positive claim about CBT-I can be
+verified against guideline literature in the store. The negative claim
+about sleeping pills---that they only relieve symptoms and do not address
+underlying causes---is asserted without citation, and is contradicted by other
+evidence in the same store: orexin receptor antagonists, for instance, target
+wakefulness pathways rather than sedating around them. The verifier did
+not flag the contrast because the negative claim was never stated as a
+verifiable proposition; it was carried by the syntax of the contrast.
+
+This generalizes. Any contrastive frame has a positive pole (the writer's
+argument) and a negative pole (what is being dismissed). Verifiers built
+around explicit claim extraction see only the first.
+
+\subsection{Empirical prevalence in the CCE corpus}
+\label{sec:implied-empirical}
+
+To estimate how often this pattern appears in production output, we ran two
+regular expressions matching the canonical syntactic shapes (``\texttt{is not
+X. It is Y}'' and structural variants including ``\texttt{are not X. They are
+Y}'' and the ``\texttt{not just X. but also Y}'' scope-expansion) across CCE
+runs covering 11 distinct topics across the \texttt{learn} and
+\texttt{explore} content paths. The regex returned 46 matches.
+
+Each match was hand-labeled with a three-way rubric:
+\textit{parasitic} (the dismissed pole is rhetorical scaffolding; collapsing
+the sentence to ``\textit{It is B}'' loses no factual content),
+\textit{factual} (the dismissed pole carries an independent claim; collapse
+would destroy information; the canonical class here is the safety-relevant
+counterexample ``the drug is not dangerous; it is essential''), and
+\textit{ambiguous} (either reading is defensible without wider context).
+
+The audit returned 44 parasitic matches (95.7\%), 0 factual matches, and 2
+ambiguous matches (4.3\%). Treating the zero observed factual cases as a
+binomial sample, the 95\% one-sided Clopper-Pearson upper bound on the
+factual-match rate is approximately 6.3\%. Treating the ambiguous cases as
+worst-case factual, the upper bound rises to approximately 14\%. Both bounds
+indicate that the dominant function of contrastive frames in this
+production corpus is rhetorical reframing of a single referent, not
+genuine alternative-structure between two factually distinct claims.
+
+The two ambiguous cases are worth describing because they bound the
+class. Match \#10 (``This is not the tiredness that sleep repairs. It is a
+deeper depletion'') carries a clinical distinction between burnout exhaustion
+and ordinary tiredness that mechanical collapse would strip. Match \#37
+(``The response is not broken. It is simply being applied to situations it
+was never built for'') carries an independent reassurance beyond what the
+positive clause conveys. Neither case crosses into the safety-relevant
+factual class the rubric was guarding against.
+
+\subsection{The spectrum principle and verifier extension}
+\label{sec:implied-mitigation}
+
+A surface-level mitigation that suppresses contrastive frames at the
+vocabulary or syntactic level addresses the AI-detectability concern but
+leaves the underlying binary reasoning pattern intact: the writer finds new
+words to express the same dichotomy. A more durable mitigation reshapes the
+reasoning step that produces the binary in the first place. We refer to this
+as the \emph{spectrum principle}: when introducing a distinction between two
+concepts, the writer must include at least one condition under which the
+disfavored side is valid or relevant. The evidence store typically contains
+material supporting both sides of any real contrast, so this constraint is
+also a better use of the evidence already collected.
+
+Applied to the sleep example, the spectrum-aware version reads: ``Sleeping
+pills can break the cycle of acute insomnia quickly, but they do not change
+the habits and thought patterns that keep the problem coming back. CBT-I
+targets those directly, which is why guidelines now recommend it as the
+first-line treatment, though for severe cases short-term medication
+alongside CBT-I can outperform either alone.'' Same evidence, no implied
+uncited claim, and incidentally less detectable as AI-generated because the
+context-dependent treatment of the contrast resembles human domain
+expertise.
+
+The verifier extension is mechanical. When the syntactic patterns above
+are detected, the verifier extracts the implied negative claim about the
+dismissed side and searches the evidence store for supporting material. If
+supporting evidence is found, the frame is flagged as containing an uncited
+implied claim, and the writer receives a rewrite directive that names the
+specific evidence objects supporting the dismissed side and the context in
+which the dismissed side is valid. The cost is one additional retrieval per
+matched frame. In the audit corpus, this would have flagged the 44
+parasitic matches for spectrum rewrites and either flagged the 2 ambiguous
+matches for human review or, in the worst-case binding, inserted up to 14\%
+spurious flags.
+
+\subsection{Connection to the trust contract}
+\label{sec:implied-contract}
+
+The pipeline's foundational invariant is that no claim ships without a
+citation. Implied claims violate that invariant invisibly: the citation
+verifier sees a sentence whose explicit propositions are all backed,
+and certifies it. The accuracy gap is structural, not stylistic, and
+addressing it is properly scoped to the citation verifier rather than the
+humanization layer. The style benefit (less detectable as AI-generated) follows from the
+accuracy fix as a side effect. This framing aligns with the
+constraint-compliance versus
+semantic-accuracy decomposition of \citet{baxi_compliance_2025}: implied
+claims are a class of constraint violation that present as compliant under
+surface checks while degrading semantic accuracy.
+
+\section{Mitigation}
+\label{sec:mitigation}
+
+The mitigation literature on AI-generated text divides cleanly into
+surface fixes (vocabulary suppression, burstiness scoring, em-dash
+density limits, formulaic-transition blocklists) and structural fixes
+that change the reasoning step that produces a class of pattern. The
+distinction matters here because surface fixes leave the underlying
+accuracy problem intact: a writer that cannot use the word ``delves''
+will find a synonym for the same rhetorical move, and a writer that
+cannot use ``Unlike X, Y'' will find a different syntactic shape for
+the same binary construction. The implied-claim audit in
+Section~\ref{sec:implied} is direct evidence: the parasitic frames are
+not failures of vocabulary control; they are failures of binary-versus-
+spectrum reasoning.
+
+\subsection{Surface mitigations: useful but bounded}
+
+The vocabulary literature is now precise enough to operationalize.
+\citet{qiu_rhetorical_2025} provide a counterfactual methodology for
+isolating rhetorical style from content; the corpus studies aggregated
+in our internal review identified 379 excess style words elevated since
+the ChatGPT release, with ``delves'' at 28$\times$ expected frequency,
+``underscores'' at 13.8$\times$, and ``showcasing'' at 10.7$\times$, and
+a focal-word set of 21 high-signal entries (delve, intricate, nuanced,
+underscore, showcasing, comprehensive, multifaceted, pivotal,
+commendable, meticulous, realm, landscape, tapestry, crucial, robust,
+plus six others). CCE's humanization scorer maintains these as
+configurable blocklists in YAML so the markers can track the
+coevolution of detector and model: a known signal degrades in detection
+value as soon as it becomes known, because models suppress it under
+pressure. Burstiness (sentence-length variance), lexical diversity
+(type-token ratio), and structural-template detection are similarly
+useful programmatic checks, but each one detects an effect downstream
+of the reasoning step that produces the AI fingerprint, not the
+reasoning step itself.
+
+\subsection{Resource-pressure findings from the CCE corpus}
+
+A length-tier study run on a single topic (stress physiology) with the
+same evidence store and the same source policy across three word-budget
+configurations isolates the effect of resource pressure on the leakage
+rate. Tier B (Learn 2000 / Explore 1500 / Apply 1000) is the only
+configuration where all three paths cleared the gate; the Learn path
+went from 4 leakage claims on iteration 1 to 0 on iteration 2 with a
+1.000 verification score. Tier A (Learn 1500 / Explore 1200 /
+Apply 800) entered a whack-a-mole pattern on the Explore path: claim
+counts rose from 46 to 48 to 51 across three iterations as the writer
+added claims to address verifier feedback, with 2-3 leakage events on
+each iteration despite the rewrite. Tier C (Learn 3000 / Explore 2500 /
+Apply 1500) failed by a different mechanism: claim volume gave the
+verifier more surface area, dropping per-iteration confidence below
+threshold even when the unsupported rate per claim was low. The
+takeaway is that leakage in this pipeline is a function of word budget
+relative to required-section count, not just of model behavior, and
+that the failure mode at the tight end is precisely the
+training-data-substitution behavior the implied-claim and persona
+mechanisms above predict.
+
+\subsection{Structural mitigation: spectrum principle and implied-claim
+verification}
+
+The structural counterpart to vocabulary suppression is the spectrum
+principle described in Section~\ref{sec:implied}: the writer prompt
+adds a constraint that distinctions between two concepts must include
+at least one condition under which the disfavored side is valid, and
+the verifier extends the trust contract by extracting the implied
+negative claim from contrastive frames and searching the evidence store
+for material supporting the dismissed pole. Where surface mitigations
+produce a writer that finds new words for the same binary, the spectrum
+principle changes the underlying reasoning: the writer has to represent
+the relationship between the two ideas before producing prose. The
+2026-04-17 calibration sweep over 36 archival drafts set the soft
+thresholds for the humanization gate at the values currently shipped in
+\texttt{config/humanization\_markers.yaml}; the em-dash threshold
+(4.0/1000) is an editorial target rather than an engine floor, since
+em-dash overuse is the AI fingerprint we want the editor to address
+rather than refuse on.
+
+\subsection{Coevolution and configuration-as-policy}
+
+The coevolutionary dynamic from \citet{qiu_rhetorical_2025} and earlier
+work has a direct implication for engineering: any specific marker list
+has a finite shelf life, and the scorer's configuration is itself a
+moving target. CCE addresses this by keeping the marker lists, density
+thresholds, and rhetorical-pattern regexes in operator-editable YAML
+that ships separately from the engine code, so the scorer can be
+retuned without redeployment. This is the same pattern the citation
+literature recommends for hallucination evals: the test set decays as
+the model learns its boundaries, so the test-set-as-config decision
+matters more than the specific test cases on it.
+
+\section{Discussion}
+\label{sec:discussion}
+
+\subsection{Generalization beyond content curation}
+
+The pipeline structure on which the experimental result rests is
+domain-pluggable. Strip the content-specific framing and the apparatus
+is a query-driven evidence-grounded synthesis loop: discover sources,
+extract facts with provenance, synthesize a grounded output, verify
+every claim against the evidence, gate on a trust threshold. The
+``no citation, no ship'' invariant is the load-bearing piece, and it
+is domain-agnostic. Adapter implementations exist or are sketched for
+web pages (current), API-backed sources (SEC EDGAR, financial data
+providers), code repositories (docs, issues, version-pinned API
+references), document corpora (PDF parsing for filings, patents, case
+law), and structured data sources. Trust heuristics that hardcode
+academic conventions (.gov and .edu domains, peer-review status) become
+pluggable reputation strategies per domain: jurisdiction authority and
+court level for legal research, regulatory-filing precedence over
+analyst notes for financial research, official-doc and version-recency
+weights for programming research. Output formats parameterize from
+prose to comparison tables, structured briefs, code snippets with
+sourced explanation, or jurisdictional summaries. The persona-leakage
+finding generalizes wherever a stylistic prompt addendum is applied to
+a writer that operates against a fixed evidence store.
+
+\subsection{Contradiction as a feature}
+
+In the current content domain, contradiction between sources is treated
+as a problem the gate must resolve: the writer picks a side, the
+verifier checks the cited side, and the disagreement is flattened. In
+research-flavored domains, the disagreement is often the value. A
+competitive-intelligence query that returns ``Source A reports market
+share of X, Source B reports Y, here is the methodology and recency for
+each'' is more useful than one that picks a winner. The same
+infrastructure that powers implied-claim detection in
+Section~\ref{sec:implied} (extract negative pole, search evidence store
+for support) is the natural primitive for surfacing contradictions as
+first-class outputs: the spectrum principle at the architectural level.
+\citet{shao_storm_2024}'s multi-perspective question-asking at the
+pre-writing stage moves in a similar direction; lifting that primitive
+from outline construction into the verifier-gate path would close the
+loop. This direction also shifts the gate from binary PASS/FAIL to
+confidence-weighted continuous output, where each claim carries a
+confidence score and a source-count, and the consumer applies a
+threshold appropriate to their use (a regulatory submission requires
+0.95+; a casual reader accepts 0.7+).
+
+\subsection{Agentic grounding}
+
+A speculative direction worth naming: the same pipeline can operate as
+a trust layer for autonomous agents that take external action. Instead
+of ``write me an article about X,'' the call shape becomes ``before you
+recommend Y, verify it against current sources.'' The agent's action
+routes through the evidence loop before it executes anything that
+depends on external facts. This is plausibly the highest-value
+application of the pipeline beyond content, and it is the place where
+the persona-and-sycophancy compounding finding has the largest
+operational stakes: an agent that gets persona instructions to be
+``helpful'' or ``confident,'' and that operates against a sycophancy-
+prone base model, will compound the failure mode in a domain where the
+output is an action rather than a paragraph.
+
+\subsection{Limitations}
+
+The experimental result reported here is from a single production
+synthesis system on a content domain, with a fixed model family and a
+fixed evidence store. The compositional-coordination account of
+\citet{rocchetti_instructions_2026} is itself a finding from three
+small models (Llama 3.1 8B, Gemma 2 2B, Qwen 2.5 0.5B); whether the
+finite-capacity prediction holds at frontier scale is an open question.
+The persona-on/off experimental design (Section~\ref{sec:design}) is
+sufficient for testing the directional prediction but does not
+disentangle the contributions of the persona instruction, the path
+structure, and the word-budget tier individually beyond their
+two-way interactions. Replication on a second synthesis pipeline (a
+research-domain instance built on the same architecture but a different
+evidence-source mix) would strengthen the generalization claim.
+
+% TODO: expand the limitations subsection after the persona on/off
+% experiment lands. Items to address concretely once we have data:
+% (a) external validity beyond the wellness-content corpus;
+% (b) effect-size sensitivity to model version;
+% (c) whether the implied-claim detection pipeline produces false
+%     positives at a rate that would change the gate's operating point.
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+% \nocite{*} forces all bib entries to render, useful while the body is stubbed.
+% Remove this line once real \citep{...} calls populate the sections.
+\nocite{*}
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}
