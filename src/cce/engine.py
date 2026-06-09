@@ -263,14 +263,26 @@ class CurationEngine:
         return engine
 
     @classmethod
-    def remote(cls, base_url: str, api_key: str) -> CurationEngine:
-        """Create an HTTP client to a running CCE API server."""
+    def remote(
+        cls,
+        base_url: str,
+        api_key: str,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> CurationEngine:
+        """Create an HTTP client to a running CCE API server.
+
+        ``transport`` is a test seam (audit-2026-06-09 T-04.01): pass
+        ``httpx.ASGITransport(app=...)`` to drive an in-process ASGI app.
+        The default (None) preserves real HTTP transport.
+        """
         engine = cls()
         engine._mode = "remote"
         engine._http_client = httpx.AsyncClient(
             base_url=base_url,
             headers={"Authorization": f"Bearer {api_key}"},
             timeout=30.0,
+            transport=transport,
         )
         return engine
 

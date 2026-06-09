@@ -30,6 +30,10 @@ from cce.policy.types import SourcePolicy
 
 logger = logging.getLogger(__name__)
 
+# Grace window for in-flight pipeline tasks at shutdown. Module-level so
+# tests can monkeypatch it (audit-2026-06-09 T-04.04).
+SHUTDOWN_TIMEOUT_S = 10
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -96,7 +100,6 @@ async def lifespan(app: FastAPI):
     yield
 
     # -- Shutdown --
-    SHUTDOWN_TIMEOUT_S = 10
 
     # 1. Give running tasks time to finish, then hard-cancel stragglers
     tasks = list(app.state.running_tasks.values())

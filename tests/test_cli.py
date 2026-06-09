@@ -236,3 +236,126 @@ def test_revoke_nonexistent():
     result = runner.invoke(app, ["api", "key", "revoke", "nonexistent_prefix"])
     assert result.exit_code == 1
     assert "No key found" in result.output
+
+
+def test_revoke_ambiguous_prefix_errors(tmp_path):
+    """Two keys sharing a hash prefix → revoke with that prefix refuses (T-04.05)."""
+    import asyncio as _asyncio
+
+    from cce.jobs.store import JobStore
+
+    async def _seed() -> None:
+        store = JobStore(db_path=tmp_path / "cli_test.db")
+        await store.connect()
+        try:
+            await store.store_api_key("deadbeef" + "0" * 56, label="one")
+            await store.store_api_key("deadbeef" + "1" * 56, label="two")
+        finally:
+            await store.close()
+
+    _asyncio.run(_seed())
+
+    result = runner.invoke(app, ["api", "key", "revoke", "deadbeef"])
+    assert result.exit_code == 1
+    assert "Ambiguous prefix" in result.output
+    assert "2 keys match" in result.output
+
+    # Neither key was revoked.
+    result = runner.invoke(app, ["api", "key", "list"])
+    assert "one" in result.output
+    assert "two" in result.output
+
+
+# ---------------------------------------------------------------------------
+# batch — happy path (T-04.05)
+# ---------------------------------------------------------------------------
+
+
+def test_batch_happy_path_skips_malformed_entry(tmp_path, monkeypatch):
+    """2 valid entries submitted, 1 malformed entry skipped, exit 0."""
+    from cce.engine import CurationEngine
+    from cce.models.job import JobStatus
+    from tests.conftest import make_job
+
+    submitted = []
+
+    class _StubHandle:
+        def __init__(self, request):
+            self._request = request
+
+        async def wait(self, timeout: float = 600):
+            return make_job(request=self._request, status=JobStatus.COMPLETED)
+
+    class _StubEngine:
+        async def curate(self, request):
+            submitted.append(request)
+            return _StubHandle(request)
+
+        async def close(self) -> None:
+            pass
+
+    async def _fake_embedded(*args, **kwargs):
+        return _StubEngine()
+
+    monkeypatch.setattr(CurationEngine, "embedded", _fake_embedded)
+
+    topics_file = tmp_path / "topics.yaml"
+    topics_file.write_text(
+        "- topic: first topic\n"
+        "  paths: [blog]\n"
+        "- not-a-dict-entry\n"
+        "- topic: second topic\n"
+        "  paths: [blog, guide]\n"
+        "  audience: experts\n"
+    )
+
+    result = runner.invoke(
+        app,
+        ["batch", "--topics-file", str(topics_file), "--policy-id", "test-policy"],
+    )
+    assert result.exit_code == 0, result.output
+
+    assert len(submitted) == 2
+    assert submitted[0].topic == "first topic"
+    assert submitted[0].paths == ["blog"]
+    assert submitted[0].policy_id == "test-policy"
+    assert submitted[1].topic == "second topic"
+    assert submitted[1].paths == ["blog", "guide"]
+    assert submitted[1].audience == "experts"
+
+    assert "SKIP (not a dict)" in result.output
+    assert "completed: first topic" in result.output
+    assert "completed: second topic" in result.output
+
+
+# ---------------------------------------------------------------------------
+# emit-mdx — error branches (T-04.05)
+# ---------------------------------------------------------------------------
+
+
+def test_emit_mdx_all_with_no_completed_jobs(tmp_path):
+    target = tmp_path / "content"
+    target.mkdir()
+    result = runner.invoke(app, ["emit-mdx", "--all", "--target", str(target)])
+    assert result.exit_code == 1
+    assert "no completed jobs found" in result.output
+
+
+def test_emit_mdx_job_without_package(tmp_path):
+    target = tmp_path / "content"
+    target.mkdir()
+    result = runner.invoke(
+        app, ["emit-mdx", "--job", "job_missing", "--target", str(target)]
+    )
+    assert result.exit_code == 1
+    assert "no package found for job job_missing" in result.output
+
+
+def test_emit_mdx_topic_with_no_completed_jobs(tmp_path):
+    target = tmp_path / "content"
+    target.mkdir()
+    result = runner.invoke(
+        app, ["emit-mdx", "--topic", "ghost-topic", "--target", str(target)]
+    )
+    assert result.exit_code == 1
+    assert "no completed jobs for topic 'ghost-topic'" in result.output
