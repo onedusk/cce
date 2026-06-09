@@ -1,9 +1,12 @@
 """Tests for cce.config.loader — YAML loading, env var precedence, type coercion."""
 
+import os
+
 import pytest
 import yaml
 
 from cce.config.loader import load_config
+from cce.config.types import EngineConfig, LLMConfig
 
 pytestmark = pytest.mark.unit
 
@@ -35,6 +38,26 @@ def _clear_env(monkeypatch):
     """Remove all CCE/Anthropic/Firecrawl env vars for deterministic defaults."""
     for var in _ENV_VARS:
         monkeypatch.delenv(var, raising=False)
+
+
+def test_scrubbed_env_equals_types_defaults(monkeypatch):
+    """With every CCE_*/ANTHROPIC_*/FIRECRAWL_* env var removed and no YAML,
+    load_config() is field-for-field identical to bare EngineConfig — proof
+    that types.py is the single source of defaults (finding 1.4, T-06.03).
+
+    The two env-read key fields are the only values the loader always passes
+    explicitly; under a scrubbed env they coincide with the constructed
+    reference (llm.api_key="" and crawl.api_key=None), so no carve-out from
+    the model_dump comparison is needed.
+    """
+    for var in list(os.environ):
+        if var.startswith(("CCE_", "ANTHROPIC_", "FIRECRAWL_")):
+            monkeypatch.delenv(var)
+
+    assert (
+        load_config().model_dump()
+        == EngineConfig(llm=LLMConfig(api_key="")).model_dump()
+    )
 
 
 def test_load_config_defaults(monkeypatch):

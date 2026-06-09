@@ -9,7 +9,9 @@ exactly ``cce/components.py``.
 from __future__ import annotations
 
 import dataclasses
+import inspect
 import logging
+import re
 from pathlib import Path
 
 import pytest
@@ -17,6 +19,7 @@ import pytest
 from cce.api.app import create_app
 from cce.components import ComponentSet, build_components, build_pipeline
 from cce.config.loader import load_config
+from cce.config.registry import ConfigRegistry
 from cce.config.types import (
     CrawlConfig,
     EmbeddingConfig,
@@ -99,12 +102,14 @@ async def test_parity_embedded_vs_api(
         humanization_enabled=humanization_enabled,
     )
 
-    # Reference ComponentSet straight from the factory.
+    # Reference ComponentSet straight from the factory. Registry from the
+    # repo-root cwd — the same tree both wiring modes load from.
     config = load_config(str(config_yaml))
+    registry = ConfigRegistry.load(Path("."), engine=config)
     store = SQLiteEvidenceStore(config.evidence_store)
     await store.connect()
     try:
-        components = build_components(config, store)
+        components = build_components(config, registry, store)
     finally:
         await store.close()
 
@@ -169,11 +174,13 @@ async def test_embedding_fallback_warn_and_continue(
         "cce.discovery.ollama.OllamaEmbeddingProvider", _UnreachableProvider
     )
 
+    # cwd (tmp_path) has no optional config trees -> empty registry surfaces.
+    registry = ConfigRegistry.load(Path("."), engine=config)
     store = SQLiteEvidenceStore(config.evidence_store)
     await store.connect()
     try:
         with caplog.at_level(logging.WARNING, logger="cce.components"):
-            components = build_components(config, store)
+            components = build_components(config, registry, store)
     finally:
         await store.close()
 
@@ -194,11 +201,12 @@ async def test_build_pipeline_accepts_prebuilt_components(tmp_path: Path):
         humanization=HumanizationConfig(enabled=True),
     )
 
+    registry = ConfigRegistry.load(Path("."), engine=config)
     store = SQLiteEvidenceStore(config.evidence_store)
     await store.connect()
     try:
-        components = build_components(config, store)
-        pipeline = build_pipeline(config, store, components)
+        components = build_components(config, registry, store)
+        pipeline = build_pipeline(config, registry, store, components)
     finally:
         await store.close()
 
@@ -228,3 +236,45 @@ def test_componentset_completeness_snapshot():
         f.default is dataclasses.MISSING and f.default_factory is dataclasses.MISSING
         for f in dataclasses.fields(ComponentSet)
     )
+
+
+def test_no_direct_loader_calls_in_wiring_sources():
+    """Drift tripwire (finding 1.3, M06): engine.py and api/app.py must not
+    call the YAML loaders directly — all loading goes through ConfigRegistry.
+    Source inspection rather than a one-off grep so CI catches regressions."""
+    import cce.api.app
+    import cce.engine
+
+    forbidden = re.compile(
+        r"load_policies\(|load_path_configs\(|load_taxonomy\(|load_markers\("
+    )
+    for module in (cce.engine, cce.api.app):
+        source = inspect.getsource(module)
+        match = forbidden.search(source)
+        assert match is None, (
+            f"{module.__name__} calls {match.group(0)!r} directly; "
+            "route configuration loading through ConfigRegistry (ADR-002)"
+        )
+
+
+async def test_build_components_rejects_registry_without_markers(tmp_path: Path):
+    """Humanization enabled + registry built without markers is a wiring bug
+    (registry from a different config) — fail loudly, never score-silently."""
+    config = EngineConfig(
+        llm=LLMConfig(api_key="test-key"),
+        crawl=CrawlConfig(api_key="test-key"),
+        evidence_store=EvidenceStoreConfig(sqlite_path=tmp_path / "ev.db"),
+        embedding=EmbeddingConfig(enabled=False),
+        humanization=HumanizationConfig(enabled=True),
+    )
+    registry = ConfigRegistry(
+        engine=EngineConfig(llm=LLMConfig(api_key="test-key"))
+    )  # humanization off -> no markers
+
+    store = SQLiteEvidenceStore(config.evidence_store)
+    await store.connect()
+    try:
+        with pytest.raises(ValueError, match="holds no markers"):
+            build_components(config, registry, store)
+    finally:
+        await store.close()

@@ -22,6 +22,7 @@ from cce.api.middleware import (
 from cce.api.schemas import error_envelope
 from cce.components import build_pipeline
 from cce.config.loader import ConfigError, load_config, validate_required_keys
+from cce.config.registry import ConfigRegistry
 from cce.config.types import EngineConfig
 from cce.evidence.sqlite import SQLiteEvidenceStore
 from cce.jobs.store import JobStore
@@ -57,6 +58,12 @@ async def lifespan(app: FastAPI):
         await evidence_store.connect()
         locally_created.add("evidence_store")
 
+    # -- Config registry (production branches only — tests inject) --
+    # One ConfigRegistry owns every YAML surface: policies, path configs,
+    # taxonomy path, markers (ADR-002, M06). Built lazily so fully-injected
+    # test apps never touch the filesystem.
+    registry: ConfigRegistry | None = None
+
     # -- Pipeline --
     pipeline = overrides.get("pipeline")
     if pipeline is None:
@@ -70,13 +77,16 @@ async def lifespan(app: FastAPI):
         except ConfigError as e:
             logger.error("Configuration error: %s", e)
             raise SystemExit(1) from None
-        pipeline = _build_pipeline(config, evidence_store)
+        registry = ConfigRegistry.load(Path("."), engine=config)
+        pipeline = _build_pipeline(config, evidence_store, registry)
         locally_created.add("pipeline")
 
     # -- Policies --
     policies = overrides.get("policies")
     if policies is None:
-        policies = _load_policies_safe()
+        if registry is None:
+            registry = ConfigRegistry.load(Path("."), engine=config)
+        policies = registry.policies
 
     # -- Auth dependency --
     auth_dep = make_auth_dependency(config.api.require_auth, job_store)
@@ -90,8 +100,12 @@ async def lifespan(app: FastAPI):
     # path_configs is a map {path_name: PathConfig}. Exposed here so
     # create_job can validate `body.paths` against the known names early
     # (audit U2) rather than letting unknown names fail deep in the pipeline.
-    # None -> no path_configs loaded -> handler skips the check.
-    app.state.path_configs = getattr(pipeline, "_path_configs", None) or None
+    # None -> no path_configs loaded -> handler skips the check. Sourced from
+    # the registry (M06); fully-injected test apps carry None and set
+    # app.state.path_configs themselves when a test needs the check.
+    app.state.path_configs = (
+        (registry.path_configs or None) if registry is not None else None
+    )
     app.state.semaphore = asyncio.Semaphore(config.api.max_concurrent_jobs)
     running_tasks: dict[str, asyncio.Task] = {}
     app.state.running_tasks = running_tasks
@@ -249,24 +263,16 @@ def create_app(
 
 
 def _build_pipeline(
-    config: EngineConfig, evidence_store: SQLiteEvidenceStore
+    config: EngineConfig,
+    evidence_store: SQLiteEvidenceStore,
+    registry: ConfigRegistry | None = None,
 ) -> Pipeline:
     """Thin shim over the shared component factory (audit-2026-06-09 M05).
 
     Wiring authority lives in ``cce.components`` (ADR-001, finding 1.1); this
     name is kept so existing references (factory-level tests) survive the move.
+    A registry is built on demand for callers that pass only a config (M06).
     """
-    return build_pipeline(config, evidence_store)
-
-
-def _load_policies_safe() -> dict[str, SourcePolicy]:
-    """Load all policies from the policies/ directory, or return empty dict."""
-    from cce.policy.loader import load_policies
-
-    policies_dir = Path("policies")
-    if policies_dir.exists():
-        try:
-            return load_policies(policies_dir)
-        except Exception as e:
-            logger.warning("Failed to load policies: %s", e)
-    return {}
+    if registry is None:
+        registry = ConfigRegistry.load(Path("."), engine=config)
+    return build_pipeline(config, registry, evidence_store)

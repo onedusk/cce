@@ -65,7 +65,7 @@ async def _make_engine(
     if llm_responses is None:
         llm_responses = [writer_json(), verifier_json()]
 
-    def _mock_pipeline_build(config, evidence_store) -> Pipeline:
+    def _mock_pipeline_build(config, registry, evidence_store) -> Pipeline:
         return Pipeline(
             config=config,
             crawl_adapter=make_adapter(),

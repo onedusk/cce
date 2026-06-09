@@ -10,8 +10,9 @@ For engine tuning values, three layers apply. Higher wins:
 1. **Environment variables** (`CCE_*`, plus `ANTHROPIC_API_KEY` /
    `ANTHROPIC_MODEL` / `FIRECRAWL_API_KEY` aliases)
 2. **YAML config file** — optional, passed explicitly (see below)
-3. **Built-in defaults** — `src/cce/config/types.py` field defaults, with the
-   loader fallbacks in `src/cce/config/loader.py`
+3. **Built-in defaults** — `src/cce/config/types.py` field defaults. The
+   loader passes only explicitly-configured values, so `types.py` is the
+   single source of defaults (audit-2026-06-09 finding 1.4)
 
 A `.env` file at the repo root (gitignored) is the conventional place for
 layer 1 — `cp .env.example .env` and edit. The CLI and engine read it via
@@ -33,6 +34,49 @@ Top-level YAML sections mirror `EngineConfig`: `llm`, `evidence_store`,
 `crawl`, `embedding`, `quality_gate`, `api`, `humanization`, `engine_version`.
 `config/humanization_live.yaml` is a working example (the humanization live
 harness uses it). Environment variables override whatever the file says.
+
+## How loading works
+
+`ConfigRegistry.load(root, config_path)` (`src/cce/config/registry.py`) is
+the one sanctioned load entry for engine and API code (ADR-002,
+audit-2026-06-09). Both `CurationEngine.embedded()` and the API lifespan
+build exactly one registry at startup and pass it to the component factory —
+neither calls the individual loaders or hardcodes paths (a source-inspection
+test in `tests/test_components.py` enforces this).
+
+`load()` runs in this order:
+
+1. **Engine config** — `load_config(config_path)` (env > YAML > `types.py`
+   defaults). The API lifespan passes its already-built `EngineConfig` via
+   the `engine=` keyword instead, since `create_app()` accepts one.
+2. **Policies** — `load_policies(root / "policies")` (or the `policies_dir`
+   argument). Forgiving per PDR-003: a missing directory yields an empty
+   dict, a loader exception is logged and tolerated, and malformed
+   individual files are already skipped inside `load_policies`. Pre-deploy
+   strictness is `cce validate`'s job.
+3. **Path configs** — the explicit `path_configs_path` argument when given;
+   otherwise the first of `root / "path_configs" / thnklabs.yaml` (operator
+   file, untracked) then `default.yaml` (committed template) that exists and
+   yields a non-empty dict.
+4. **Taxonomy** — records `root / "taxonomies" / "wellbeing-8d.yaml"` (or
+   under the `taxonomies_dir` argument) as `taxonomy_path` when the file
+   exists; parsing and plugin construction stay in
+   `cce.components.build_components`.
+5. **Markers** — `load_markers(root / humanization.markers_path)` only when
+   `humanization.enabled` is true. A missing markers file raises — the one
+   intentional fail-fast surface (an operator who enabled humanization must
+   not silently ship unscored drafts).
+
+`CurationEngine.embedded()`'s `policies_dir` / `taxonomies_dir` /
+`path_configs_path` parameters feed these arguments directly (honored since
+audit-2026-06-09 M06; they were accepted but ignored from Phase 3 until
+then). Relative arguments resolve against `root`; absolute ones are used
+as-is.
+
+**New configuration surfaces must enter through the registry** — add a field
+to `ConfigRegistry`, load it in `load()`, and consume it from
+`build_components`. Do not add `load_*` calls to `engine.py` or
+`api/app.py`; the drift-tripwire test will fail the build.
 
 ## YAML directories: content vs engine tuning
 

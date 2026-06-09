@@ -5,18 +5,17 @@ Both ``CurationEngine.embedded()`` and the API lifespan build their
 directly. Adding a pipeline component means editing exactly this file — the
 parity test in ``tests/test_components.py`` pins the contract.
 
-M06 note: taxonomy / path-config / marker loading happens inline in
-:func:`build_components` today (lifted verbatim from the old
-``api/app.py:_build_pipeline``); the ConfigRegistry milestone moves loading
-out and collapses those blocks into registry lookups.
+Configuration loading lives in ``cce.config.registry`` (ADR-002, M06): this
+module consumes a ``ConfigRegistry`` and constructs live runtime objects
+from it — it never reads YAML or selects paths itself.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from pathlib import Path
 
+from cce.config.registry import ConfigRegistry
 from cce.config.types import EngineConfig
 from cce.discovery.adapters.base import CrawlAdapter
 from cce.discovery.embeddings import EmbeddingProvider, EmbeddingUnavailableError
@@ -48,18 +47,19 @@ class ComponentSet:
 
 
 def build_components(
-    config: EngineConfig, evidence_store: EvidenceStore
+    config: EngineConfig,
+    registry: ConfigRegistry,
+    evidence_store: EvidenceStore,
 ) -> ComponentSet:
-    """Construct the component graph from config.
+    """Construct the component graph from config + loaded registry.
 
     Preserves the warn-and-continue semantics for optional providers
     (embedding, taxonomy, path configs): construction or load failure logs a
     warning and yields ``None`` / empty, exactly as the old wiring site did.
-    Marker loading (humanization) stays fail-fast by design — see the comment
-    on the humanization block.
 
     ``evidence_store`` is required because the implied-claim checker is
-    constructor-injected with it (counter-evidence search).
+    constructor-injected with the live store (counter-evidence search) — the
+    registry holds config-time data only.
     """
     # Concrete adapters are imported lazily so importing cce.components
     # (engine.py does, at module level) doesn't pull the anthropic/firecrawl
@@ -67,7 +67,7 @@ def build_components(
     from cce.discovery.adapters.firecrawl import FirecrawlAdapter
     from cce.discovery.ollama import OllamaEmbeddingProvider
     from cce.llm.anthropic import AnthropicProvider
-    from cce.tagging.loader import load_path_configs, load_taxonomy
+    from cce.tagging.loader import load_taxonomy
     from cce.tagging.wellbeing import WellBeingTaxonomy
 
     crawl_adapter = FirecrawlAdapter(config.crawl)
@@ -83,49 +83,36 @@ def build_components(
         except (EmbeddingUnavailableError, Exception) as e:
             logger.warning("Embedding provider unavailable: %s", e)
 
-    # Taxonomy plugin (optional). load_taxonomy catches parse errors and
-    # returns None (audit A4 / ADR-006), so no outer try/except here.
+    # Taxonomy plugin (optional). The registry owns path selection; the
+    # YAML -> plugin step stays here because WellBeingTaxonomy is a live
+    # component. load_taxonomy catches parse errors and returns None
+    # (audit A4 / ADR-006), so no outer try/except here.
     taxonomy_plugin = None
-    taxonomy_path = Path("taxonomies/wellbeing-8d.yaml")
-    if taxonomy_path.exists():
-        taxonomy_config = load_taxonomy(taxonomy_path)
+    if registry.taxonomy_path is not None:
+        taxonomy_config = load_taxonomy(registry.taxonomy_path)
         if taxonomy_config is not None:
             taxonomy_plugin = WellBeingTaxonomy(taxonomy_config)
             logger.info("Taxonomy loaded: %s", taxonomy_config.name)
 
-    # Path configs (optional). load_path_configs returns an empty dict on
-    # any parse/structure failure (audit A4 / ADR-006). Try the operator
-    # file first; fall back to the committed Tier B template.
-    path_configs = None
-    for candidate in (
-        Path("path_configs/thnklabs.yaml"),
-        Path("path_configs/default.yaml"),
-    ):
-        if candidate.exists():
-            loaded = load_path_configs(candidate)
-            if loaded:
-                path_configs = loaded
-                logger.info(
-                    "Path configs loaded from %s: %s",
-                    candidate,
-                    list(path_configs.keys()),
-                )
-                break
-
     # Humanization scorer (M02, optional). Constructed only when the master
-    # switch is on. `load_markers` raises FileNotFoundError on a missing YAML
-    # — intentional fail-fast (not graceful like taxonomy/embedding/path_configs
-    # above): silent humanization failure would be worse than a dead server.
-    # An operator who set `humanization.enabled = true` has explicitly opted
-    # in; booting with scoring silently disabled would leave them shipping
-    # unscored drafts under the impression the gate was measuring them.
+    # switch is on. Markers are loaded fail-fast by ConfigRegistry.load (not
+    # graceful like taxonomy/embedding/path_configs above): silent
+    # humanization failure would be worse than a dead server. An operator
+    # who set `humanization.enabled = true` has explicitly opted in; booting
+    # with scoring silently disabled would leave them shipping unscored
+    # drafts under the impression the gate was measuring them.
     scorer = None
     editor = None
     implied_claim_checker = None
     if config.humanization.enabled:
-        from cce.config.markers import load_markers
-
-        markers = load_markers(config.humanization.markers_path)
+        markers = registry.markers
+        if markers is None:
+            raise ValueError(
+                "humanization.enabled=True but the ConfigRegistry holds no "
+                "markers — build the registry from the same EngineConfig "
+                "(ConfigRegistry.load loads markers when humanization is "
+                "enabled)."
+            )
         scorer = Scorer(thresholds=config.humanization.thresholds, markers=markers)
         logger.info(
             "Humanization scorer ready (markers: %s)", config.humanization.markers_path
@@ -170,7 +157,7 @@ def build_components(
         crawl_adapter=crawl_adapter,
         embedding=embedding_provider,
         taxonomy=taxonomy_plugin,
-        path_configs=path_configs or {},
+        path_configs=registry.path_configs,
         scorer=scorer,
         editor=editor,
         implied_claims=implied_claim_checker,
@@ -179,6 +166,7 @@ def build_components(
 
 def build_pipeline(
     config: EngineConfig,
+    registry: ConfigRegistry,
     evidence_store: EvidenceStore,
     components: ComponentSet | None = None,
 ) -> Pipeline:
@@ -189,7 +177,7 @@ def build_pipeline(
     ``api/app.py:_build_pipeline`` shim).
     """
     if components is None:
-        components = build_components(config, evidence_store)
+        components = build_components(config, registry, evidence_store)
     return Pipeline(
         config=config,
         crawl_adapter=components.crawl_adapter,

@@ -77,12 +77,15 @@ The pipeline flows: `CurationRequest → SourcePolicy → Discoverer → Evidenc
 
 **Dependency injection via constructors** — all components receive deps as args, no globals.
 
+**Configuration loading** goes through `ConfigRegistry` (`config/registry.py`) — the only sanctioned load entry for engine/API wiring (ADR-002, audit-2026-06-09). Its `load(root, config_path)` classmethod composes the existing loaders (which remain public for scripts/tests) and owns path selection: policies dir, `path_configs/{thnklabs,default}.yaml` preference, taxonomy file, humanization markers. `CurationEngine.embedded()` and the API lifespan each build exactly one registry and pass it to `build_components`; a source-inspection test in `tests/test_components.py` fails if `engine.py` or `api/app.py` ever call a `load_*` loader directly. Loading order and semantics: `docs/configuration.md` ("How loading works").
+
 **Dependency flow** (no circular deps):
-- `config/` and `models/` are the two roots with no dependencies
+- `config/` and `models/` are the two roots with no dependencies (one deliberate exception: `config/registry.py`, below)
 - `policy/` ← models
 - `discovery/` ← models, policy, config, adapters
 - `evidence/` ← models, config
 - `tagging/` ← models, config (taxonomy-driven tagger consumed by discoverer + writer)
+- `config/registry.py` ← config, models, policy, tagging (the one load authority composing the policy/ and tagging/ loaders — no cycle: neither package imports it back, verified 2026-06-09)
 - `synthesis/` ← models, evidence, llm, config, tagging (`synthesis/writer.py`, `synthesis/scoring.py` [humanization M02 — no LLM deps], `synthesis/editor.py` [humanization M03 — LLM-based stylistic rewrite, citation-preservation enforced via post-call check], `synthesis/implied_claims.py` [humanization M04 — contrastive-frame detection + counter-evidence search, surfaces annotations to the Editor])
 - `verification/` ← models, evidence, policy, llm, config
 - `orchestrator/` ← all pipeline modules

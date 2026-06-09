@@ -24,7 +24,8 @@ from pathlib import Path
 import httpx
 
 from cce.components import build_pipeline
-from cce.config.loader import load_config, validate_required_keys
+from cce.config.loader import validate_required_keys
+from cce.config.registry import ConfigRegistry
 from cce.config.types import EngineConfig
 from cce.evidence.sqlite import SQLiteEvidenceStore
 from cce.jobs.store import JobStore
@@ -32,7 +33,6 @@ from cce.models.job import Job, JobError, JobStage, JobStatus
 from cce.models.package import PublishPackage
 from cce.models.request import CurationRequest
 from cce.orchestrator.pipeline import Pipeline
-from cce.policy.loader import load_policies
 from cce.policy.types import SourcePolicy
 
 logger = logging.getLogger(__name__)
@@ -232,10 +232,21 @@ class CurationEngine:
         """Create an in-process engine instance.
 
         Loads config, builds all components, returns ready-to-use engine.
+        ``policies_dir`` / ``taxonomies_dir`` / ``path_configs_path`` feed
+        ``ConfigRegistry.load`` (M06) — the registry owns path selection.
         """
         engine = cls()
         engine._mode = "embedded"
-        engine._config = load_config(config_path)
+
+        # One registry owns every configuration surface (ADR-002, M06).
+        registry = ConfigRegistry.load(
+            Path("."),
+            Path(config_path) if config_path else None,
+            policies_dir=Path(policies_dir),
+            taxonomies_dir=Path(taxonomies_dir),
+            path_configs_path=Path(path_configs_path) if path_configs_path else None,
+        )
+        engine._config = registry.engine
         validate_required_keys(engine._config)
 
         # Open stores
@@ -246,12 +257,11 @@ class CurationEngine:
         await engine._evidence_store.connect()
 
         # Build pipeline through the shared component factory (M05, ADR-001)
-        engine._pipeline = build_pipeline(engine._config, engine._evidence_store)
+        engine._pipeline = build_pipeline(
+            engine._config, registry, engine._evidence_store
+        )
 
-        # Load policies
-        policies_path = Path(policies_dir)
-        if policies_path.exists():
-            engine._policies = load_policies(policies_path)
+        engine._policies = registry.policies
 
         engine._semaphore = asyncio.Semaphore(engine._config.api.max_concurrent_jobs)
 
