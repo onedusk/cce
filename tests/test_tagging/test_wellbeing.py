@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import pytest
+
 from cce.tagging.base import TaxonomyPlugin
 from tests.conftest import make_evidence
+
+pytestmark = pytest.mark.unit
 
 
 class TestWellBeingTaxonomy:

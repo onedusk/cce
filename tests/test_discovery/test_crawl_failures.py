@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 
+import pytest
+
 from cce.config.types import CrawlConfig
 from cce.discovery.adapters.base import CrawlResult
 from cce.discovery.discoverer import Discoverer
@@ -13,6 +15,8 @@ from tests.conftest import (
     make_curation_request,
     make_source_policy,
 )
+
+pytestmark = pytest.mark.unit
 
 
 def _config() -> CrawlConfig:

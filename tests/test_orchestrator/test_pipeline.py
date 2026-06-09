@@ -105,7 +105,6 @@ async def test_pipeline_rewrite_loop(sqlite_store):
     assert "VERIFIER FEEDBACK" in second_writer_prompt
 
 
-@pytest.mark.integration
 @pytest.mark.slow
 async def test_pipeline_review_max_iterations(sqlite_store):
     config = make_engine_config()

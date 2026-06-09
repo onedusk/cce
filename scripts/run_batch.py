@@ -6,24 +6,19 @@ Usage:
 
 import asyncio
 import logging
-import os
 from pathlib import Path
+
+from cce import load_env_file
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# Load .env
-env_path = ROOT / ".env"
-if env_path.exists():
-    for line in env_path.read_text().splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            key, _, value = line.partition("=")
-            os.environ.setdefault(key.strip(), value.strip())
+# Load .env (shared helper; see src/cce/__init__.py).
+load_env_file(ROOT / ".env")
 
-from cce.engine import CurationEngine
-from cce.models.request import CurationRequest
-from cce.output import write_output
-from cce.output.mdx import emit_mdx
+from cce.engine import CurationEngine  # noqa: E402
+from cce.models.request import CurationRequest  # noqa: E402
+from cce.output import write_output  # noqa: E402
+from cce.output.mdx import emit_mdx  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,

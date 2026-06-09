@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from cce.cli import app
@@ -18,6 +19,8 @@ from tests.conftest import (
     make_job,
     make_publish_package,
 )
+
+pytestmark = pytest.mark.integration
 
 runner = CliRunner()
 

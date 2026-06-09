@@ -600,7 +600,6 @@ def test_extract_evidence_published_at_parsing():
 # ===========================================================================
 
 
-@pytest.mark.integration
 async def test_discover_full_flow():
     from tests.conftest import MockCrawlAdapter
 
@@ -639,7 +638,6 @@ async def test_discover_full_flow():
         assert ev.source_quality is not None
 
 
-@pytest.mark.integration
 async def test_discover_no_urls_after_filter():
     from tests.conftest import MockCrawlAdapter
 
@@ -659,7 +657,6 @@ async def test_discover_no_urls_after_filter():
     assert evidence == []
 
 
-@pytest.mark.integration
 async def test_discover_empty_crawl_skipped():
     from tests.conftest import MockCrawlAdapter
 
@@ -679,7 +676,6 @@ async def test_discover_empty_crawl_skipped():
     assert evidence == []
 
 
-@pytest.mark.integration
 async def test_discover_max_sources_cap():
     from tests.conftest import MockCrawlAdapter
 
@@ -702,7 +698,6 @@ async def test_discover_max_sources_cap():
     assert len(evidence_urls) == 2
 
 
-@pytest.mark.integration
 async def test_discover_dedup_by_hash():
     from tests.conftest import MockCrawlAdapter
 
@@ -728,7 +723,6 @@ async def test_discover_dedup_by_hash():
     assert len(hashes) == len(set(hashes))
 
 
-@pytest.mark.integration
 async def test_discover_filters_old_and_marketing_evidence():
     """Evidence that is too old or marketing-flagged is filtered out post-extraction."""
     from tests.conftest import MockCrawlAdapter
@@ -872,7 +866,6 @@ def test_cap_evidence_empty_relevance_scores_degrades():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.integration
 async def test_discover_with_embedding_provider():
     """discover() calls embed and uses relevance scores for ranking."""
     from tests.conftest import MockCrawlAdapter, MockEmbeddingProvider
@@ -904,7 +897,6 @@ async def test_discover_with_embedding_provider():
     assert embedding.calls[0][0] == "test topic"
 
 
-@pytest.mark.integration
 async def test_discover_embedding_fallback_on_failure():
     """discover() falls back to length-based ranking when embeddings fail."""
     from tests.conftest import MockCrawlAdapter, MockEmbeddingProvider
@@ -932,7 +924,6 @@ async def test_discover_embedding_fallback_on_failure():
     assert len(evidence) >= 1
 
 
-@pytest.mark.integration
 async def test_discover_no_embedding_provider():
     """discover() with embedding_provider=None behaves identically to before."""
     from tests.conftest import MockCrawlAdapter

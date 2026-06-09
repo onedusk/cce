@@ -59,9 +59,7 @@ async def test_declared_oversized_content_length_rejected(
     assert resp.json()["error"]["code"] == "payload_too_large"
 
 
-async def test_normal_size_request_unaffected(
-    app: FastAPI, client: httpx.AsyncClient
-):
+async def test_normal_size_request_unaffected(app: FastAPI, client: httpx.AsyncClient):
     """A normal-size request passes through the middleware to the route."""
     calls: list[int] = []
 

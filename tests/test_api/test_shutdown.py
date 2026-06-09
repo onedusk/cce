@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import pytest
+
 from cce.jobs.store import JobStore
 from cce.models.job import JobError, JobStage, JobStatus
 from tests.conftest import make_job
+
+pytestmark = pytest.mark.integration
 
 
 async def _mark_orphaned_jobs(job_store: JobStore) -> int:

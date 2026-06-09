@@ -36,6 +36,7 @@ def _make_writer_json() -> str:
     )
 
 
+@pytest.mark.unit
 class TestBuildPathAddendum:
     def test_includes_tone_structure_depth(self):
         pc = _make_learn_config()

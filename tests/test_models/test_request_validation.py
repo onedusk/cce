@@ -7,6 +7,8 @@ from pydantic import ValidationError
 
 from cce.models.request import CurationRequest
 
+pytestmark = pytest.mark.unit
+
 
 def _valid(**overrides) -> dict:
     """Base valid request kwargs."""

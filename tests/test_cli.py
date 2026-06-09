@@ -9,7 +9,9 @@ from cce.cli import app
 
 runner = CliRunner()
 
-pytestmark = pytest.mark.unit
+# Every test runs under the autouse _use_tmp_db fixture (monkeypatched env +
+# real SQLite via CliRunner), which is integration tier per Stage 0.
+pytestmark = pytest.mark.integration
 
 
 @pytest.fixture(autouse=True)
@@ -122,7 +124,6 @@ def test_batch_command_rejects_non_list_yaml(tmp_path):
     assert "top-level YAML list" in result.output
 
 
-@pytest.mark.integration
 def test_batch_command_missing_api_key_exits_1(tmp_path, monkeypatch):
     """`cce batch` without ANTHROPIC_API_KEY exits 1 with a one-line error (T-01.02).
 
@@ -214,10 +215,12 @@ def test_generate_then_revoke():
     result = runner.invoke(app, ["api", "key", "generate", "--label", "doomed"])
     assert result.exit_code == 0
     # Extract hash prefix from output (format: "Hash:     abcdef0123456789...")
+    hash_prefix = None
     for line in result.output.splitlines():
         if line.startswith("Hash:"):
             hash_prefix = line.split()[-1].rstrip(".")
             break
+    assert hash_prefix is not None, "no 'Hash:' line in output"
 
     # Revoke
     result = runner.invoke(app, ["api", "key", "revoke", hash_prefix])

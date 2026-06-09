@@ -25,6 +25,8 @@ from tests.test_orchestrator.conftest import (
     writer_json as _writer_json,
 )
 
+pytestmark = pytest.mark.integration
+
 
 class MockTaxonomy:
     """Taxonomy plugin that returns fixed tags for any evidence."""

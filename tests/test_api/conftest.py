@@ -5,6 +5,7 @@ The ``job_store`` and ``sqlite_store`` fixtures come from the root conftest.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
@@ -24,6 +25,34 @@ from tests.conftest import (
     make_engine_config,
     make_source_policy,
 )
+
+
+async def wait_for_job_status(
+    client: httpx.AsyncClient,
+    job_id: str,
+    expected: set[str],
+    *,
+    timeout: float = 2.0,
+    interval: float = 0.01,
+) -> dict:
+    """Poll GET /v1/curate/jobs/{job_id} until its status is in ``expected``.
+
+    Replaces single ``asyncio.sleep()`` completion assumptions, which flaked
+    under load (T-02.01). Returns the job payload on success; raises
+    TimeoutError if the deadline passes first.
+    """
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        resp = await client.get(f"/v1/curate/jobs/{job_id}")
+        if resp.status_code == 200:
+            data = resp.json()["data"]
+            if data["status"] in expected:
+                return data
+        if asyncio.get_running_loop().time() >= deadline:
+            raise TimeoutError(
+                f"Job {job_id} did not reach {expected} within {timeout}s"
+            )
+        await asyncio.sleep(interval)
 
 
 @pytest.fixture

@@ -10,6 +10,8 @@ from cce.models.content import Citation, ContentScores
 from cce.output.mdx import EmitResult, emit_mdx, slugify
 from tests.conftest import make_content_unit, make_evidence, make_publish_package
 
+pytestmark = pytest.mark.integration
+
 
 def _package_with_paths(*paths: str):
     """Build a PublishPackage with units for the given paths."""

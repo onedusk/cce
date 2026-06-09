@@ -5,6 +5,8 @@ from pydantic import ValidationError
 
 from cce.models.taxonomy import Dimension, TaxonomyConfig
 
+pytestmark = pytest.mark.unit
+
 
 def _make_dimension(**overrides) -> Dimension:
     defaults = {

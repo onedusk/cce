@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from cce.models.content import Citation
 from cce.models.evidence import SourceQuality
 from cce.output.mdx.evidence import export_evidence
 from tests.conftest import make_content_unit, make_evidence
+
+pytestmark = pytest.mark.unit
 
 
 def _unit_with_citations(path: str, *evidence_ids: str):

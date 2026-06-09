@@ -2,9 +2,12 @@
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 from cce.tagging.loader import load_path_configs, load_taxonomy
+
+pytestmark = pytest.mark.integration
 
 
 def _write_yaml(tmp_path: Path, filename: str, data: dict | list) -> Path:

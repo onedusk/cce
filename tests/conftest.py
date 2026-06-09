@@ -36,6 +36,27 @@ from cce.policy.types import RecencyRule, ReputationRule, SourcePolicy
 from cce.verification.verifier import VerificationReport
 
 # ---------------------------------------------------------------------------
+# Collection hook: tier-marker enforcement (finding 3.4, T-02.03)
+# ---------------------------------------------------------------------------
+
+REQUIRED_MARKERS = {"unit", "integration", "slow", "e2e"}
+
+
+def pytest_collection_modifyitems(config, items):  # type: ignore[no-untyped-def]
+    """Fail collection if any test lacks a tier marker (finding 3.4)."""
+    unmarked = [
+        item.nodeid
+        for item in items
+        if not REQUIRED_MARKERS & {m.name for m in item.iter_markers()}
+    ]
+    if unmarked:
+        raise pytest.UsageError(
+            f"{len(unmarked)} test(s) missing a tier marker "
+            f"(unit/integration/slow/e2e): {unmarked[:5]}…"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Mock: LLMProvider
 # ---------------------------------------------------------------------------
 

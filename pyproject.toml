@@ -47,12 +47,22 @@ ignore = ["E501"]  # line length handled by formatter; LLM prompts are intention
 [tool.ruff.lint.isort]
 known-first-party = ["cce"]
 
+[tool.coverage.run]
+branch = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-# Coverage floor derived from observed coverage on 2026-04-16 post-M05
-# (92.20% - 2 = 90 per ADR-007 in audit-2026-04-14/stage-1-design-pack.md).
-addopts = "--cov=src/cce --cov-report=term-missing:skip-covered --cov-fail-under=90"
+# Coverage floor recalibrated for *branch* coverage on 2026-06-09 per ADR-004
+# (audit-2026-06-09), step 1 of 2. Branch coverage is a stricter metric than
+# the statement coverage measured before: it also requires each conditional's
+# True/False arms to be exercised, so partially-tested branches that statement
+# coverage silently passed now count against the total. The number therefore
+# dropped (93.59% statement -> 91.58% branch observed on 2026-06-09) while the
+# safety of the gate rose. Floor = floor(observed) - 2 = 89, replacing the old
+# statement floor of 90 (ADR-007, audit-2026-04-14). T-04.06 raises the floor
+# again after M04's operational-shell tests land (ADR-004 step 2).
+addopts = "--cov=src/cce --cov-report=term-missing:skip-covered --cov-fail-under=89"
 markers = [
     "unit: Fast tests with no I/O or external dependencies",
     "integration: Tests using real I/O (SQLite, filesystem) with mocked external services",

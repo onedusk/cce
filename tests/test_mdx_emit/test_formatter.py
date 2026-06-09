@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from cce.models.content import Citation
 from cce.output.mdx.formatter import _derive_title, format_mdx_page
 from tests.conftest import make_content_unit, make_evidence
+
+pytestmark = pytest.mark.unit
 
 
 def _parse_metadata(mdx: str) -> dict:

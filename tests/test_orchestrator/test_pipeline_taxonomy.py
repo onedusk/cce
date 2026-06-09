@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 
+import pytest
+
 from cce.models.job import JobStage
 from cce.tagging.base import TaxonomyUnavailableError
 from tests.conftest import (
@@ -14,6 +16,8 @@ from tests.conftest import (
     make_engine_config,
     make_source_policy,
 )
+
+pytestmark = pytest.mark.integration
 
 
 def _writer_response() -> str:

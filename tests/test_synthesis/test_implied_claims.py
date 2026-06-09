@@ -271,7 +271,9 @@ async def test_check_skips_parasitic_frames_no_llm_call(markers):
     assert store.search_calls == [], "parasitic frames must not hit the store"
 
 
-async def test_check_still_processes_genuine_alternative_when_parasitic_present(markers):
+async def test_check_still_processes_genuine_alternative_when_parasitic_present(
+    markers,
+):
     """Mixed body: parasitic frames are skipped; genuine_alternative
     frames still go through the normal topic-extract → counter-search pipeline."""
     cited = [make_evidence() for _ in range(10)]

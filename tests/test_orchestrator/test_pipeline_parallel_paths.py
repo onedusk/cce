@@ -9,7 +9,6 @@ stay identifiable when they interleave.
 from __future__ import annotations
 
 import asyncio
-import time
 from collections import Counter
 
 import pytest
@@ -36,10 +35,17 @@ class _SleepyLLM:
 
     Satisfies the LLMProvider protocol. Each call returns a writer- or
     verifier-shaped payload based on a keyword in the system prompt.
+
+    Records a concurrent-calls high-water mark (``max_concurrent``) via a
+    counter incremented on entry and decremented on exit — single-threaded
+    asyncio makes the plain int safe (T-02.01: replaces the wall-clock
+    upper-bound flake).
     """
 
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.max_concurrent = 0
+        self._in_flight = 0
 
     async def complete(
         self,
@@ -51,31 +57,36 @@ class _SleepyLLM:
     ) -> LLMResponse:
         kind = "verifier" if system and "fact-checking" in system else "writer"
         self.calls.append(kind)
-        if kind == "writer":
-            await asyncio.sleep(_WRITE_LATENCY_S)
+        self._in_flight += 1
+        self.max_concurrent = max(self.max_concurrent, self._in_flight)
+        try:
+            if kind == "writer":
+                await asyncio.sleep(_WRITE_LATENCY_S)
+                return LLMResponse(
+                    content=writer_json(),
+                    model="mock",
+                    stop_reason="end_turn",
+                    usage={
+                        "input_tokens": 10,
+                        "output_tokens": 5,
+                        "cache_creation_input_tokens": 1,
+                        "cache_read_input_tokens": 2,
+                    },
+                )
+            await asyncio.sleep(_VERIFY_LATENCY_S)
             return LLMResponse(
-                content=writer_json(),
+                content=verifier_json(supported=10, total=10, gaps=0),
                 model="mock",
                 stop_reason="end_turn",
                 usage={
-                    "input_tokens": 10,
-                    "output_tokens": 5,
-                    "cache_creation_input_tokens": 1,
-                    "cache_read_input_tokens": 2,
+                    "input_tokens": 20,
+                    "output_tokens": 3,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 4,
                 },
             )
-        await asyncio.sleep(_VERIFY_LATENCY_S)
-        return LLMResponse(
-            content=verifier_json(supported=10, total=10, gaps=0),
-            model="mock",
-            stop_reason="end_turn",
-            usage={
-                "input_tokens": 20,
-                "output_tokens": 3,
-                "cache_creation_input_tokens": 0,
-                "cache_read_input_tokens": 4,
-            },
-        )
+        finally:
+            self._in_flight -= 1
 
 
 def _request_with_paths(*paths: str):
@@ -92,19 +103,18 @@ async def test_paths_run_concurrently(sqlite_store):
         llm=llm,
     )
 
-    t_start = time.monotonic()
     result = await pipeline.run(
         _request_with_paths("blog", "summary", "faq"), make_source_policy()
     )
-    wall_clock = time.monotonic() - t_start
 
-    # Sequential would be 3 paths * (writer+verifier) * 0.1s = 0.6s.
-    # Concurrent is bounded by max single-path = writer+verifier = 0.2s,
-    # plus ~100ms of orchestration overhead (discovery, publish, etc).
+    # Sequential fan-out would never have more than one LLM call in flight;
+    # concurrent fan-out overlaps the per-path writer calls. The instrumented
+    # high-water mark replaces the old wall-clock upper bound, which flaked
+    # under load (T-02.01).
     assert result.succeeded is True
-    assert wall_clock < 0.5, (
-        f"Expected wall-clock < 0.5s (parallel); got {wall_clock:.3f}s "
-        f"(would be ~0.6s sequential)."
+    assert llm.max_concurrent >= 2, (
+        f"Expected >=2 concurrent LLM calls (parallel paths); "
+        f"high-water mark was {llm.max_concurrent} (sequential fan-out?)"
     )
 
 

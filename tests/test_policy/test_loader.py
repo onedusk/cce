@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from cce.policy.loader import load_policies, load_policy
 from cce.policy.types import SourcePolicy
 
-pytestmark = pytest.mark.unit
+pytestmark = pytest.mark.integration
 
 
 def test_load_policy_minimal(tmp_path):
@@ -142,7 +142,6 @@ def test_load_policy_rejects_unknown_nested_key(tmp_path):
         load_policy(policy_file)
 
 
-@pytest.mark.integration
 def test_repo_policy_and_path_config_yaml_still_load():
     """Regression guard for extra="forbid": every committed policy YAML and
     path_configs YAML must still parse (no legitimate key got rejected)."""
@@ -166,7 +165,6 @@ def test_repo_policy_and_path_config_yaml_still_load():
     assert load_path_configs(root / "path_configs" / "default.yaml")
 
 
-@pytest.mark.integration
 def test_load_real_peer_reviewed_policy():
     policy_path = (
         Path(__file__).resolve().parent.parent.parent

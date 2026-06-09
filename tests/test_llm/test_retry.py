@@ -12,6 +12,8 @@ from cce.llm.retry import (
     with_llm_retry,
 )
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture
 def no_jitter():
