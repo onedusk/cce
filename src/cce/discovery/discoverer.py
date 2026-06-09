@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 # package (filtering.py, ranking.py, dispatcher.py) before Phase 4 adds
 # more complexity here. Current single-file size is at the upper bound
 # of comfortable scope (~700 LOC post-sprint).
-# See docs/decompose/audit-2026-04-14/audit-2026-04-14.md §M2.
+# See docs/internal/improvement-opportunities-2026-06-09.md §0.2 (audit §M2).
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:

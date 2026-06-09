@@ -43,6 +43,22 @@ uv add <package>
 uv add --dev <package>
 ```
 
+**CLI** (installed as `cce` via `[project.scripts]`; the supported front door — finding 4.8):
+
+```bash
+# Run the pipeline over a YAML topics file
+uv run cce batch --topics-file policies/examples/topics-batch.yaml --policy-id peer-reviewed
+
+# Start the REST API server
+uv run cce api start
+
+# Generate an API key (written to ~/.cce/api-key, mode 0600)
+uv run cce api key generate
+
+# Emit MDX from completed jobs
+uv run cce emit-mdx --all --target <content-dir>
+```
+
 ## Architecture
 
 The pipeline flows: `CurationRequest → SourcePolicy → Discoverer → EvidenceStore → Writer → Verifier → QualityGate → PublishPackage`
@@ -52,7 +68,7 @@ The pipeline flows: `CurationRequest → SourcePolicy → Discoverer → Evidenc
 - Verifier is a separate role that checks every claim against evidence
 - Quality gate routes to PASS (publish), FAIL (rewrite loop), or REVIEW (human)
 - Writer-verifier loop iterates up to max iterations per risk profile (2–4)
-- **Humanization** (opt-in via `EngineConfig.humanization.enabled`, default off): programmatic style scorer + Editor agent + implied-claim checker sit between writer and verifier. Scorer measures seven metrics: sentence-length variance, lexical diversity, suppressed vocabulary, formulaic transitions, contrastive frames, hedging/stock phrases, and em dash density. Marker lists live in `config/humanization_markers.yaml` — operator-editable, updated without code changes to track the AI-marker coevolution problem. Scores ride on `ContentUnit.style_scores` (separate field from `ContentScores` — ADR-004) and are logged per iteration as `JobStage.SCORE` records for threshold calibration. Editor (M03) fires conditionally on `humanization_pass=False` and emits a `JobStage.EDIT` record; it must preserve every `[ev:ID]` marker — drift triggers a fallback to the writer's draft. Implied-claim checker (M04) extends the trust contract from explicit to implied claims: when a contrastive frame ("Unlike X, Y") dismisses a topic that has supporting evidence in the store, the Editor receives a rewrite hint to acknowledge the spectrum (PDR-002). Citation invariant (`gate.evaluate`) is unaffected by style scores in v1 (ADR-006 soft gate); the editor never extends `max_writer_iterations` (ADR-005). Most thresholds calibrated 2026-04-17 against 36 archival drafts via `scripts/run_score_sweep.py`; em dash threshold (4.0/1000) is an editorial-target, not engine-floor, since em dash overuse is precisely the AI fingerprint we want the editor to address. See `docs/decompose/humanization/` for full design.
+- **Humanization** (opt-in via `EngineConfig.humanization.enabled`, default off): programmatic style scorer + Editor agent + implied-claim checker sit between writer and verifier. Scorer measures seven metrics: sentence-length variance, lexical diversity, suppressed vocabulary, formulaic transitions, contrastive frames, hedging/stock phrases, and em dash density. Marker lists live in `config/humanization_markers.yaml` — operator-editable, updated without code changes to track the AI-marker coevolution problem. Scores ride on `ContentUnit.style_scores` (separate field from `ContentScores` — ADR-004) and are logged per iteration as `JobStage.SCORE` records for threshold calibration. Editor (M03) fires conditionally on `humanization_pass=False` and emits a `JobStage.EDIT` record; it must preserve every `[ev:ID]` marker — drift triggers a fallback to the writer's draft. Implied-claim checker (M04) extends the trust contract from explicit to implied claims: when a contrastive frame ("Unlike X, Y") dismisses a topic that has supporting evidence in the store, the Editor receives a rewrite hint to acknowledge the spectrum (PDR-002). Citation invariant (`gate.evaluate`) is unaffected by style scores in v1 (ADR-006 soft gate); the editor never extends `max_writer_iterations` (ADR-005). Most thresholds calibrated 2026-04-17 against 36 archival drafts via `scripts/research/run_score_sweep.py`; em dash threshold (4.0/1000) is an editorial-target, not engine-floor, since em dash overuse is precisely the AI fingerprint we want the editor to address. See `docs/decompose/humanization/` (internal — not in public clones) for full design.
 
 **Abstractions use `typing.Protocol`**, not ABC:
 - `LLMProvider` (`llm/base.py`) — implemented by `AnthropicProvider`

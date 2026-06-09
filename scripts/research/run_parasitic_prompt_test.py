@@ -1,12 +1,23 @@
 """One-shot humanization run limited to the 3 parasitic-prompt-test topics.
 
-Used for Diagnostic 3 of the Phase A/B scoping: does a learn-path
-``prompt_addendum`` change reduce parasitic-frame production at writer
-time? Keeps the main ``run_live_humanization.py`` untouched so the main
-runner's topic list isn't clobbered during the experiment.
+What a "parasitic prompt test" is: a *parasitic* contrastive frame is the
+AI-fingerprint pattern where a draft dismisses a topic as a degraded form of
+something else ("X is not A. It is B") instead of presenting a genuine
+alternative — subtype definitions and patterns live in the sibling
+``run_contrastive_census.py``. This script is the *prompt* half of that
+diagnostic (Diagnostic 3 of the Phase A/B scoping): it re-runs the three
+topics that produced the most parasitic frames with a learn-path
+``prompt_addendum`` change, to measure whether instructing the writer up
+front reduces parasitic-frame production at generation time, versus
+repairing it post-hoc in the Editor.
+
+Keeps the main ``run_live_humanization.py`` untouched so the main runner's
+topic list isn't clobbered during the experiment.
+
+Live run: costs real LLM and crawl spend; expects API keys in ``.env``.
 
 Usage:
-    PYTHONPATH=src uv run python scripts/run_parasitic_prompt_test.py
+    uv run python scripts/research/run_parasitic_prompt_test.py
 """
 
 from __future__ import annotations
@@ -16,7 +27,7 @@ import logging
 import os
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent
 
 env_path = ROOT / ".env"
 if env_path.exists():

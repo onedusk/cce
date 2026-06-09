@@ -52,7 +52,7 @@ addendum for the learn path. No API breaks.
 - **CORS — disable `allow_credentials` when `allow_origins` contains `"*"`** (`src/cce/api/app.py`). Starlette's `CORSMiddleware` otherwise reflects the inbound `Origin` header + emits `Access-Control-Allow-Credentials: true`, defeating the browser's wildcard-vs-credentials safety rule. Bearer-header auth doesn't travel on cross-origin fetches today (the 2026-04-22 review dismissed this as a standalone finding), but closes the door for any future cookie-auth or session surface. Regression test covers both branches (`tests/test_api/test_cors.py`).
 
 ### Humanization
-- **Add `\bby contrast\b` to `config/humanization_markers.yaml` `contrastive_patterns`**. The corpus census (`scripts/run_contrastive_census.py`, 2026-04-22) found 14 real genuine-alternative matches uncaught by the existing four patterns. No subtype tagging yet — the tagged-structure refactor is scoped for Phase B.
+- **Add `\bby contrast\b` to `config/humanization_markers.yaml` `contrastive_patterns`**. The corpus census (`scripts/research/run_contrastive_census.py`, 2026-04-22) found 14 real genuine-alternative matches uncaught by the existing four patterns. No subtype tagging yet — the tagged-structure refactor is scoped for Phase B.
 - **Operator config: `path_configs/thnklabs.yaml` learn `prompt_addendum`** — added a 3-sentence directive to avoid the "X is not A. It is B" reframe pattern when B restates or expands X. Empirically validated by a 3-topic test run (curiosity/boredom/stress): parasitic frame count dropped from 20 → 12 (-40%) with the addendum; learn-path max dropped from 10 to 6. See `output/parasitic_matches_review.md` (local/gitignored). This file is gitignored as client-specific; the change ships to the operator environment, not to main.
 
 ### Changed
@@ -120,7 +120,7 @@ topics; the "no citation, no ship" invariant is enforced by the quality gate.
 - Marker lists in `config/humanization_markers.yaml` — operator-editable, reloadable without code changes (tracks the AI-marker coevolution problem).
 - Per-iteration `JobStage.SCORE` and `JobStage.EDIT` records for threshold calibration.
 - Reference config at `config/humanization_live.yaml`.
-- Calibration script `scripts/run_score_sweep.py` (pure Python, $0 cost).
+- Calibration script `scripts/research/run_score_sweep.py` (pure Python, $0 cost).
 
 ### Added — Infrastructure
 - Prompt caching with cache-token accumulation across writer/verifier/editor/implied-claim calls.

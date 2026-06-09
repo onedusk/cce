@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Content Curation Engine",
-    "version": "0.1.0"
+    "version": "0.2.0"
   },
   "paths": {
     "/v1/curate/jobs": {
@@ -58,6 +58,11 @@
         "summary": "List Jobs",
         "description": "List jobs with optional filters and pagination.",
         "operationId": "list_jobs_v1_curate_jobs_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "status",
@@ -147,6 +152,11 @@
         "summary": "Get Job",
         "description": "Get job status.",
         "operationId": "get_job_v1_curate_jobs__job_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "job_id",
@@ -284,6 +294,11 @@
         "summary": "Get Package",
         "description": "Get the completed pipeline output for a job.",
         "operationId": "get_package_v1_curate_jobs__job_id__package_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "job_id",
@@ -325,8 +340,13 @@
           "evidence"
         ],
         "summary": "Get Evidence",
-        "description": "Get a single evidence object by ID.",
+        "description": "Get a single evidence object by ID. Requires auth (router-level).",
         "operationId": "get_evidence_v1_curate_evidence__evidence_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "evidence_id",
@@ -368,8 +388,13 @@
           "evidence"
         ],
         "summary": "Search Evidence",
-        "description": "Search evidence store with optional filters.",
+        "description": "Search evidence store with optional filters. Requires auth (router-level).",
         "operationId": "search_evidence_v1_curate_evidence_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "url",
@@ -502,13 +527,12 @@
           "error": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/ErrorBody"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Error"
+            ]
           },
           "meta": {
             "additionalProperties": true,
@@ -534,13 +558,12 @@
           "error": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/ErrorBody"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Error"
+            ]
           },
           "meta": {
             "additionalProperties": true,
@@ -566,13 +589,12 @@
           "error": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/ErrorBody"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Error"
+            ]
           },
           "meta": {
             "additionalProperties": true,
@@ -598,13 +620,12 @@
           "error": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/ErrorBody"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Error"
+            ]
           },
           "meta": {
             "additionalProperties": true,
@@ -632,13 +653,12 @@
           "error": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/ErrorBody"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Error"
+            ]
           },
           "meta": {
             "additionalProperties": true,
@@ -666,13 +686,12 @@
           "error": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/ErrorBody"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Error"
+            ]
           },
           "meta": {
             "additionalProperties": true,
@@ -682,6 +701,42 @@
         },
         "type": "object",
         "title": "APIEnvelope[list]"
+      },
+      "ErrorBody": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "title": "ErrorBody",
+        "description": "Structured error payload for APIEnvelope.error (audit U1).\n\nFields:\n  - ``code``: short machine-readable identifier clients can switch on\n    (e.g. ``\"not_found\"``, ``\"internal_error\"``).\n  - ``message``: optional human-readable detail.\n  - ``request_id``: correlation ID set by RequestIdMiddleware; absent\n    on synthetic envelopes constructed outside a request."
       },
       "HTTPValidationError": {
         "properties": {

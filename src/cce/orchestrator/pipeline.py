@@ -193,7 +193,7 @@ class Pipeline:
     # _run_write_verify_paths / _build_package helpers when a non-cosmetic
     # change requires re-reading run(). Current structure is linear and
     # readable; no refactor pays for itself today.
-    # See docs/decompose/audit-2026-04-14/audit-2026-04-14.md §M1.
+    # See docs/internal/improvement-opportunities-2026-06-09.md §0.2 (audit §M1).
     async def run(
         self,
         request: CurationRequest,

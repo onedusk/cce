@@ -11,9 +11,9 @@ two tools stay consistent on MDX parsing. The scorer is invoked only
 for ``word_count`` (per-1000 densities) — no threshold gating logic.
 
 Usage:
-    uv run python scripts/run_contrastive_census.py
-    uv run python scripts/run_contrastive_census.py --dir output/mdx
-    uv run python scripts/run_contrastive_census.py --examples 10
+    uv run python scripts/research/run_contrastive_census.py
+    uv run python scripts/research/run_contrastive_census.py --dir output/mdx
+    uv run python scripts/research/run_contrastive_census.py --examples 10
 """
 
 from __future__ import annotations
@@ -30,13 +30,14 @@ from cce.config.markers import load_markers
 from cce.config.types import HumanizationThresholds
 from cce.synthesis.scoring import Scorer
 
-# Import extract_body from the sibling script. Both scripts live in scripts/;
-# adding this directory to sys.path lets us reuse the MDX extraction logic
-# without duplicating its ~40 lines of JSON-wrapped / raw-markdown handling.
+# Import extract_body from the sibling script. Both scripts live in
+# scripts/research/; adding this directory to sys.path lets us reuse the MDX
+# extraction logic without duplicating its ~40 lines of JSON-wrapped /
+# raw-markdown handling.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from run_score_sweep import extract_body  # noqa: E402
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 # -----------------------------------------------------------------------------
