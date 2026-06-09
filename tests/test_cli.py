@@ -359,3 +359,317 @@ def test_emit_mdx_topic_with_no_completed_jobs(tmp_path):
     )
     assert result.exit_code == 1
     assert "no completed jobs for topic 'ghost-topic'" in result.output
+
+
+# ---------------------------------------------------------------------------
+# curate / status / jobs (M08, T-08.03)
+# ---------------------------------------------------------------------------
+
+
+def _seed_jobs(tmp_path, jobs_to_seed):
+    """Insert pre-built jobs into the CLI's tmp store."""
+    import asyncio as _asyncio
+
+    from cce.jobs.store import JobStore
+
+    async def _seed() -> None:
+        store = JobStore(db_path=tmp_path / "cli_test.db")
+        await store.connect()
+        try:
+            for job in jobs_to_seed:
+                await store.create_job(job)
+        finally:
+            await store.close()
+
+    _asyncio.run(_seed())
+
+
+def _stub_curate_engine(monkeypatch, status, package=None):
+    """Monkeypatch CurationEngine.embedded with a scripted engine for curate."""
+    from cce.engine import CurationEngine
+
+    class _Handle:
+        def __init__(self, request):
+            self._request = request
+            self.job_id = "job_stub1234"
+
+        async def wait(self, timeout: float = 600):
+            from tests.conftest import make_job
+
+            return make_job(request=self._request, status=status)
+
+        async def package(self):
+            return package
+
+    class _Engine:
+        async def curate(self, request):
+            return _Handle(request)
+
+        async def close(self) -> None:
+            pass
+
+    async def _fake_embedded(*args, **kwargs):
+        return _Engine()
+
+    monkeypatch.setattr(CurationEngine, "embedded", _fake_embedded)
+
+
+def test_curate_completed_exits_0_with_package_summary(monkeypatch):
+    from cce.models.job import JobStatus
+    from tests.conftest import make_publish_package
+
+    _stub_curate_engine(
+        monkeypatch, JobStatus.COMPLETED, package=make_publish_package()
+    )
+    result = runner.invoke(
+        app, ["curate", "sleep hygiene", "--policy-id", "peer-reviewed"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "Job: job_stub1234" in result.output
+    assert "Status: completed" in result.output
+    assert "citations" in result.output
+    assert "scores:" in result.output
+
+
+def test_curate_review_required_exits_2(monkeypatch):
+    from cce.models.job import JobStatus
+
+    _stub_curate_engine(monkeypatch, JobStatus.REVIEW_REQUIRED)
+    result = runner.invoke(app, ["curate", "topic", "--policy-id", "peer-reviewed"])
+    assert result.exit_code == 2, result.output
+    assert "Status: review_required" in result.output
+
+
+def test_curate_failed_exits_1(monkeypatch):
+    from cce.models.job import JobStatus
+
+    _stub_curate_engine(monkeypatch, JobStatus.FAILED)
+    result = runner.invoke(app, ["curate", "topic", "--policy-id", "peer-reviewed"])
+    assert result.exit_code == 1, result.output
+    assert "Status: failed" in result.output
+
+
+def test_curate_missing_api_key_exits_1(monkeypatch):
+    """ConfigError from the embedded engine → one-line stderr error, exit 1."""
+    for var in ("CCE_LLM_API_KEY", "CCE_CRAWL_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+
+    result = runner.invoke(app, ["curate", "topic", "--policy-id", "peer-reviewed"])
+    assert result.exit_code == 1
+    assert "ANTHROPIC_API_KEY" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_status_unknown_job_id_exits_1():
+    result = runner.invoke(app, ["status", "job_nope"])
+    assert result.exit_code == 1
+    assert "job not found: job_nope" in result.output
+
+
+def test_status_shows_stages_metrics_and_budget_note(tmp_path):
+    """Status prints stage records with metrics — token usage and the
+    budget_exceeded note for a budget-stopped path (T-08.02 acceptance)."""
+    from datetime import UTC, datetime
+
+    from cce.models.job import JobStage, JobStatus, StageRecord
+    from tests.conftest import make_job
+
+    t = datetime(2026, 6, 9, 12, 0, tzinfo=UTC)
+    job = make_job(
+        id="job_budget00001",
+        status=JobStatus.REVIEW_REQUIRED,
+        completed_at=t,
+        stages=[
+            StageRecord(
+                stage=JobStage.WRITE,
+                path="blog",
+                started_at=t,
+                completed_at=t,
+                metrics={
+                    "path": "blog",
+                    "iterations": 1,
+                    "tokens_input": 1200,
+                    "tokens_output": 300,
+                },
+            ),
+            StageRecord(
+                stage=JobStage.VERIFY,
+                path="blog",
+                started_at=t,
+                completed_at=t,
+                metrics={"path": "blog", "confidence_score": 0.3, "pass_rate": 0.3},
+            ),
+            StageRecord(
+                stage=JobStage.WRITE,
+                path="blog",
+                started_at=t,
+                completed_at=t,
+                metrics={
+                    "path": "blog",
+                    "budget_exceeded": True,
+                    "stopped_before_iteration": 2,
+                    "tokens_spent": 2000,
+                    "max_tokens_per_job": 2000,
+                },
+            ),
+            StageRecord(
+                stage=JobStage.PUBLISH,
+                started_at=t,
+                completed_at=t,
+                metrics={"token_usage": {"input_tokens": 1600, "output_tokens": 400}},
+            ),
+        ],
+    )
+    _seed_jobs(tmp_path, [job])
+
+    result = runner.invoke(app, ["status", "job_budget00001"])
+    assert result.exit_code == 0, result.output
+    assert "job_budget00001  REVIEW_REQUIRED" in result.output
+    assert "topic: test topic" in result.output
+    assert "write [blog]" in result.output.replace("  ", " ")
+    assert "tokens_input=1200" in result.output
+    assert "budget_exceeded=True" in result.output
+    assert "max_tokens_per_job=2000" in result.output
+    assert "token_usage=" in result.output
+
+
+def test_jobs_empty_store_exits_0():
+    result = runner.invoke(app, ["jobs"])
+    assert result.exit_code == 0
+    assert "no jobs" in result.output
+
+
+def test_jobs_table_newest_first_with_limit_and_status_filter(tmp_path):
+    from datetime import UTC, datetime
+
+    from cce.models.job import JobStatus
+    from tests.conftest import make_curation_request, make_job
+
+    seeded = [
+        make_job(
+            id=f"job_seed00000{i:03d}",
+            request=make_curation_request(topic=f"topic {i}"),
+            status=status,
+            created_at=datetime(2026, 6, i + 1, tzinfo=UTC),
+        )
+        for i, status in enumerate(
+            [JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.REVIEW_REQUIRED]
+        )
+    ]
+    _seed_jobs(tmp_path, seeded)
+
+    # Newest first: topic 2 (June 3rd) before topic 0 (June 1st).
+    result = runner.invoke(app, ["jobs"])
+    assert result.exit_code == 0, result.output
+    assert result.output.index("topic 2") < result.output.index("topic 0")
+    assert "ID" in result.output and "STATUS" in result.output
+
+    # --limit caps the table.
+    result = runner.invoke(app, ["jobs", "--limit", "1"])
+    assert "topic 2" in result.output
+    assert "topic 0" not in result.output
+
+    # --status filters.
+    result = runner.invoke(app, ["jobs", "--status", "failed"])
+    assert result.exit_code == 0
+    assert "topic 1" in result.output
+    assert "topic 0" not in result.output and "topic 2" not in result.output
+
+
+def test_jobs_invalid_status_filter_exits_1():
+    result = runner.invoke(app, ["jobs", "--status", "bogus"])
+    assert result.exit_code == 1
+    assert "unknown status 'bogus'" in result.output
+
+
+# ---------------------------------------------------------------------------
+# validate (M08, T-08.04 — PDR-003)
+# ---------------------------------------------------------------------------
+
+GOOD_POLICY_YAML = """\
+id: good-policy
+name: Good Policy
+domains_deny: [example.com]
+recency:
+  max_age_days: 365
+"""
+
+TYPO_POLICY_YAML = """\
+id: typo-policy
+name: Typo Policy
+recency:
+  max_age_day: 365
+"""
+
+GOOD_PATH_CONFIG_YAML = """\
+paths:
+  - id: learn
+    name: Learn
+    tone: pedagogical
+    max_words: 2000
+"""
+
+GOOD_TAXONOMY_YAML = """\
+id: tiny
+name: Tiny Taxonomy
+dimensions:
+  - id: physical
+    name: Physical
+    values: [primary, none]
+"""
+
+
+def _write_validate_tree(root, *, include_typo: bool = False) -> None:
+    (root / "policies").mkdir()
+    (root / "policies" / "good.yaml").write_text(GOOD_POLICY_YAML)
+    if include_typo:
+        (root / "policies" / "typo.yaml").write_text(TYPO_POLICY_YAML)
+    (root / "path_configs").mkdir()
+    (root / "path_configs" / "default.yaml").write_text(GOOD_PATH_CONFIG_YAML)
+    (root / "taxonomies").mkdir()
+    (root / "taxonomies" / "tiny.yaml").write_text(GOOD_TAXONOMY_YAML)
+
+
+def test_validate_typo_policy_exits_1_with_suggestion(tmp_path):
+    """A typo'd `max_age_day` names the file, the key, and suggests the fix."""
+    _write_validate_tree(tmp_path, include_typo=True)
+
+    result = runner.invoke(app, ["validate", "--root", str(tmp_path)])
+    assert result.exit_code == 1
+    typo_line = next(line for line in result.output.splitlines() if "typo.yaml" in line)
+    assert "ERROR" in typo_line
+    assert "max_age_day" in typo_line
+    assert "did you mean 'max_age_days'?" in typo_line
+    assert "1 error in 4 files" in result.output
+
+
+def test_validate_all_good_tree_exits_0(tmp_path):
+    _write_validate_tree(tmp_path)
+
+    result = runner.invoke(app, ["validate", "--root", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert result.output.count(" OK") == 3
+    assert "0 errors in 3 files" in result.output
+
+
+def test_validate_missing_directory_noted_and_skipped(tmp_path):
+    """A repo without taxonomies/ is legal — note + continue, exit 0."""
+    _write_validate_tree(tmp_path)
+    (tmp_path / "taxonomies" / "tiny.yaml").unlink()
+    (tmp_path / "taxonomies").rmdir()
+
+    result = runner.invoke(app, ["validate", "--root", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert "taxonomies/ not found" in result.output
+    assert "0 errors in 2 files" in result.output
+
+
+def test_validate_real_repo_tree_passes():
+    """Acceptance: the repo's real policies/, path_configs/, taxonomies/
+    pass strict validation (T-08.04)."""
+    from pathlib import Path as _Path
+
+    repo_root = _Path(__file__).parents[1]
+    result = runner.invoke(app, ["validate", "--root", str(repo_root)])
+    assert result.exit_code == 0, result.output
+    assert "0 errors" in result.output

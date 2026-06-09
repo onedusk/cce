@@ -511,6 +511,7 @@ class Pipeline:
         job: Job,
         parent_logger: logging.Logger | logging.LoggerAdapter,
         ev_lookup: dict[str, Evidence],
+        job_token_usage: Mapping[str, int] | None = None,
     ) -> tuple[ContentUnit | None, list[GateResult], dict[str, int]]:
         """Run one path's writer/verifier loop with a local token dict and child logger."""
         # LoggerAdapter doesn't expose .getChild on every Python version — reach
@@ -534,6 +535,7 @@ class Pipeline:
             job_logger=path_logger,
             token_usage=path_tokens,
             ev_lookup=ev_lookup,
+            job_token_usage=job_token_usage,
         )
         return unit, gate_results, path_tokens
 
@@ -584,6 +586,7 @@ class Pipeline:
                 job=job,
                 parent_logger=job_logger,
                 ev_lookup=ev_lookup,
+                job_token_usage=token_usage,
             )
             async with counter_lock:
                 completed += 1
@@ -633,12 +636,21 @@ class Pipeline:
         job_logger: logging.Logger | logging.LoggerAdapter | None = None,
         token_usage: dict | None = None,
         ev_lookup: dict[str, Evidence] | None = None,
+        job_token_usage: Mapping[str, int] | None = None,
     ) -> tuple[ContentUnit | None, list[GateResult]]:
         """Run the writer-verifier loop for a single output path.
 
         Scoring, editing, and verification live in the phase helpers below
         (M07, bodies lifted verbatim — ADR-005); the writer invocation and
         gate evaluation stay inline: they are the loop.
+
+        Token budget (M08, ADR-003): when ``max_tokens_per_job`` is set, a
+        checkpoint at the top of each writer iteration compares the job-level
+        accumulated usage against the budget. ``job_token_usage`` is the
+        shared job dict (the baseline merged after previous gathers); see the
+        checkpoint comment for the read pattern. Checkpoint granularity is
+        one iteration, so the worst-case overshoot is one writer+verifier
+        call pair per in-flight path.
         """
         _log = job_logger or logger
         _tokens = token_usage  # may be None if called outside full pipeline
@@ -667,6 +679,62 @@ class Pipeline:
         verifier_block = format_evidence_for_prompt(path_evidence, style="verifier")
 
         for iteration in range(1, max_iters + 1):
+            # --- Budget checkpoint (M08, ADR-003) ---
+            budget = self._config.max_tokens_per_job
+            if budget is not None:
+                # Job-level accumulated usage = the shared job dict plus this
+                # path's local dict. Per-path dicts merge into the parent only
+                # after asyncio.gather returns (_run_all_paths, audit P1), so
+                # `job_token_usage` holds the baseline from previously merged
+                # work while sibling paths' in-flight spend is not yet visible
+                # here — the checkpoint sees baseline + this path's tokens.
+                spent_view: dict[str, int] = dict(job_token_usage or {})
+                for key, value in (_tokens or {}).items():
+                    spent_view[key] = spent_view.get(key, 0) + int(value)
+                if self._budget_exceeded(spent_view, budget):
+                    spent = spent_view.get("input_tokens", 0) + spent_view.get(
+                        "output_tokens", 0
+                    )
+                    _log.warning(
+                        "Path '%s': token budget exceeded — spent %d of %d "
+                        "before iteration %d; stopping and routing to review "
+                        "(ADR-003)",
+                        path,
+                        spent,
+                        budget,
+                        iteration,
+                    )
+                    if gate_results:
+                        # A budget-stopped path carries FAIL/REVIEW from its
+                        # last real gate evaluation (a PASS returns out of the
+                        # loop above), so _interpret_terminal_decisions already
+                        # routes the job to REVIEW_REQUIRED — assert the
+                        # invariant instead of re-deriving a decision here.
+                        assert gate_results[-1].decision != GateDecision.PASS
+                        gate_results[-1].feedback += (
+                            f"\nToken budget exceeded: stopped before iteration "
+                            f"{iteration} (spent {spent:,} of {budget:,} tokens). "
+                            f"Partial draft kept for review (ADR-003)."
+                        )
+                    if job is not None:
+                        checkpoint_at = datetime.now(UTC)
+                        job.stages.append(
+                            StageRecord(
+                                stage=JobStage.WRITE,
+                                path=path,
+                                started_at=checkpoint_at,
+                                completed_at=checkpoint_at,
+                                metrics={
+                                    "path": path,
+                                    "budget_exceeded": True,
+                                    "stopped_before_iteration": iteration,
+                                    "tokens_spent": spent,
+                                    "max_tokens_per_job": budget,
+                                },
+                            )
+                        )
+                    break
+
             _log.info(
                 "Path '%s': write-verify iteration %d/%d", path, iteration, max_iters
             )
@@ -762,6 +830,23 @@ class Pipeline:
     # --- _write_verify_loop phase helpers (M07 — bodies lifted verbatim per
     # ADR-005; finding 1.2). Token accumulation threads the per-path dict
     # (audit P1 pattern) through `token_usage`. ------------------------------
+
+    @staticmethod
+    def _budget_exceeded(
+        token_usage: Mapping[str, int], max_tokens_per_job: int | None
+    ) -> bool:
+        """True when accumulated input+output tokens meet or exceed the budget.
+
+        Called at the top of each writer iteration (M08, ADR-003). Only
+        ``input_tokens + output_tokens`` count toward the budget; cache
+        read/write counts are reported separately and stay outside it. Since
+        the checkpoint granularity is one iteration, the worst-case overshoot
+        is one writer+verifier call pair per in-flight path.
+        """
+        if max_tokens_per_job is None:
+            return False
+        spent = token_usage.get("input_tokens", 0) + token_usage.get("output_tokens", 0)
+        return spent >= max_tokens_per_job
 
     @staticmethod
     def _record_write_stage(

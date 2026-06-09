@@ -166,6 +166,12 @@ effective values when neither env var nor YAML provides one.
 | `CCE_API_CORS_ORIGINS` | `*` | Comma-separated allowed origins |
 | `CCE_API_MAX_CONCURRENT_JOBS` | `2` | Parallel pipeline jobs |
 
+### Job budget
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `CCE_MAX_TOKENS_PER_JOB` | unset | Hard ceiling on accumulated LLM tokens (input + output, all paths and iterations) per job. On breach the job stops iterating and routes to `REVIEW_REQUIRED`, keeping partial drafts (ADR-003, audit-2026-06-09). Unset = unlimited. |
+
 ### Humanization
 
 | Variable | Default | Purpose |

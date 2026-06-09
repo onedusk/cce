@@ -344,4 +344,13 @@ class EngineConfig(BaseModel):
     )
     api: APIConfig = Field(default_factory=APIConfig)
     humanization: HumanizationConfig = Field(default_factory=HumanizationConfig)
+    max_tokens_per_job: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Hard ceiling on accumulated LLM tokens (input + output, all "
+            "paths and iterations) per job. None = unlimited. On breach the "
+            "job stops iterating and routes to REVIEW_REQUIRED (ADR-003)."
+        ),
+    )
     engine_version: str = Field(default="0.1.0")

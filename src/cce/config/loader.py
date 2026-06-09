@@ -96,6 +96,7 @@ def load_config(config_path: str | Path | None = None) -> EngineConfig:
         CCE_CRAWL_API_KEY       -> crawl.api_key
         CCE_CRAWL_RATE_LIMIT    -> crawl.rate_limit_rps
         CCE_CRAWL_TIMEOUT       -> crawl.timeout_seconds
+        CCE_MAX_TOKENS_PER_JOB  -> max_tokens_per_job
     """
     file_data: dict[str, Any] = {}
     if config_path:
@@ -104,7 +105,13 @@ def load_config(config_path: str | Path | None = None) -> EngineConfig:
             with open(path) as f:
                 file_data = yaml.safe_load(f) or {}
 
-    kwargs = _explicit(engine_version=file_data.get("engine_version"))
+    kwargs = _explicit(
+        engine_version=file_data.get("engine_version"),
+        max_tokens_per_job=_opt(
+            int,
+            os.getenv("CCE_MAX_TOKENS_PER_JOB", file_data.get("max_tokens_per_job")),
+        ),
+    )
     return EngineConfig(
         llm=_load_llm_config(file_data.get("llm", {})),
         evidence_store=_load_evidence_config(file_data.get("evidence_store", {})),

@@ -46,8 +46,18 @@ uv add --dev <package>
 **CLI** (installed as `cce` via `[project.scripts]`; the supported front door — finding 4.8):
 
 ```bash
+# Run a single topic through the embedded engine and wait (exit 0 COMPLETED / 2 REVIEW_REQUIRED / 1 FAILED)
+uv run cce curate "sleep hygiene" --policy-id peer-reviewed --path learn
+
 # Run the pipeline over a YAML topics file
 uv run cce batch --topics-file policies/examples/topics-batch.yaml --policy-id peer-reviewed
+
+# Inspect job state without the API server (reads the jobs store directly)
+uv run cce status <job-id>
+uv run cce jobs --limit 20 --status review_required
+
+# Strict-check operator YAML (policies/, path_configs/, taxonomies/) before deploying
+uv run cce validate --root .
 
 # Start the REST API server
 uv run cce api start
@@ -108,6 +118,8 @@ The pipeline flows: `CurationRequest → SourcePolicy → Discoverer → Evidenc
 ## Environment
 
 Requires `ANTHROPIC_API_KEY` and `FIRECRAWL_API_KEY` in `.env` (gitignored).
+
+Optional: `CCE_MAX_TOKENS_PER_JOB` caps accumulated LLM tokens (input + output, all paths and iterations) per job — on breach the job stops iterating at the next writer-iteration checkpoint and routes to REVIEW_REQUIRED, keeping partial drafts (ADR-003, audit-2026-06-09). Unset = unlimited. Full env inventory: `docs/configuration.md`.
 
 <!-- decompose:start -->
 ## Decompose Code Intelligence

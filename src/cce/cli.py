@@ -1,5 +1,9 @@
 """CLI management commands.
 
+cce curate <topic>         — run one topic through the embedded engine and wait
+cce status <job-id>        — print one job's status, stages, and metrics
+cce jobs                   — list recent jobs, newest first
+cce validate               — strict-check operator YAML (policies, paths, taxonomies)
 cce api start              — run the FastAPI server
 cce api key generate       — generate and print a new API key
 cce api key list           — list active keys
@@ -414,6 +418,358 @@ def emit_mdx_command(
 
     total_files = sum(r.files_written for r in results)
     typer.echo(f"Total: {total_files} files, {len(results)} topic(s) → {target_path}")
+
+
+# ---------------------------------------------------------------------------
+# Operator workflow commands (M08, T-08.03 — finding 4.2)
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def curate(
+    topic: str = typer.Argument(..., help="Topic to curate"),
+    policy_id: str = typer.Option(..., "--policy-id", help="Source policy id."),
+    paths: list[str] = typer.Option(  # noqa: B008
+        ["learn"], "--path", help="Output path (repeatable)."
+    ),
+    config_path: Path | None = typer.Option(  # noqa: B008
+        None, "--config", help="Path to config YAML"
+    ),
+) -> None:
+    """Submit a single-topic job via the embedded engine and wait.
+
+    Exits 0 on COMPLETED, 2 on REVIEW_REQUIRED, 1 on FAILED/ConfigError.
+    """
+    from cce.config.loader import ConfigError
+    from cce.engine import CurationEngine
+    from cce.models.job import JobStatus
+    from cce.models.request import CurationRequest
+
+    request = CurationRequest(topic=topic, paths=list(paths), policy_id=policy_id)
+
+    async def _run() -> JobStatus:
+        # CurationEngine.embedded() calls validate_required_keys before any
+        # store or network work (ADR-006) — a missing key surfaces as the
+        # ConfigError caught below.
+        engine = await CurationEngine.embedded(
+            config_path=str(config_path) if config_path else None
+        )
+        try:
+            handle = await engine.curate(request)
+            typer.echo(f"Job: {handle.job_id}")
+            job = await handle.wait(timeout=1800)
+            typer.echo(
+                f"Status: {job.status.value}"
+                + (f" — {job.error.message}" if job.error else "")
+            )
+            package = await handle.package()
+            if package is not None:
+                for unit in package.units:
+                    typer.echo(
+                        f"  {unit.path}: {len(unit.content.split())} words, "
+                        f"{len(unit.citations)} citations"
+                    )
+                typer.echo(
+                    f"  scores: confidence={package.scores.confidence} "
+                    f"coverage={package.scores.coverage} "
+                    f"source_diversity={package.scores.source_diversity}"
+                )
+            return job.status
+        finally:
+            await engine.close()
+
+    try:
+        final_status = asyncio.run(_run())
+    except ConfigError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from None
+
+    if final_status == JobStatus.COMPLETED:
+        return
+    raise typer.Exit(2 if final_status == JobStatus.REVIEW_REQUIRED else 1)
+
+
+@app.command()
+def status(
+    job_id: str = typer.Argument(..., help="Job id, e.g. job_1a2b3c4d5e6f"),
+) -> None:
+    """Print one job's status, stage records, and gate decisions."""
+
+    async def _run() -> None:
+        store = await _get_job_store(None)
+        try:
+            job = await store.get_job(job_id)
+            if job is None:
+                typer.echo(f"Error: job not found: {job_id}", err=True)
+                raise typer.Exit(1)
+
+            typer.echo(f"{job.id}  {job.status.value.upper()}")
+            typer.echo(f"topic: {job.request.topic}")
+            typer.echo(f"created: {job.created_at.isoformat()}")
+            if job.completed_at:
+                typer.echo(f"completed: {job.completed_at.isoformat()}")
+            if job.stages:
+                typer.echo("stages:")
+                for rec in job.stages:
+                    label = rec.stage.value + (f" [{rec.path}]" if rec.path else "")
+                    metrics = " ".join(
+                        f"{k}={v}"
+                        for k, v in (rec.metrics or {}).items()
+                        if k != "path"
+                    )
+                    typer.echo(f"  {label:<18} {metrics}".rstrip())
+            if job.error:
+                typer.echo(f"error: {job.error.message}")
+        finally:
+            await store.close()
+
+    asyncio.run(_run())
+
+
+@app.command()
+def jobs(
+    limit: int = typer.Option(20, "--limit", help="Max jobs to show."),
+    status_filter: str | None = typer.Option(
+        None, "--status", help="Filter by status (e.g. completed, review_required)."
+    ),
+) -> None:
+    """List recent jobs (id, status, topic, created_at), newest first."""
+    from cce.models.job import JobStatus
+
+    parsed_status: JobStatus | None = None
+    if status_filter is not None:
+        try:
+            parsed_status = JobStatus(status_filter)
+        except ValueError:
+            valid = ", ".join(s.value for s in JobStatus)
+            typer.echo(
+                f"Error: unknown status '{status_filter}'. Valid: {valid}", err=True
+            )
+            raise typer.Exit(1) from None
+
+    async def _run() -> None:
+        store = await _get_job_store(None)
+        try:
+            listed = await store.list_jobs(status=parsed_status, limit=limit)
+            if not listed:
+                typer.echo("no jobs")
+                return
+            typer.echo(f"{'ID':<18} {'STATUS':<17} {'TOPIC':<40} CREATED")
+            for j in listed:
+                topic = j.request.topic
+                if len(topic) > 38:
+                    topic = topic[:37] + "…"
+                typer.echo(
+                    f"{j.id:<18} {j.status.value:<17} {topic:<40} "
+                    f"{j.created_at.isoformat()}"
+                )
+        finally:
+            await store.close()
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# validate (M08, T-08.04 — finding 4.7, PDR-003)
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def validate(
+    root: Path = typer.Option(  # noqa: B008
+        Path("."),
+        "--root",
+        help="Directory containing policies/, path_configs/, taxonomies/.",
+    ),
+) -> None:
+    """Strict-check operator YAML in policies/, path_configs/, taxonomies/.
+
+    The strict moment of PDR-003: load-time stays forgiving (catch-log-
+    continue), `cce validate` parses raw YAML directly into the Pydantic
+    models so unknown keys and schema violations are errors, with
+    "did you mean" suggestions for close field-name matches. One OK/ERROR
+    line per file plus a summary; exits 1 if any file fails. A missing
+    directory is noted and skipped (a repo without taxonomies/ is legal).
+    """
+    import yaml
+
+    checks = (
+        ("policies", _validate_policy_data),
+        ("path_configs", _validate_path_config_data),
+        ("taxonomies", _validate_taxonomy_data),
+    )
+    results: list[tuple[str, str | None]] = []  # (display path, error | None)
+
+    for dirname, validator in checks:
+        directory = root / dirname
+        if not directory.is_dir():
+            typer.echo(f"note: {dirname}/ not found under {root} — skipped")
+            continue
+        for path in sorted(directory.glob("*.yaml")):
+            display = str(path.relative_to(root))
+            try:
+                data = yaml.safe_load(path.read_text())
+                validator(data)
+            except yaml.YAMLError as e:
+                results.append((display, "invalid YAML: " + " ".join(str(e).split())))
+            except ValueError as e:
+                results.append((display, str(e)))
+            else:
+                results.append((display, None))
+
+    width = max((len(display) for display, _ in results), default=0) + 2
+    error_count = 0
+    for display, error in results:
+        if error is None:
+            typer.echo(f"{display:<{width}} OK")
+        else:
+            error_count += 1
+            typer.echo(f"{display:<{width}} ERROR: {error}")
+
+    noun = "error" if error_count == 1 else "errors"
+    typer.echo(f"{error_count} {noun} in {len(results)} files")
+    if error_count:
+        raise typer.Exit(1)
+
+
+def _close_match_hint(key: str, candidates: set[str]) -> str:
+    """Render a ``did you mean`` suffix for an unknown-key error (finding 4.7)."""
+    import difflib
+
+    matches = difflib.get_close_matches(key, sorted(candidates), n=1)
+    return f" (did you mean '{matches[0]}'?)" if matches else ""
+
+
+def _format_validation_error(e: Exception, candidates: set[str]) -> str:
+    """Flatten a Pydantic ValidationError to one line, with did-you-mean
+    hints on unknown-key (``extra_forbidden``) errors."""
+    parts: list[str] = []
+    for err in e.errors():  # type: ignore[attr-defined]
+        loc = ".".join(str(x) for x in err["loc"])
+        if err["type"] == "extra_forbidden":
+            key = str(err["loc"][-1])
+            parts.append(
+                f"extra field '{key}' not permitted{_close_match_hint(key, candidates)}"
+            )
+        else:
+            parts.append(f"{loc}: {err['msg']}")
+    return "; ".join(parts)
+
+
+def _validate_policy_data(data: object) -> None:
+    """Strictly validate one policies/*.yaml payload (file = policy or list).
+
+    Splats raw YAML straight into ``SourcePolicy`` — its ``extra="forbid"``
+    models (T-01.04) reject unknown keys at every nesting level, unlike the
+    forgiving ``_parse_policy``, which forwards only known top-level keys.
+    """
+    from pydantic import ValidationError
+
+    from cce.policy.types import (
+        RecencyRule,
+        ReputationRule,
+        SourcePolicy,
+        TopicOverride,
+    )
+
+    candidates = (
+        set(SourcePolicy.model_fields)
+        | set(ReputationRule.model_fields)
+        | set(RecencyRule.model_fields)
+        | set(TopicOverride.model_fields)
+    )
+    items = data if isinstance(data, list) else [data]
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError(f"expected a policy mapping, got {type(item).__name__}")
+        try:
+            SourcePolicy(**item)
+        except ValidationError as e:
+            raise ValueError(_format_validation_error(e, candidates)) from None
+
+
+def _validate_path_config_data(data: object) -> None:
+    """Strictly validate one path_configs/*.yaml payload.
+
+    Accepts the same shapes as ``load_path_configs`` (a ``paths:`` container,
+    a single mapping, or a list) but rejects unknown keys explicitly —
+    ``PathConfig`` itself does not forbid extras.
+    """
+    from pydantic import ValidationError
+
+    from cce.models.paths import PathConfig
+
+    candidates = set(PathConfig.model_fields)
+    if isinstance(data, dict):
+        if "paths" in data:
+            extra = set(data) - {"paths"}
+            if extra:
+                key = sorted(extra)[0]
+                raise ValueError(f"extra field '{key}' not permitted alongside 'paths'")
+            items = data["paths"]
+        else:
+            items = [data]
+    elif isinstance(data, list):
+        items = data
+    else:
+        raise ValueError(f"expected a mapping or list, got {type(data).__name__}")
+    if not isinstance(items, list):
+        raise ValueError(f"'paths' must be a list, got {type(items).__name__}")
+
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError(
+                f"expected a path-config mapping, got {type(item).__name__}"
+            )
+        unknown = set(item) - candidates
+        if unknown:
+            key = sorted(unknown)[0]
+            raise ValueError(
+                f"extra field '{key}' not permitted{_close_match_hint(key, candidates)}"
+            )
+        try:
+            PathConfig(**item)
+        except ValidationError as e:
+            raise ValueError(_format_validation_error(e, candidates)) from None
+
+
+def _validate_taxonomy_data(data: object) -> None:
+    """Strictly validate one taxonomies/*.yaml payload.
+
+    ``TaxonomyConfig``/``Dimension`` do not forbid extras, so unknown keys
+    are checked explicitly at both levels before model construction.
+    """
+    from pydantic import ValidationError
+
+    from cce.models.taxonomy import Dimension, TaxonomyConfig
+
+    if not isinstance(data, dict):
+        raise ValueError(f"expected a taxonomy mapping, got {type(data).__name__}")
+    tax_fields = set(TaxonomyConfig.model_fields)
+    dim_fields = set(Dimension.model_fields)
+
+    unknown = set(data) - tax_fields
+    if unknown:
+        key = sorted(unknown)[0]
+        raise ValueError(
+            f"extra field '{key}' not permitted{_close_match_hint(key, tax_fields)}"
+        )
+    dimensions = data.get("dimensions")
+    if isinstance(dimensions, list):
+        for dim in dimensions:
+            if not isinstance(dim, dict):
+                continue  # wrong type — surfaced by TaxonomyConfig below
+            unknown = set(dim) - dim_fields
+            if unknown:
+                key = sorted(unknown)[0]
+                raise ValueError(
+                    f"dimensions: extra field '{key}' not permitted"
+                    f"{_close_match_hint(key, dim_fields)}"
+                )
+    try:
+        TaxonomyConfig(**data)
+    except ValidationError as e:
+        raise ValueError(_format_validation_error(e, tax_fields | dim_fields)) from None
 
 
 # ---------------------------------------------------------------------------

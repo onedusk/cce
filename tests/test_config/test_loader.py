@@ -31,6 +31,7 @@ _ENV_VARS = [
     "CCE_API_REQUIRE_AUTH",
     "CCE_API_CORS_ORIGINS",
     "CCE_API_MAX_CONCURRENT_JOBS",
+    "CCE_MAX_TOKENS_PER_JOB",
 ]
 
 
@@ -185,6 +186,48 @@ def test_load_embedding_config_env_overrides(monkeypatch):
     assert emb.model == "custom-model"
     assert emb.base_url == "http://remote:8080"
     assert emb.dimensions == 384
+
+
+# ---------------------------------------------------------------------------
+# max_tokens_per_job (M08, T-08.01 — ADR-003)
+# ---------------------------------------------------------------------------
+
+
+def test_max_tokens_per_job_defaults_to_none(monkeypatch):
+    _clear_env(monkeypatch)
+    assert EngineConfig(llm=LLMConfig(api_key="")).max_tokens_per_job is None
+    assert load_config().max_tokens_per_job is None
+
+
+def test_max_tokens_per_job_env_round_trip(monkeypatch):
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("CCE_MAX_TOKENS_PER_JOB", "400000")
+
+    config = load_config()
+    assert config.max_tokens_per_job == 400000
+    assert isinstance(config.max_tokens_per_job, int)
+
+
+def test_max_tokens_per_job_zero_rejected(monkeypatch):
+    """ge=1 on the Field — 0 means 'misconfigured', not 'unlimited'."""
+    from pydantic import ValidationError
+
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("CCE_MAX_TOKENS_PER_JOB", "0")
+
+    with pytest.raises(ValidationError):
+        load_config()
+
+
+def test_max_tokens_per_job_env_overrides_yaml(monkeypatch, tmp_path):
+    _clear_env(monkeypatch)
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump({"max_tokens_per_job": 250000}))
+
+    assert load_config(config_file).max_tokens_per_job == 250000
+
+    monkeypatch.setenv("CCE_MAX_TOKENS_PER_JOB", "400000")
+    assert load_config(config_file).max_tokens_per_job == 400000  # env wins
 
 
 # ---------------------------------------------------------------------------

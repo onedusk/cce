@@ -52,7 +52,7 @@ src/cce/
   output/           # Publish-package writer + MDX emitter
   api/              # REST API via FastAPI
   engine.py         # CurationEngine facade (embedded/remote mode dispatch)
-  cli.py            # `cce` CLI (run, batch, emit-mdx, api key generate)
+  cli.py            # `cce` CLI (curate, batch, status, jobs, validate, emit-mdx, api)
   logging_config.py # JSON/plain log formatter + request-id contextvar
   parsing.py        # Shared JSON extraction helpers for LLM responses
 ```
@@ -99,8 +99,18 @@ uv sync --all-extras
 # Set up environment
 cp .env.example .env  # add ANTHROPIC_API_KEY and FIRECRAWL_API_KEY
 
+# Run a single topic and wait (exit 0 completed / 2 review / 1 failed)
+uv run cce curate "sleep hygiene" --policy-id peer-reviewed
+
 # Run a batch of topics through the pipeline
 uv run cce batch --topics-file policies/examples/topics-batch.yaml --policy-id peer-reviewed
+
+# Inspect job state (reads the jobs store directly; no API server needed)
+uv run cce status <job-id>
+uv run cce jobs
+
+# Strict-check operator YAML before deploying
+uv run cce validate
 
 # Or run the REST API server
 uv run cce api key generate   # writes a bearer key to ~/.cce/api-key (mode 0600)
