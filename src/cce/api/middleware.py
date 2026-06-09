@@ -33,6 +33,7 @@ def install_body_size_limit(app: FastAPI, max_bytes: int = MAX_BODY_BYTES) -> No
                 content=error_envelope(
                     code="payload_too_large",
                     message=f"Request body exceeds {max_bytes} bytes",
+                    request_id=get_request_id(),
                 ).model_dump(mode="json"),
             )
         return await call_next(request)

@@ -38,7 +38,9 @@ async def test_oversized_request_rejected_before_route(
     )
 
     assert resp.status_code == 413
-    assert resp.json()["error"]["code"] == "payload_too_large"
+    body = resp.json()
+    assert body["error"]["code"] == "payload_too_large"
+    assert body["error"]["request_id"] is not None
     assert calls == []  # short-circuited before routing/auth
 
 
@@ -56,7 +58,9 @@ async def test_declared_oversized_content_length_rejected(
         },
     )
     assert resp.status_code == 413
-    assert resp.json()["error"]["code"] == "payload_too_large"
+    body = resp.json()
+    assert body["error"]["code"] == "payload_too_large"
+    assert body["error"]["request_id"] is not None
 
 
 async def test_normal_size_request_unaffected(app: FastAPI, client: httpx.AsyncClient):

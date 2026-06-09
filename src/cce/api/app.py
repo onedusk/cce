@@ -20,7 +20,7 @@ from cce.api.middleware import (
     install_body_size_limit,
 )
 from cce.api.schemas import error_envelope
-from cce.config.loader import load_config, validate_required_keys
+from cce.config.loader import ConfigError, load_config, validate_required_keys
 from cce.config.types import EngineConfig
 from cce.evidence.sqlite import SQLiteEvidenceStore
 from cce.jobs.store import JobStore
@@ -61,8 +61,14 @@ async def lifespan(app: FastAPI):
     if pipeline is None:
         # Production branch only (tests inject a pipeline): fail fast with
         # the exact env-var name before building components (finding 4.3,
-        # ADR-006). ConfigError propagates — uvicorn aborts startup.
-        validate_required_keys(config)
+        # ADR-006). SystemExit instead of letting ConfigError propagate —
+        # Starlette formats propagated lifespan exceptions as full tracebacks
+        # in uvicorn's log; the operator should see one actionable line.
+        try:
+            validate_required_keys(config)
+        except ConfigError as e:
+            logger.error("Configuration error: %s", e)
+            raise SystemExit(1) from None
         pipeline = _build_pipeline(config, evidence_store)
         locally_created.add("pipeline")
 
