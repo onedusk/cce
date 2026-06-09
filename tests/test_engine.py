@@ -73,7 +73,7 @@ async def _make_engine(
             llm=make_llm(*llm_responses),
         )
 
-    monkeypatch.setattr("cce.api.app._build_pipeline", _mock_pipeline_build)
+    monkeypatch.setattr("cce.engine.build_pipeline", _mock_pipeline_build)
 
     return await CurationEngine.embedded(
         config_path=str(config_yaml),

@@ -23,6 +23,7 @@ from pathlib import Path
 
 import httpx
 
+from cce.components import build_pipeline
 from cce.config.loader import load_config, validate_required_keys
 from cce.config.types import EngineConfig
 from cce.evidence.sqlite import SQLiteEvidenceStore
@@ -244,10 +245,8 @@ class CurationEngine:
         engine._evidence_store = SQLiteEvidenceStore(engine._config.evidence_store)
         await engine._evidence_store.connect()
 
-        # Build pipeline (reuses app.py pattern)
-        from cce.api.app import _build_pipeline
-
-        engine._pipeline = _build_pipeline(engine._config, engine._evidence_store)
+        # Build pipeline through the shared component factory (M05, ADR-001)
+        engine._pipeline = build_pipeline(engine._config, engine._evidence_store)
 
         # Load policies
         policies_path = Path(policies_dir)

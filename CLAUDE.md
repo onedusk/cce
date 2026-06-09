@@ -86,9 +86,10 @@ The pipeline flows: `CurationRequest → SourcePolicy → Discoverer → Evidenc
 - `synthesis/` ← models, evidence, llm, config, tagging (`synthesis/writer.py`, `synthesis/scoring.py` [humanization M02 — no LLM deps], `synthesis/editor.py` [humanization M03 — LLM-based stylistic rewrite, citation-preservation enforced via post-call check], `synthesis/implied_claims.py` [humanization M04 — contrastive-frame detection + counter-evidence search, surfaces annotations to the Editor])
 - `verification/` ← models, evidence, policy, llm, config
 - `orchestrator/` ← all pipeline modules
+- `components.py` ← config, models, discovery, llm, synthesis, tagging, evidence, orchestrator (single wiring authority — `build_components` + `build_pipeline`, ADR-001; consumed by `engine.py` and `api/`, never imports either)
 - `output/` ← models, orchestrator (consumed by CLI `emit-mdx` and runner scripts)
-- `api/` ← orchestrator, models, config
-- `engine.py` ← api, orchestrator, config (job lifecycle + mode dispatch; see the `CurationEngine` docstring)
+- `api/` ← orchestrator, components, models, config
+- `engine.py` ← api, orchestrator, components, config (job lifecycle + mode dispatch; see the `CurationEngine` docstring)
 
 **`engine.py` vs `orchestrator/pipeline.py`:** `engine.py` owns the job lifecycle — dispatching between embedded (in-process `Pipeline`) and remote (HTTP client) modes — while `orchestrator/pipeline.py` is pure stage orchestration consumed by the embedded mode. Treat them as separate roles; do not mix concerns.
 
