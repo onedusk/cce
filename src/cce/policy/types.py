@@ -27,6 +27,8 @@ class ReputationRule(BaseModel):
         description="Filter out pages that look like marketing/sponsored content",
     )
 
+    model_config = {"extra": "forbid"}
+
 
 class RecencyRule(BaseModel):
     """Controls how source freshness affects acceptance."""
@@ -40,6 +42,8 @@ class RecencyRule(BaseModel):
         description="When true, discovery prioritizes recent sources in ranking",
     )
 
+    model_config = {"extra": "forbid"}
+
 
 class TopicOverride(BaseModel):
     """Per-topic policy adjustments that layer on top of the base policy."""
@@ -51,6 +55,8 @@ class TopicOverride(BaseModel):
     domains_deny: list[str] = Field(default_factory=list)
     reputation: ReputationRule | None = None
     recency: RecencyRule | None = None
+
+    model_config = {"extra": "forbid"}
 
 
 class SourcePolicy(BaseModel):
@@ -76,3 +82,5 @@ class SourcePolicy(BaseModel):
         default_factory=list,
         description="Per-topic policy adjustments",
     )
+
+    model_config = {"extra": "forbid"}

@@ -68,6 +68,7 @@ def batch_command(
     """
     import yaml
 
+    from cce.config.loader import ConfigError
     from cce.engine import CurationEngine
     from cce.models.request import CurationRequest
 
@@ -119,7 +120,11 @@ def batch_command(
         finally:
             await engine.close()
 
-    asyncio.run(_run())
+    try:
+        asyncio.run(_run())
+    except ConfigError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from None
 
 
 @api_app.command("start")

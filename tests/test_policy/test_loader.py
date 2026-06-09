@@ -4,8 +4,10 @@ from pathlib import Path
 
 import pytest
 import yaml
+from pydantic import ValidationError
 
 from cce.policy.loader import load_policies, load_policy
+from cce.policy.types import SourcePolicy
 
 pytestmark = pytest.mark.unit
 
@@ -113,6 +115,55 @@ def test_parse_policy_topic_overrides(tmp_path):
     assert "quack.com" in ovr.domains_deny
     assert ovr.reputation is not None
     assert ovr.reputation.require_peer_reviewed is True
+
+
+# ---------------------------------------------------------------------------
+# Strict key parsing (T-01.04, finding 5.2) — extra="forbid" on policy models
+# ---------------------------------------------------------------------------
+
+
+def test_unknown_top_level_key_rejected():
+    with pytest.raises(ValidationError, match="max_age_day"):
+        SourcePolicy(id="typo", name="Typo", max_age_day=365)
+
+
+def test_unknown_nested_rule_key_rejected():
+    with pytest.raises(ValidationError, match="max_age_day"):
+        SourcePolicy(id="typo", name="Typo", recency={"max_age_day": 365})
+
+
+def test_load_policy_rejects_unknown_nested_key(tmp_path):
+    """A typo'd key inside a nested rule fails YAML loading loudly."""
+    policy_file = tmp_path / "typo.yaml"
+    policy_file.write_text(
+        yaml.dump({"id": "typo", "name": "Typo", "recency": {"max_age_day": 365}})
+    )
+    with pytest.raises(ValidationError, match="max_age_day"):
+        load_policy(policy_file)
+
+
+@pytest.mark.integration
+def test_repo_policy_and_path_config_yaml_still_load():
+    """Regression guard for extra="forbid": every committed policy YAML and
+    path_configs YAML must still parse (no legitimate key got rejected)."""
+    root = Path(__file__).resolve().parent.parent.parent
+
+    policies = load_policies(root / "policies")
+    assert "peer-reviewed" in policies
+
+    # load_policies swallows per-file failures, so also load each policy
+    # file directly — load_policy raises on any validation error.
+    example_files = sorted((root / "policies" / "examples").glob("*.yaml"))
+    assert example_files, "expected example policies in policies/examples/"
+    for f in example_files:
+        if f.name == "topics-batch.yaml":
+            continue  # batch topics sample, not a policy
+        assert load_policy(f).id
+
+    from cce.tagging.loader import load_path_configs
+
+    # load_path_configs returns {} on failure — non-empty proves it parsed.
+    assert load_path_configs(root / "path_configs" / "default.yaml")
 
 
 @pytest.mark.integration

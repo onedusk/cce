@@ -23,7 +23,7 @@ from pathlib import Path
 
 import httpx
 
-from cce.config.loader import load_config
+from cce.config.loader import load_config, validate_required_keys
 from cce.config.types import EngineConfig
 from cce.evidence.sqlite import SQLiteEvidenceStore
 from cce.jobs.store import JobStore
@@ -235,6 +235,7 @@ class CurationEngine:
         engine = cls()
         engine._mode = "embedded"
         engine._config = load_config(config_path)
+        validate_required_keys(engine._config)
 
         # Open stores
         engine._job_store = JobStore(db_path=engine._config.evidence_store.sqlite_path)

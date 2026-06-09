@@ -45,8 +45,4 @@ async def search_evidence(
     results = await request.app.state.evidence_store.search(
         url=url, topic=topic, limit=limit
     )
-    return JSONResponse(
-        content=envelope(
-            data=[ev.model_dump(mode="json") for ev in results]
-        ).model_dump(mode="json")
-    )
+    return JSONResponse(content=envelope(data=results).model_dump(mode="json"))

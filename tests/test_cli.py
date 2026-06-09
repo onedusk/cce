@@ -122,6 +122,33 @@ def test_batch_command_rejects_non_list_yaml(tmp_path):
     assert "top-level YAML list" in result.output
 
 
+@pytest.mark.integration
+def test_batch_command_missing_api_key_exits_1(tmp_path, monkeypatch):
+    """`cce batch` without ANTHROPIC_API_KEY exits 1 with a one-line error (T-01.02).
+
+    The autouse fixture already scrubs ANTHROPIC_API_KEY/FIRECRAWL_API_KEY;
+    also scrub the CCE_* aliases so load_config sees no key at all.
+    """
+    for var in ("CCE_LLM_API_KEY", "CCE_CRAWL_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    topics_file = tmp_path / "topics.yaml"
+    topics_file.write_text("- topic: test\n  paths: [blog]\n")
+
+    result = runner.invoke(
+        app,
+        [
+            "batch",
+            "--topics-file",
+            str(topics_file),
+            "--policy-id",
+            "peer-reviewed",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "ANTHROPIC_API_KEY" in result.output
+    assert "Traceback" not in result.output
+
+
 def test_generate_key_writes_file_by_default(tmp_path):
     """Default `api key generate` writes a 0600-mode file and doesn't print the key (audit U3)."""
     import os

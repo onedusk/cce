@@ -44,6 +44,16 @@ class TestCurationRequestValidation:
         with pytest.raises(ValidationError, match="subtopics"):
             CurationRequest(**_valid(subtopics=[f"sub_{i}" for i in range(21)]))
 
+    @pytest.mark.unit
+    def test_subtopic_too_long_rejected(self):
+        with pytest.raises(ValidationError, match="subtopic exceeds 200 chars"):
+            CurationRequest(**_valid(subtopics=["x" * 201]))
+
+    @pytest.mark.unit
+    def test_subtopic_at_max_length_accepted(self):
+        r = CurationRequest(**_valid(subtopics=["x" * 200]))
+        assert len(r.subtopics[0]) == 200
+
     def test_empty_policy_id_rejected(self):
         with pytest.raises(ValidationError, match="policy_id"):
             CurationRequest(**_valid(policy_id=""))

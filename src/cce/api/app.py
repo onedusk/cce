@@ -17,9 +17,10 @@ from cce.api.middleware import (
     RequestIdMiddleware,
     RequestLoggingMiddleware,
     get_request_id,
+    install_body_size_limit,
 )
 from cce.api.schemas import error_envelope
-from cce.config.loader import load_config
+from cce.config.loader import load_config, validate_required_keys
 from cce.config.types import EngineConfig
 from cce.evidence.sqlite import SQLiteEvidenceStore
 from cce.jobs.store import JobStore
@@ -54,6 +55,10 @@ async def lifespan(app: FastAPI):
     # -- Pipeline --
     pipeline = overrides.get("pipeline")
     if pipeline is None:
+        # Production branch only (tests inject a pipeline): fail fast with
+        # the exact env-var name before building components (finding 4.3,
+        # ADR-006). ConfigError propagates — uvicorn aborts startup.
+        validate_required_keys(config)
         pipeline = _build_pipeline(config, evidence_store)
         locally_created.add("pipeline")
 
@@ -169,6 +174,11 @@ def create_app(
         }.items()
         if v is not None
     }
+
+    # Body-size limit (finding 5.1) — registered first so CORS (and the
+    # request-ID/logging middlewares) wrap it and the 413 envelope still
+    # carries CORS headers and a correlation ID.
+    install_body_size_limit(app)
 
     # CORS — defensive: if origins is wildcard, credentials must be off.
     # Starlette's CORSMiddleware otherwise reflects the inbound Origin back

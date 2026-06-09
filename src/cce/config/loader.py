@@ -33,6 +33,33 @@ from cce.config.types import (
 )
 
 
+class ConfigError(ValueError):
+    """Raised when required configuration is missing or invalid.
+
+    Caught at CLI/app entry points and rendered as a one-line message
+    (ADR-006). Never raised by load_config() itself — keyless commands
+    (emit-mdx, api key generate) must keep working.
+    """
+
+
+def validate_required_keys(config: EngineConfig, *, require_crawl: bool = True) -> None:
+    """Fail fast with the exact env-var name (finding 4.3).
+
+    Called by CurationEngine.embedded(), the API lifespan, and
+    pipeline-running CLI commands — NOT by load_config().
+    """
+    if not config.llm.api_key:
+        raise ConfigError(
+            "ANTHROPIC_API_KEY is not set. Add it to .env or the environment "
+            "(see .env.example)."
+        )
+    if require_crawl and not config.crawl.api_key:
+        raise ConfigError(
+            "FIRECRAWL_API_KEY is not set. Add it to .env or the environment "
+            "(see .env.example)."
+        )
+
+
 def _coerce_bool(value: str | bool) -> bool:
     """Coerce a string or bool to bool. Handles env var strings like 'false', '0', 'no'."""
     if isinstance(value, str):
