@@ -223,7 +223,7 @@ async def _run_discover_with_cap(
     policy = make_source_policy(max_sources_per_run=max_sources_per_run)
     request = make_curation_request(topic="test topic")
 
-    evidence = await discoverer.discover(request, policy)
+    evidence = (await discoverer.discover(request, policy)).evidence
     # Count unique URLs in the final evidence — one "source" per URL.
     return {ev.url for ev in evidence}
 

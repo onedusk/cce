@@ -21,7 +21,7 @@ from cce.evidence.formatting import format_evidence_for_prompt
 from cce.evidence.store import EvidenceStore
 from cce.llm.base import LLMProvider
 from cce.models.content import ContentLineage, ContentScores, ContentUnit
-from cce.models.evidence import Evidence
+from cce.models.evidence import DiscoveryResult, Evidence
 from cce.models.job import Job, JobError, JobProgress, JobStage, JobStatus, StageRecord
 from cce.models.package import PackageLineage, PublishPackage
 from cce.models.paths import PathConfig
@@ -31,10 +31,10 @@ from cce.policy.types import SourcePolicy
 from cce.synthesis.editor import Editor
 from cce.synthesis.implied_claims import ImpliedClaimAnnotation, ImpliedClaimChecker
 from cce.synthesis.scoring import Scorer
-from cce.synthesis.writer import Writer
+from cce.synthesis.writer import Writer, WriterOutput
 from cce.tagging.base import TaxonomyPlugin, TaxonomyUnavailableError
 from cce.verification.gate import GateDecision, GateResult, QualityGate
-from cce.verification.verifier import Verifier
+from cce.verification.verifier import VerificationReport, Verifier
 
 logger = logging.getLogger(__name__)
 
@@ -90,12 +90,18 @@ def _format_completion_line(
 
 
 def _per_path_iteration_counts(job: Job, paths: list[str]) -> list[int]:
-    """Max WRITE iteration number reached per path, in `paths` order."""
+    """Max WRITE iteration number reached per path, in `paths` order.
+
+    Groups by the explicit (path, iteration) keys on each record —
+    ``StageRecord.path`` with a ``metrics["path"]`` fallback for records
+    written before the field existed (T-07.05) — so the output is invariant
+    to the order records were appended.
+    """
     by_path: dict[str, int] = dict.fromkeys(paths, 0)
     for rec in job.stages:
         if rec.stage != JobStage.WRITE or not rec.metrics:
             continue
-        p = rec.metrics.get("path")
+        p = rec.path if rec.path is not None else rec.metrics.get("path")
         if isinstance(p, str) and p in by_path:
             iter_count = int(rec.metrics.get("iterations", 0))
             by_path[p] = max(by_path[p], iter_count)
@@ -105,6 +111,7 @@ def _per_path_iteration_counts(job: Job, paths: list[str]) -> list[int]:
 def _terminal_decisions(
     gate_results: list[GateResult],
     paths: list[str],
+    by_path: Mapping[str, list[GateResult]] | None = None,
 ) -> list[GateDecision]:
     """Extract the terminal (last) gate decision for each output path.
 
@@ -120,11 +127,27 @@ def _terminal_decisions(
         For status-determination purposes that is a terminal FAIL (the
         path produced nothing publishable).
 
-    Partitioning is by iteration-boundary (iteration resets to 1 per path);
-    sparse groups are padded with FAIL so `len(return) == len(paths)`
+    When ``by_path`` is provided (the pipeline call site — T-07.05), grouping
+    uses the explicit (path, iteration) keys: per path, the gate result with
+    the highest iteration is terminal, independent of list order. Without
+    ``by_path`` (direct callers that only have the flat stream), the original
+    partitioning by iteration-boundary (iteration resets to 1 per path)
+    applies; sparse groups are padded with FAIL so `len(return) == len(paths)`
     always holds.
     """
     n_paths = len(paths)
+
+    if by_path is not None:
+        decisions: list[GateDecision] = []
+        for path in paths:
+            group = by_path.get(path) or []
+            if group:
+                decisions.append(max(group, key=lambda gr: gr.iteration).decision)
+            else:
+                # Empty-content path: dropped out of the loop before any gate
+                # evaluation — terminal FAIL (review F-2).
+                decisions.append(GateDecision.FAIL)
+        return decisions
 
     if not gate_results:
         # Every path silently produced no gate result — treat each as FAIL
@@ -189,11 +212,6 @@ class Pipeline:
         self._editor = editor
         self._implied_claim_checker = implied_claim_checker
 
-    # DEFERRED (audit M1): extract _run_discovery / _run_tag /
-    # _run_write_verify_paths / _build_package helpers when a non-cosmetic
-    # change requires re-reading run(). Current structure is linear and
-    # readable; no refactor pays for itself today.
-    # See docs/internal/improvement-opportunities-2026-06-09.md §0.2 (audit §M1).
     async def run(
         self,
         request: CurationRequest,
@@ -203,6 +221,9 @@ class Pipeline:
 
         Returns a PipelineResult containing the PublishPackage (if successful),
         the Job tracking object, and any gate results from the verification loop.
+
+        Orchestration narrative only — stage bodies live in the phase helpers
+        (M07, lifted verbatim per ADR-005; closes audit M1).
         """
         run_id = f"run_{uuid.uuid4().hex[:12]}"
         job = Job(id=f"job_{uuid.uuid4().hex[:12]}", request=request)
@@ -232,20 +253,8 @@ class Pipeline:
 
         try:
             # --- Stage 1: Discover ---
-            job = self._update_job(job, JobStatus.RUNNING, JobStage.DISCOVER)
-            stage_start = datetime.now(UTC)
-
-            evidence = await self._discoverer.discover(request, policy)
-            job_logger.info("Discovered %d evidence objects", len(evidence))
-
-            job.stages.append(
-                StageRecord(
-                    stage=JobStage.DISCOVER,
-                    started_at=stage_start,
-                    completed_at=datetime.now(UTC),
-                    metrics=self._discoverer.last_discover_metrics or None,
-                )
-            )
+            discovery = await self._run_discovery(request, policy, job, job_logger)
+            evidence = discovery.evidence
 
             if not evidence:
                 return PipelineResult(
@@ -258,76 +267,17 @@ class Pipeline:
 
             # --- Stage 1.5: Tag evidence (optional) ---
             if self._taxonomy_plugin is not None:
-                tag_start = datetime.now(UTC)
-                tags_available = False
-                try:
-                    results = await self._taxonomy_plugin.tag_many(evidence)
-                    tagged: list[Evidence] = []
-                    for ev, result in zip(evidence, results, strict=True):
-                        tagged.append(
-                            ev.model_copy(
-                                update={
-                                    "tags": result.tags,
-                                    "dimension_signals": result.signals,
-                                }
-                            )
-                        )
-                    evidence = tagged
-                    tags_available = True
-                    job_logger.info(
-                        "Tagged %d evidence objects with taxonomy", len(evidence)
-                    )
-                except TaxonomyUnavailableError:
-                    job_logger.warning(
-                        "Taxonomy plugin unavailable, proceeding without tags"
-                    )
-                except Exception:
-                    job_logger.warning(
-                        "Taxonomy plugin raised unexpected error, proceeding without tags",
-                        exc_info=True,
-                    )
-
-                job.stages.append(
-                    StageRecord(
-                        stage=JobStage.TAG,
-                        started_at=tag_start,
-                        completed_at=datetime.now(UTC),
-                        metrics={"tags_available": tags_available},
-                    )
-                )
-                if not tags_available:
-                    job_logger.warning(
-                        "Quality gate running without taxonomy tags — conflict detection may be limited"
-                    )
+                evidence = await self._run_tagging(evidence, job, job_logger)
 
             # --- Stage 2: Store evidence ---
-            stage_start = datetime.now(UTC)
-            inserted = await self._evidence_store.put_many(evidence)
-            job_logger.info(
-                "Stored %d new evidence objects (%d duplicates skipped)",
-                inserted,
-                len(evidence) - inserted,
-            )
-
-            # Build the evidence-id lookup once and pass it through (audit P8).
-            # Writer + _write_verify_loop previously rebuilt this dict on every
-            # iteration of every path — O(paths × iterations) sweeps over the
-            # same list.
-            ev_lookup = {ev.id: ev for ev in evidence}
+            ev_lookup = await self._store_evidence(evidence, job_logger)
 
             # --- Stage 3: Write + Verify loop (per output path, run concurrently) ---
-            total_paths = len(request.paths)
-            job = self._update_job(
-                job,
-                JobStatus.RUNNING,
-                JobStage.WRITE,
-                progress=JobProgress(completed=0, total=total_paths),
-            )
-            job_logger.info(
-                "Starting write-verify across %d path(s) concurrently", total_paths
-            )
-
-            all_units, all_gate_results = await self._run_all_paths(
+            (
+                all_units,
+                all_gate_results,
+                gate_results_by_path,
+            ) = await self._run_all_paths(
                 request=request,
                 evidence=evidence,
                 gate=gate,
@@ -339,63 +289,16 @@ class Pipeline:
             )
 
             # --- Stage 4: Build publish package ---
-            job = self._update_job(job, JobStatus.RUNNING, JobStage.PUBLISH)
-            stage_start = datetime.now(UTC)
-
-            # Determine final status based on the *terminal* gate decision
-            # for each output path.  Intermediate FAIL decisions (which
-            # triggered rewrites) are not terminal — only the last result
-            # per path matters.
-            final_decisions = _terminal_decisions(all_gate_results, request.paths)
-
-            if all(d == GateDecision.PASS for d in final_decisions):
-                final_status = JobStatus.COMPLETED
-            elif any(d == GateDecision.REVIEW for d in final_decisions):
-                final_status = JobStatus.REVIEW_REQUIRED
-            else:
-                # Gate returned FAIL after max iterations — content needs human review
-                final_status = JobStatus.REVIEW_REQUIRED
-
-            # Aggregate scores
-            if all_units:
-                avg_confidence = sum(u.scores.confidence for u in all_units) / len(
-                    all_units
-                )
-                avg_coverage = sum(u.scores.coverage for u in all_units) / len(
-                    all_units
-                )
-                avg_diversity = sum(u.scores.source_diversity for u in all_units) / len(
-                    all_units
-                )
-            else:
-                avg_confidence = avg_coverage = avg_diversity = 0.0
-
-            package = PublishPackage(
-                job_id=job.id,
+            final_status = self._interpret_terminal_decisions(
+                all_gate_results, request.paths, gate_results_by_path
+            )
+            package = self._build_output_package(
+                job=job,
+                request=request,
+                run_id=run_id,
                 units=all_units,
                 evidence=evidence,
-                scores=ContentScores(
-                    confidence=round(avg_confidence, 3),
-                    coverage=round(avg_coverage, 3),
-                    source_diversity=round(avg_diversity, 3),
-                ),
-                lineage=PackageLineage(
-                    policy_id=request.policy_id,
-                    taxonomy_id=request.taxonomy_id or "",
-                    path_config_id=request.path_config_id or "",
-                    run_id=run_id,
-                    engine_version=self._config.engine_version,
-                    stages=job.stages,
-                ),
-            )
-
-            job.stages.append(
-                StageRecord(
-                    stage=JobStage.PUBLISH,
-                    started_at=stage_start,
-                    completed_at=datetime.now(UTC),
-                    metrics={"token_usage": dict(token_usage)},
-                )
+                token_usage=token_usage,
             )
             job = self._update_job(job, final_status)
 
@@ -424,6 +327,178 @@ class Pipeline:
                 job=self._update_job(job, JobStatus.FAILED, error_msg=str(inner)),
                 gate_results=[],
             )
+
+    # --- run() phase helpers (M07 — extracted from run(), bodies lifted
+    # verbatim per ADR-005; finding 1.2) --------------------------------------
+
+    async def _run_discovery(
+        self,
+        request: CurationRequest,
+        policy: SourcePolicy,
+        job: Job,
+        job_logger: logging.Logger | logging.LoggerAdapter,
+    ) -> DiscoveryResult:
+        """Run the discovery stage and append its StageRecord."""
+        job = self._update_job(job, JobStatus.RUNNING, JobStage.DISCOVER)
+        stage_start = datetime.now(UTC)
+
+        discovery = await self._discoverer.discover(request, policy)
+        job_logger.info("Discovered %d evidence objects", len(discovery.evidence))
+
+        job.stages.append(
+            StageRecord(
+                stage=JobStage.DISCOVER,
+                started_at=stage_start,
+                completed_at=datetime.now(UTC),
+                metrics=discovery.metrics or None,
+            )
+        )
+        return discovery
+
+    async def _run_tagging(
+        self,
+        evidence: list[Evidence],
+        job: Job,
+        job_logger: logging.Logger | logging.LoggerAdapter,
+    ) -> list[Evidence]:
+        """Tag evidence via the taxonomy plugin and append the TAG StageRecord.
+
+        Caller guards on ``self._taxonomy_plugin is not None``.
+        """
+        assert self._taxonomy_plugin is not None
+        tag_start = datetime.now(UTC)
+        tags_available = False
+        try:
+            results = await self._taxonomy_plugin.tag_many(evidence)
+            tagged: list[Evidence] = []
+            for ev, result in zip(evidence, results, strict=True):
+                tagged.append(
+                    ev.model_copy(
+                        update={
+                            "tags": result.tags,
+                            "dimension_signals": result.signals,
+                        }
+                    )
+                )
+            evidence = tagged
+            tags_available = True
+            job_logger.info("Tagged %d evidence objects with taxonomy", len(evidence))
+        except TaxonomyUnavailableError:
+            job_logger.warning("Taxonomy plugin unavailable, proceeding without tags")
+        except Exception:
+            job_logger.warning(
+                "Taxonomy plugin raised unexpected error, proceeding without tags",
+                exc_info=True,
+            )
+
+        job.stages.append(
+            StageRecord(
+                stage=JobStage.TAG,
+                started_at=tag_start,
+                completed_at=datetime.now(UTC),
+                metrics={"tags_available": tags_available},
+            )
+        )
+        if not tags_available:
+            job_logger.warning(
+                "Quality gate running without taxonomy tags — conflict detection may be limited"
+            )
+        return evidence
+
+    async def _store_evidence(
+        self,
+        evidence: list[Evidence],
+        job_logger: logging.Logger | logging.LoggerAdapter,
+    ) -> dict[str, Evidence]:
+        """Persist evidence and return the evidence-id lookup."""
+        inserted = await self._evidence_store.put_many(evidence)
+        job_logger.info(
+            "Stored %d new evidence objects (%d duplicates skipped)",
+            inserted,
+            len(evidence) - inserted,
+        )
+
+        # Build the evidence-id lookup once and pass it through (audit P8).
+        # Writer + _write_verify_loop previously rebuilt this dict on every
+        # iteration of every path — O(paths × iterations) sweeps over the
+        # same list.
+        return {ev.id: ev for ev in evidence}
+
+    def _interpret_terminal_decisions(
+        self,
+        gate_results: list[GateResult],
+        paths: list[str],
+        gate_results_by_path: Mapping[str, list[GateResult]] | None = None,
+    ) -> JobStatus:
+        """Map terminal gate decisions to the job's final status.
+
+        Determines final status based on the *terminal* gate decision
+        for each output path.  Intermediate FAIL decisions (which
+        triggered rewrites) are not terminal — only the last result
+        per path matters.
+        """
+        final_decisions = _terminal_decisions(
+            gate_results, paths, by_path=gate_results_by_path
+        )
+
+        if all(d == GateDecision.PASS for d in final_decisions):
+            return JobStatus.COMPLETED
+        elif any(d == GateDecision.REVIEW for d in final_decisions):
+            return JobStatus.REVIEW_REQUIRED
+        else:
+            # Gate returned FAIL after max iterations — content needs human review
+            return JobStatus.REVIEW_REQUIRED
+
+    def _build_output_package(
+        self,
+        *,
+        job: Job,
+        request: CurationRequest,
+        run_id: str,
+        units: list[ContentUnit],
+        evidence: list[Evidence],
+        token_usage: dict[str, int],
+    ) -> PublishPackage:
+        """Assemble the publish package and append the PUBLISH StageRecord."""
+        job = self._update_job(job, JobStatus.RUNNING, JobStage.PUBLISH)
+        stage_start = datetime.now(UTC)
+
+        # Aggregate scores
+        if units:
+            avg_confidence = sum(u.scores.confidence for u in units) / len(units)
+            avg_coverage = sum(u.scores.coverage for u in units) / len(units)
+            avg_diversity = sum(u.scores.source_diversity for u in units) / len(units)
+        else:
+            avg_confidence = avg_coverage = avg_diversity = 0.0
+
+        package = PublishPackage(
+            job_id=job.id,
+            units=units,
+            evidence=evidence,
+            scores=ContentScores(
+                confidence=round(avg_confidence, 3),
+                coverage=round(avg_coverage, 3),
+                source_diversity=round(avg_diversity, 3),
+            ),
+            lineage=PackageLineage(
+                policy_id=request.policy_id,
+                taxonomy_id=request.taxonomy_id or "",
+                path_config_id=request.path_config_id or "",
+                run_id=run_id,
+                engine_version=self._config.engine_version,
+                stages=job.stages,
+            ),
+        )
+
+        job.stages.append(
+            StageRecord(
+                stage=JobStage.PUBLISH,
+                started_at=stage_start,
+                completed_at=datetime.now(UTC),
+                metrics={"token_usage": dict(token_usage)},
+            )
+        )
+        return package
 
     async def _run_one_path(
         self,
@@ -473,15 +548,26 @@ class Pipeline:
         job_logger: logging.Logger | logging.LoggerAdapter,
         token_usage: dict[str, int],
         ev_lookup: dict[str, Evidence],
-    ) -> tuple[list[ContentUnit], list[GateResult]]:
+    ) -> tuple[list[ContentUnit], list[GateResult], dict[str, list[GateResult]]]:
         """Fan per-path write-verify loops out concurrently (audit P1).
 
         Per-task token dicts are merged back into `token_usage` after gather.
         A lock-protected completion counter drives in-progress job updates so
         callers watching `job.progress` still see monotonically increasing
         completion numbers even though paths finish out of submission order.
+
+        Returns ``(units, flat gate results, gate results grouped by path)``;
+        the by-path mapping feeds the explicit (path, iteration) terminal-
+        decision grouping in ``_interpret_terminal_decisions`` (T-07.05).
         """
         total = len(request.paths)
+        job = self._update_job(
+            job,
+            JobStatus.RUNNING,
+            JobStage.WRITE,
+            progress=JobProgress(completed=0, total=total),
+        )
+        job_logger.info("Starting write-verify across %d path(s) concurrently", total)
         completed = 0
         counter_lock = asyncio.Lock()
 
@@ -526,13 +612,15 @@ class Pipeline:
 
         all_units: list[ContentUnit] = []
         all_gate_results: list[GateResult] = []
-        for unit, gate_results, path_tokens, _path in results:
+        gate_results_by_path: dict[str, list[GateResult]] = {}
+        for unit, gate_results, path_tokens, path in results:
             all_gate_results.extend(gate_results)
+            gate_results_by_path[path] = gate_results
             if unit is not None:
                 all_units.append(unit)
             _merge_tokens(token_usage, path_tokens)
 
-        return all_units, all_gate_results
+        return all_units, all_gate_results, gate_results_by_path
 
     async def _write_verify_loop(
         self,
@@ -546,7 +634,12 @@ class Pipeline:
         token_usage: dict | None = None,
         ev_lookup: dict[str, Evidence] | None = None,
     ) -> tuple[ContentUnit | None, list[GateResult]]:
-        """Run the writer-verifier loop for a single output path."""
+        """Run the writer-verifier loop for a single output path.
+
+        Scoring, editing, and verification live in the phase helpers below
+        (M07, bodies lifted verbatim — ADR-005); the writer invocation and
+        gate evaluation stay inline: they are the loop.
+        """
         _log = job_logger or logger
         _tokens = token_usage  # may be None if called outside full pipeline
         gate_results: list[GateResult] = []
@@ -605,190 +698,43 @@ class Pipeline:
             assert writer_output.unit is not None
             unit = writer_output.unit
 
-            if job is not None:
-                write_tokens = writer_output.token_usage or {}
-                job.stages.append(
-                    StageRecord(
-                        stage=JobStage.WRITE,
-                        started_at=write_start,
-                        completed_at=datetime.now(UTC),
-                        metrics={
-                            "path": path,
-                            "iterations": iteration,
-                            "tokens_input": write_tokens.get("input_tokens", 0),
-                            "tokens_output": write_tokens.get("output_tokens", 0),
-                            "tokens_cache_read": write_tokens.get(
-                                "cache_read_input_tokens", 0
-                            ),
-                            "tokens_cache_write": write_tokens.get(
-                                "cache_creation_input_tokens", 0
-                            ),
-                        },
-                    )
-                )
+            self._record_write_stage(job, path, iteration, write_start, writer_output)
 
-            # Programmatic style scoring (humanization M02). Soft signal in
-            # v1 — the gate still evaluates `unit.scores` (ContentScores)
-            # only; style scores inform M03 editor invocation and feed into
-            # StageRecord.metrics for threshold calibration. See ADR-002/004/006.
-            style_scores: StyleScores | None = None
-            if self._scorer is not None:
-                score_start = datetime.now(UTC)
-                style_scores = self._scorer.score(unit.content)
-                unit = unit.model_copy(update={"style_scores": style_scores})
-                if job is not None:
-                    job.stages.append(
-                        StageRecord(
-                            stage=JobStage.SCORE,
-                            started_at=score_start,
-                            completed_at=datetime.now(UTC),
-                            metrics={
-                                "path": path,
-                                "sentence_length_stddev": style_scores.sentence_length_stddev,
-                                "suppressed_vocab_hits": style_scores.suppressed_vocab_hits,
-                                "type_token_ratio": style_scores.type_token_ratio,
-                                "formulaic_transition_count": style_scores.formulaic_transition_count,
-                                "contrastive_frame_count": style_scores.contrastive_frame_count,
-                                "contrastive_parasitic_count": style_scores.contrastive_parasitic_count,
-                                "contrastive_alternative_count": style_scores.contrastive_alternative_count,
-                                "hedging_phrase_count": style_scores.hedging_phrase_count,
-                                "em_dash_count": style_scores.em_dash_count,
-                                "word_count": style_scores.word_count,
-                                "humanization_pass": style_scores.humanization_pass,
-                            },
-                        )
-                    )
+            # Score (humanization M02)
+            unit, style_scores = self._score_draft(unit, path, job)
 
             # Conditional stylistic rewrite (humanization M03). Fires only
             # when the scorer flagged the draft. Does NOT consume an iteration
-            # slot (ADR-005). Preserves citations as a hard constraint; on
-            # citation drift the writer's original draft is retained so the
-            # verifier still runs against known-good content.
+            # slot (ADR-005).
             if (
                 self._editor is not None
                 and style_scores is not None
                 and not style_scores.humanization_pass
             ):
-                # Implied-claim annotations (humanization M04). Runs before
-                # the editor so its rewrite hints feed into the editor prompt.
-                # Skipped when the checker isn't wired — annotations stay [].
-                annotations: list[ImpliedClaimAnnotation] = []
-                if self._implied_claim_checker is not None:
-                    annotations = await self._implied_claim_checker.check(
-                        unit.content, cited_evidence=path_evidence
-                    )
-                    _log.info(
-                        "ImpliedClaimChecker: %d annotation(s) for path '%s' iter %d",
-                        len(annotations),
-                        path,
-                        iteration,
-                    )
-
-                edit_start = datetime.now(UTC)
-                editor_output = await self._editor.edit(
+                unit = await self._edit_draft(
                     unit,
+                    style_scores=style_scores,
+                    path_evidence=path_evidence,
                     path_config=path_config,
-                    scores=style_scores,
-                    # Explicit [] when the checker ran and produced nothing;
-                    # preserves the distinction from None ("checker not wired")
-                    # if a future caller ever needs it.
-                    annotations=[a.rewrite_hint for a in annotations],
+                    path=path,
+                    iteration=iteration,
+                    job=job,
+                    token_usage=_tokens,
+                    log=_log,
                 )
-                if _tokens and editor_output.token_usage:
-                    _merge_tokens(_tokens, editor_output.token_usage)
-                if editor_output.succeeded:
-                    unit = unit.model_copy(
-                        update={"content": editor_output.edited_content}
-                    )
-                if job is not None:
-                    job.stages.append(
-                        StageRecord(
-                            stage=JobStage.EDIT,
-                            started_at=edit_start,
-                            completed_at=datetime.now(UTC),
-                            metrics={
-                                "path": path,
-                                "invoked": True,
-                                "citations_preserved": editor_output.citations_preserved,
-                                "word_count_before": editor_output.word_count_before,
-                                "word_count_after": editor_output.word_count_after,
-                                "tokens_input": editor_output.token_usage.get(
-                                    "input_tokens", 0
-                                ),
-                                "tokens_output": editor_output.token_usage.get(
-                                    "output_tokens", 0
-                                ),
-                                "tokens_cache_read": editor_output.token_usage.get(
-                                    "cache_read_input_tokens", 0
-                                ),
-                                "tokens_cache_write": editor_output.token_usage.get(
-                                    "cache_creation_input_tokens", 0
-                                ),
-                            },
-                        )
-                    )
 
             # Verify
-            verify_start = datetime.now(UTC)
-            jurisdiction = (
-                request.constraints.jurisdiction if request.constraints else None
-            )
-            report = await self._verifier.verify(
+            report = await self._run_verifier(
                 unit,
-                path_evidence,
-                jurisdiction=jurisdiction,
-                evidence_block=verifier_block,
+                request=request,
+                path_evidence=path_evidence,
+                verifier_block=verifier_block,
+                path=path,
+                job=job,
+                token_usage=_tokens,
             )
 
-            # Accumulate token usage from verifier
-            if _tokens and report.token_usage:
-                for key in _tokens:
-                    _tokens[key] += report.token_usage.get(key, 0)
-
-            if job is not None:
-                job.stages.append(
-                    StageRecord(
-                        stage=JobStage.VERIFY,
-                        started_at=verify_start,
-                        completed_at=datetime.now(UTC),
-                        metrics={
-                            "path": path,
-                            "total_claims": report.total_claims,
-                            "supported": report.supported,
-                            "pass_rate": report.pass_rate,
-                            "confidence_score": report.confidence_score,
-                        },
-                    )
-                )
-
-            # Aggregate tags from cited evidence
-            cited_ids = {c.evidence_id for c in unit.citations}
-            aggregated_tags = sorted(
-                {
-                    tag
-                    for eid in cited_ids
-                    if eid in ev_lookup
-                    for tag in ev_lookup[eid].tags
-                }
-            )
-
-            # Update unit scores from verification. `style_scores` carries
-            # through from the humanization M02 scoring step above.
-            unit = ContentUnit(
-                id=unit.id,
-                path=unit.path,
-                tags=aggregated_tags,
-                content=unit.content,
-                citations=unit.citations,
-                evidence_map=unit.evidence_map,
-                scores=ContentScores(
-                    confidence=report.confidence_score,
-                    coverage=report.pass_rate,
-                    source_diversity=unit.scores.source_diversity,
-                ),
-                style_scores=unit.style_scores,
-                lineage=unit.lineage,
-            )
+            unit = self._apply_verification_scores(unit, report, ev_lookup)
 
             # Gate decision
             gate_result = gate.evaluate(unit, report, iteration, evidence=path_evidence)
@@ -812,6 +758,243 @@ class Pipeline:
         # Exhausted iterations without passing
         _log.info("Path '%s': exhausted %d iterations", path, max_iters)
         return unit, gate_results
+
+    # --- _write_verify_loop phase helpers (M07 — bodies lifted verbatim per
+    # ADR-005; finding 1.2). Token accumulation threads the per-path dict
+    # (audit P1 pattern) through `token_usage`. ------------------------------
+
+    @staticmethod
+    def _record_write_stage(
+        job: Job | None,
+        path: str,
+        iteration: int,
+        write_start: datetime,
+        writer_output: WriterOutput,
+    ) -> None:
+        """Append the WRITE StageRecord for one writer invocation."""
+        if job is not None:
+            write_tokens = writer_output.token_usage or {}
+            job.stages.append(
+                StageRecord(
+                    stage=JobStage.WRITE,
+                    path=path,
+                    started_at=write_start,
+                    completed_at=datetime.now(UTC),
+                    metrics={
+                        "path": path,
+                        "iterations": iteration,
+                        "tokens_input": write_tokens.get("input_tokens", 0),
+                        "tokens_output": write_tokens.get("output_tokens", 0),
+                        "tokens_cache_read": write_tokens.get(
+                            "cache_read_input_tokens", 0
+                        ),
+                        "tokens_cache_write": write_tokens.get(
+                            "cache_creation_input_tokens", 0
+                        ),
+                    },
+                )
+            )
+
+    def _score_draft(
+        self, unit: ContentUnit, path: str, job: Job | None
+    ) -> tuple[ContentUnit, StyleScores | None]:
+        """Programmatic style scoring (humanization M02). Soft signal in
+        v1 — the gate still evaluates `unit.scores` (ContentScores)
+        only; style scores inform M03 editor invocation and feed into
+        StageRecord.metrics for threshold calibration. See ADR-002/004/006.
+
+        No-op when the scorer isn't wired — returns ``(unit, None)``.
+        """
+        style_scores: StyleScores | None = None
+        if self._scorer is not None:
+            score_start = datetime.now(UTC)
+            style_scores = self._scorer.score(unit.content)
+            unit = unit.with_style_scores(style_scores)
+            if job is not None:
+                job.stages.append(
+                    StageRecord(
+                        stage=JobStage.SCORE,
+                        path=path,
+                        started_at=score_start,
+                        completed_at=datetime.now(UTC),
+                        metrics={
+                            "path": path,
+                            "sentence_length_stddev": style_scores.sentence_length_stddev,
+                            "suppressed_vocab_hits": style_scores.suppressed_vocab_hits,
+                            "type_token_ratio": style_scores.type_token_ratio,
+                            "formulaic_transition_count": style_scores.formulaic_transition_count,
+                            "contrastive_frame_count": style_scores.contrastive_frame_count,
+                            "contrastive_parasitic_count": style_scores.contrastive_parasitic_count,
+                            "contrastive_alternative_count": style_scores.contrastive_alternative_count,
+                            "hedging_phrase_count": style_scores.hedging_phrase_count,
+                            "em_dash_count": style_scores.em_dash_count,
+                            "word_count": style_scores.word_count,
+                            "humanization_pass": style_scores.humanization_pass,
+                        },
+                    )
+                )
+        return unit, style_scores
+
+    async def _edit_draft(
+        self,
+        unit: ContentUnit,
+        *,
+        style_scores: StyleScores,
+        path_evidence: list[Evidence],
+        path_config: PathConfig | None,
+        path: str,
+        iteration: int,
+        job: Job | None,
+        token_usage: dict | None,
+        log: logging.Logger | logging.LoggerAdapter,
+    ) -> ContentUnit:
+        """Stylistic rewrite via the Editor (humanization M03).
+
+        Preserves citations as a hard constraint; on citation drift the
+        writer's original draft is retained so the verifier still runs
+        against known-good content — and ``draft_source`` stays "writer"
+        (finding 1.5, T-07.05). Caller guards on editor wiring + score fail.
+        """
+        assert self._editor is not None
+        _tokens = token_usage
+        # Implied-claim annotations (humanization M04). Runs before
+        # the editor so its rewrite hints feed into the editor prompt.
+        # Skipped when the checker isn't wired — annotations stay [].
+        annotations: list[ImpliedClaimAnnotation] = []
+        if self._implied_claim_checker is not None:
+            annotations = await self._implied_claim_checker.check(
+                unit.content, cited_evidence=path_evidence
+            )
+            log.info(
+                "ImpliedClaimChecker: %d annotation(s) for path '%s' iter %d",
+                len(annotations),
+                path,
+                iteration,
+            )
+
+        edit_start = datetime.now(UTC)
+        editor_output = await self._editor.edit(
+            unit,
+            path_config=path_config,
+            scores=style_scores,
+            # Explicit [] when the checker ran and produced nothing;
+            # preserves the distinction from None ("checker not wired")
+            # if a future caller ever needs it.
+            annotations=[a.rewrite_hint for a in annotations],
+        )
+        if _tokens and editor_output.token_usage:
+            _merge_tokens(_tokens, editor_output.token_usage)
+        if editor_output.succeeded:
+            # EditorOutput.succeeded implies citations were preserved —
+            # record the draft provenance flip (finding 1.5, T-07.05).
+            unit = unit.model_copy(
+                update={
+                    "content": editor_output.edited_content,
+                    "draft_source": "editor",
+                }
+            )
+        if job is not None:
+            job.stages.append(
+                StageRecord(
+                    stage=JobStage.EDIT,
+                    path=path,
+                    started_at=edit_start,
+                    completed_at=datetime.now(UTC),
+                    metrics={
+                        "path": path,
+                        "invoked": True,
+                        "citations_preserved": editor_output.citations_preserved,
+                        "word_count_before": editor_output.word_count_before,
+                        "word_count_after": editor_output.word_count_after,
+                        "tokens_input": editor_output.token_usage.get(
+                            "input_tokens", 0
+                        ),
+                        "tokens_output": editor_output.token_usage.get(
+                            "output_tokens", 0
+                        ),
+                        "tokens_cache_read": editor_output.token_usage.get(
+                            "cache_read_input_tokens", 0
+                        ),
+                        "tokens_cache_write": editor_output.token_usage.get(
+                            "cache_creation_input_tokens", 0
+                        ),
+                    },
+                )
+            )
+        return unit
+
+    async def _run_verifier(
+        self,
+        unit: ContentUnit,
+        *,
+        request: CurationRequest,
+        path_evidence: list[Evidence],
+        verifier_block: str,
+        path: str,
+        job: Job | None,
+        token_usage: dict | None,
+    ) -> VerificationReport:
+        """Verify the draft against path evidence; append the VERIFY record."""
+        _tokens = token_usage
+        verify_start = datetime.now(UTC)
+        jurisdiction = request.constraints.jurisdiction if request.constraints else None
+        report = await self._verifier.verify(
+            unit,
+            path_evidence,
+            jurisdiction=jurisdiction,
+            evidence_block=verifier_block,
+        )
+
+        # Accumulate token usage from verifier
+        if _tokens and report.token_usage:
+            for key in _tokens:
+                _tokens[key] += report.token_usage.get(key, 0)
+
+        if job is not None:
+            job.stages.append(
+                StageRecord(
+                    stage=JobStage.VERIFY,
+                    path=path,
+                    started_at=verify_start,
+                    completed_at=datetime.now(UTC),
+                    metrics={
+                        "path": path,
+                        "total_claims": report.total_claims,
+                        "supported": report.supported,
+                        "pass_rate": report.pass_rate,
+                        "confidence_score": report.confidence_score,
+                    },
+                )
+            )
+        return report
+
+    @staticmethod
+    def _apply_verification_scores(
+        unit: ContentUnit, report: VerificationReport, ev_lookup: dict[str, Evidence]
+    ) -> ContentUnit:
+        """Fold verification scores + aggregated evidence tags into the unit."""
+        # Aggregate tags from cited evidence
+        cited_ids = {c.evidence_id for c in unit.citations}
+        aggregated_tags = sorted(
+            {
+                tag
+                for eid in cited_ids
+                if eid in ev_lookup
+                for tag in ev_lookup[eid].tags
+            }
+        )
+
+        # Update unit scores from verification. `style_scores` (and the
+        # T-07.05 `draft_source` flag) carry through model_copy — the previous
+        # 9-field ContentUnit reconstruction would silently reset any field
+        # it didn't enumerate (finding 1.5).
+        return unit.model_copy(update={"tags": aggregated_tags}).with_scores(
+            ContentScores(
+                confidence=report.confidence_score,
+                coverage=report.pass_rate,
+                source_diversity=unit.scores.source_diversity,
+            )
+        )
 
     @staticmethod
     def _update_job(

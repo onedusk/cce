@@ -1,6 +1,7 @@
 """Tests for cce.verification.verifier — verification report and LLM response parsing."""
 
 import json
+import logging
 
 import pytest
 
@@ -42,6 +43,24 @@ class TestPassRate:
         # 27 supported + 1 gap_acknowledged out of 27 total = 28/27 = 1.037
         report = VerificationReport(total_claims=27, supported=27, gaps_acknowledged=1)
         assert report.pass_rate == 1.0
+
+    def test_clamp_logs_inconsistent_counts_warning(self, caplog):
+        """T-07.05: the clamp must not be silent — operators need to see
+        that the LLM's summary counts disagreed."""
+        report = VerificationReport(total_claims=27, supported=27, gaps_acknowledged=1)
+        with caplog.at_level(logging.WARNING, logger="cce.verification.verifier"):
+            assert report.pass_rate == 1.0
+        assert any(
+            "Verifier returned inconsistent counts: supported=27 gaps=1 total=27"
+            in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_no_clamp_warning_when_counts_consistent(self, caplog):
+        report = VerificationReport(total_claims=10, supported=8, gaps_acknowledged=2)
+        with caplog.at_level(logging.WARNING, logger="cce.verification.verifier"):
+            assert report.pass_rate == 1.0
+        assert not any("inconsistent counts" in r.getMessage() for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------

@@ -7,6 +7,8 @@ every claim back to stored evidence.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from cce.models.style import StyleScores
@@ -80,6 +82,22 @@ class ContentUnit(BaseModel):
         default=None,
         description="Programmatic style metrics from H2 scorer. None if humanization disabled.",
     )
+    draft_source: Literal["writer", "editor"] = Field(
+        default="writer",
+        description=(
+            "Which agent produced the final draft. 'editor' only when the "
+            "humanization editor succeeded AND citation preservation held; "
+            "stays 'writer' on fallback (finding 1.5)."
+        ),
+    )
     lineage: ContentLineage
 
     model_config = {"frozen": True}
+
+    def with_scores(self, scores: ContentScores) -> ContentUnit:
+        """Frozen-model update helper — replaces the 9-field
+        model_copy(update=...) previously inlined in the pipeline."""
+        return self.model_copy(update={"scores": scores})
+
+    def with_style_scores(self, style_scores: StyleScores) -> ContentUnit:
+        return self.model_copy(update={"style_scores": style_scores})

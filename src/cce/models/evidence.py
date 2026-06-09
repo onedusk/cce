@@ -62,3 +62,19 @@ class Evidence(BaseModel):
     )
 
     model_config = {"frozen": True}
+
+
+class DiscoveryResult(BaseModel):
+    """Return type of Discoverer.discover() — replaces the mutable
+    per-instance metrics side-channel deleted in M07 (finding 1.2, ADR-005)."""
+
+    model_config = {"frozen": True}
+
+    evidence: list[Evidence] = Field(default_factory=list)
+    metrics: dict[str, int | float] = Field(
+        default_factory=dict,
+        description=(
+            "Keys: crawl_success, crawl_failed, crawl_failure_rate — same "
+            "keys previously stashed on the Discoverer instance"
+        ),
+    )

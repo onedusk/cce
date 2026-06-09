@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 
 import pytest
@@ -124,3 +125,19 @@ async def test_no_embedding_provider_returns_empty():
 
     result = await discoverer._embed_batches(["a", "b", "c"])
     assert result == []
+
+
+async def test_embed_batches_logs_single_timing_line(caplog):
+    """Finding 2.3 (T-07.01): one INFO line carrying texts / batches /
+    concurrency / elapsed seconds."""
+    embedder = _SleepyEmbedder()
+    discoverer = _build_discoverer(embedder, batch_size=10, concurrency=3)
+
+    with caplog.at_level(logging.INFO, logger="cce.discovery.discoverer"):
+        await discoverer._embed_batches([f"t{i}" for i in range(25)])
+
+    timing_lines = [
+        r.getMessage() for r in caplog.records if r.getMessage().startswith("Embedded")
+    ]
+    assert len(timing_lines) == 1
+    assert "Embedded 25 texts in 3 batches (concurrency=3):" in timing_lines[0]
