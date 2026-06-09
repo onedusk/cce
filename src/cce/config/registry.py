@@ -21,7 +21,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from cce.config.loader import load_config
+from cce.config.loader import ConfigError, load_config
 from cce.config.markers import HumanizationMarkers, load_markers
 from cce.config.types import EngineConfig
 from cce.models.paths import PathConfig
@@ -78,9 +78,10 @@ class ConfigRegistry:
            (or under ``taxonomies_dir``) when the file exists; parsing stays
            in ``build_components``, which constructs the plugin.
         5. Markers — loaded iff ``engine.humanization.enabled``; a missing
-           markers file raises ``FileNotFoundError`` (intentional fail-fast —
+           markers file raises ``ConfigError`` (intentional fail-fast —
            an operator who enabled humanization must not silently ship
-           unscored drafts).
+           unscored drafts; ConfigError so every CLI/app entry point renders
+           it as one actionable line, same as missing API keys).
 
         Relative directory arguments resolve against ``root``; absolute
         arguments are used as-is (``Path.__truediv__`` semantics).
@@ -121,7 +122,10 @@ class ConfigRegistry:
 
         markers: HumanizationMarkers | None = None
         if engine.humanization.enabled:
-            markers = load_markers(root / engine.humanization.markers_path)
+            try:
+                markers = load_markers(root / engine.humanization.markers_path)
+            except FileNotFoundError as e:
+                raise ConfigError(str(e)) from e
 
         return cls(
             engine=engine,

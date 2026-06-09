@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from cce.config.loader import ConfigError
 from cce.config.registry import ConfigRegistry
 from cce.config.types import EngineConfig, HumanizationConfig, LLMConfig
 
@@ -181,7 +182,9 @@ async def test_policies_loader_exception_warns_and_continues(
 
 
 async def test_missing_markers_raises_when_humanization_enabled(tmp_path: Path):
-    """Markers stay fail-fast: enabled humanization + missing YAML raises."""
+    """Markers stay fail-fast: enabled humanization + missing YAML raises
+    ConfigError (not FileNotFoundError) so every CLI/app entry point renders
+    one actionable line (final-review finding 2, 2026-06-09)."""
     engine = EngineConfig(
         llm=LLMConfig(api_key=""),
         humanization=HumanizationConfig(
@@ -189,7 +192,7 @@ async def test_missing_markers_raises_when_humanization_enabled(tmp_path: Path):
         ),
     )
 
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(ConfigError, match="markers"):
         ConfigRegistry.load(tmp_path, engine=engine)
 
 

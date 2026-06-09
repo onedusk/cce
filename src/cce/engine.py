@@ -24,7 +24,7 @@ from pathlib import Path
 import httpx
 
 from cce.components import build_pipeline
-from cce.config.loader import validate_required_keys
+from cce.config.loader import load_config, validate_required_keys
 from cce.config.registry import ConfigRegistry
 from cce.config.types import EngineConfig
 from cce.evidence.sqlite import SQLiteEvidenceStore
@@ -238,16 +238,21 @@ class CurationEngine:
         engine = cls()
         engine._mode = "embedded"
 
+        # Validate required keys BEFORE the registry loads optional surfaces
+        # (markers, taxonomy): a missing API key must surface first, not be
+        # masked by a markers error (final-review finding 3, 2026-06-09).
+        config = load_config(Path(config_path) if config_path else None)
+        validate_required_keys(config)
+
         # One registry owns every configuration surface (ADR-002, M06).
         registry = ConfigRegistry.load(
             Path("."),
-            Path(config_path) if config_path else None,
+            engine=config,
             policies_dir=Path(policies_dir),
             taxonomies_dir=Path(taxonomies_dir),
             path_configs_path=Path(path_configs_path) if path_configs_path else None,
         )
         engine._config = registry.engine
-        validate_required_keys(engine._config)
 
         # Open stores
         engine._job_store = JobStore(db_path=engine._config.evidence_store.sqlite_path)

@@ -702,6 +702,158 @@
         "type": "object",
         "title": "APIEnvelope[list]"
       },
+      "CurationConstraints": {
+        "properties": {
+          "date_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date From",
+            "description": "ISO date string, lower bound for source recency"
+          },
+          "date_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date To",
+            "description": "ISO date string, upper bound for source recency"
+          },
+          "domains_allow": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Domains Allow",
+            "description": "Only include sources from these domains"
+          },
+          "domains_deny": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Domains Deny",
+            "description": "Exclude sources from these domains"
+          },
+          "jurisdiction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Jurisdiction",
+            "description": "Legal/regulatory jurisdiction filter"
+          }
+        },
+        "type": "object",
+        "title": "CurationConstraints",
+        "description": "Filters applied to source discovery."
+      },
+      "CurationRequest": {
+        "properties": {
+          "topic": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Topic",
+            "description": "Primary topic to curate"
+          },
+          "subtopics": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "title": "Subtopics",
+            "description": "Optional subtopics to cover"
+          },
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 10,
+            "minItems": 1,
+            "title": "Paths",
+            "description": "Output paths to generate, drawn from registered PathConfig"
+          },
+          "audience": {
+            "type": "string",
+            "maxLength": 100,
+            "title": "Audience",
+            "description": "Target audience (free-form or enum per product)",
+            "default": "general"
+          },
+          "constraints": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CurationConstraints"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Discovery filters"
+          },
+          "policy_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Policy Id",
+            "description": "Which SourcePolicy config to use"
+          },
+          "taxonomy_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Taxonomy Id",
+            "description": "Which TaxonomyConfig to use (Phase 2, optional for Phase 1)"
+          },
+          "path_config_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path Config Id",
+            "description": "Which PathConfig to use (Phase 2, optional for Phase 1)"
+          },
+          "risk_profile": {
+            "type": "string",
+            "pattern": "^(low|medium|high)$",
+            "title": "Risk Profile",
+            "description": "Maps to quality gate thresholds: low, medium, high",
+            "default": "medium"
+          }
+        },
+        "type": "object",
+        "required": [
+          "topic",
+          "paths",
+          "policy_id"
+        ],
+        "title": "CurationRequest",
+        "description": "Input contract for a curation run."
+      },
       "ErrorBody": {
         "properties": {
           "code": {
@@ -902,6 +1054,9 @@
             "type": "string",
             "title": "Policy Id"
           },
+          "request": {
+            "$ref": "#/components/schemas/CurationRequest"
+          },
           "stage": {
             "anyOf": [
               {
@@ -968,11 +1123,12 @@
           "status",
           "topic",
           "policy_id",
+          "request",
           "created_at",
           "updated_at"
         ],
         "title": "JobResponse",
-        "description": "Job state as returned by the API."
+        "description": "Job state as returned by the API.\n\n``request`` carries the full CurationRequest (additive, audit-2026-06-09\nT-04.01): remote-mode ``JobHandle.status()``/``retry()`` parse this\npayload back into a ``Job``, which requires the request \u2014 without it the\nparse fails validation. Do not remove."
       },
       "MetaResponse": {
         "properties": {
