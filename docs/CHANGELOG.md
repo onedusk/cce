@@ -5,6 +5,133 @@ All notable changes to the Content Curation Engine (CCE).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — audit-2026-06-09 remediation (PR #2)
+
+Full remediation sprint from the 2026-06-09 codebase audit
+(`docs/internal/improvement-opportunities-2026-06-09.md`, local-only),
+implemented as 8 ordered milestone commits plus 2 review-fix commits on
+`feature/audit-2026-06-09`. Suggested bump on release: **minor (0.3.0)** —
+additive API schema change (`JobResponse.request`), new CLI commands and
+config surface, plus operator-facing validation tightening (noted below).
+Suite: 695 → **797 passed**; coverage measurement switched from statement
+to branch (floor 90 → 92, observed 94.71%).
+
+### Fixed
+- **Remote mode was broken in production** (`b815692`): `JobHandle.status()` /
+  `wait()` / `retry()` failed `Job.model_validate` because the API's
+  `JobResponse` lacked the `request` field. Found by the first-ever
+  remote-mode tests (audit finding 3.1 predicted exactly this blind spot).
+  Fix is additive and wire-compatible; `docs/openapi.json` regenerated
+  (`813e70a`).
+- Evidence search route double `model_dump` removed — the last remainder of
+  prior-audit finding 1.2 (`060328e`).
+- Startup config errors render one actionable line instead of a
+  Starlette-formatted traceback: lifespan catches `ConfigError` →
+  `SystemExit(1)`; markers `FileNotFoundError` wrapped as `ConfigError` in
+  `ConfigRegistry.load`; missing API keys surface before optional-surface
+  errors in `embedded()` (`899cae3`, `813e70a`).
+- Latent test flakes: wall-clock upper-bound assertion replaced with a
+  concurrency high-water-mark counter; 50 ms job-completion sleeps replaced
+  by poll-with-deadline; `hash_prefix` NameError guard (`fb2f0f3`).
+
+### Added — operator workflows (M08, `2566e3b`)
+- **`cce curate <topic>`** — single-topic submission via the embedded engine;
+  exits 0 COMPLETED / 2 REVIEW_REQUIRED / 1 FAILED-or-config-error.
+- **`cce status <job_id>`** / **`cce jobs`** — inspect job state, stage
+  metrics (incl. token usage and budget notes), and gate outcomes straight
+  from the job store; no API server required (finding 4.2).
+- **`cce validate`** — strict YAML checking for `policies/`,
+  `path_configs/`, `taxonomies/` with `difflib` did-you-mean suggestions on
+  unknown keys; exit 1 on any error (finding 4.7, PDR-003: load-time stays
+  forgiving, validate is the strict moment).
+- **`EngineConfig.max_tokens_per_job`** (`CCE_MAX_TOKENS_PER_JOB`) — per-job
+  LLM token ceiling checked at writer-iteration boundaries; on breach the
+  path stops iterating, the gate feedback carries a budget note, and the job
+  routes to REVIEW_REQUIRED keeping partial drafts (finding 2.1, ADR-003).
+  Worst-case overshoot: one writer+verifier pair per in-flight path.
+
+### Added — fail-fast config + API hardening (M01, `060328e`)
+- `ConfigError` + `validate_required_keys` — missing `ANTHROPIC_API_KEY` /
+  `FIRECRAWL_API_KEY` now fails in one line at every pipeline entry point
+  (CLI, embedded engine, API lifespan); keyless commands (`emit-mdx`,
+  `api key generate`) are untouched (finding 4.3, ADR-006).
+- Request body-size limit middleware: `Content-Length` > 1 MiB → 413
+  envelope with `request_id` (finding 5.1). Known limitation: chunked bodies
+  bypass the check (bounded downstream by uvicorn/h11).
+- **Operator-facing tightening:** `SourcePolicy` and its nested rule models
+  now reject unknown YAML keys (`extra="forbid"`, finding 6.3) and
+  `CurationRequest.subtopics` elements are capped at 200 chars (finding
+  5.2). All repo YAML verified to still parse; a typo'd key in a policy file
+  now fails loudly via `cce validate` instead of silently doing nothing.
+
+### Added — structural (M05/M06, `9b2d200`/`15bf42e`)
+- **`cce/components.py`** — `ComponentSet` + `build_components` +
+  `build_pipeline`: the single wiring authority consumed by both embedded
+  and API modes (finding 1.1, ADR-001). Fixes a layering violation:
+  `embedded()` previously late-imported `api/app._build_pipeline`. Parity,
+  fallback-semantics, and field-completeness tests pin the contract.
+- **`config/registry.py`** — `ConfigRegistry.load()` owns the full config
+  sequence (engine config, policies, path-config selection, taxonomy path,
+  markers) and its precedence (env > YAML > `types.py` defaults; finding
+  1.3, ADR-002). `embedded()`'s `taxonomies_dir`/`path_configs_path`
+  parameters are honored again — they had been silently dead since Phase 3.
+  Policy loading unified on the forgiving path (PDR-003).
+- Loader defaults dedup: `load_config()` passes only explicitly-present
+  values; `types.py` field defaults are the single source (finding 1.4).
+
+### Changed — pipeline internals (M07, `f05c454`; behavior-preserving, ADR-005)
+- `Discoverer.discover()` returns **`DiscoveryResult`** (evidence + metrics);
+  the mutable `last_discover_metrics` side-channel is deleted. `run()`
+  (~230 → 115 lines) and `_write_verify_loop` (~278 → 136) decomposed into
+  phase helpers with direct unit tests (finding 1.2).
+- **`ContentUnit.draft_source`** (`"writer"` | `"editor"`, default
+  `"writer"`) — the editor's citation-drift fallback is now visible to the
+  verifier and package consumers; `with_scores()`/`with_style_scores()`
+  replace the 9-field `model_copy` (finding 1.5). Stored packages parse
+  unchanged via the default.
+- Stage/gate grouping uses explicit `(path, iteration)` keys instead of
+  list order (`StageRecord.path` added, additive); verifier `pass_rate`
+  logs a warning when the LLM returns inconsistent counts instead of
+  silently clamping; embedding batches log a timing line; an unreachable
+  Ollama now produces an error naming the base URL and the
+  `CCE_EMBEDDING_ENABLED=false` fallback (findings 1.5, 2.3, PDR-002).
+
+### Tests & CI (M02/M04, `fb2f0f3`/`b815692`)
+- **Tier-marker enforcement**: a conftest collection hook fails the run on
+  any unmarked test; full backfill — `unit`/`integration`/`slow`/`e2e` now
+  partition the suite exactly (finding 3.4). A key-gated e2e smoke test
+  gives the registered `e2e` marker its first member (skips without keys).
+- **Operational-shell coverage** (finding 3.1–3.3): remote mode end-to-end
+  via `httpx.ASGITransport`, pipeline-crash → FAILED, the real lifespan
+  shutdown handler (the test-local logic copy was deleted), the real
+  `embedded()` factory (no private-attr pokes), `cce batch` happy path.
+  `engine.py` 64% → 95%.
+- **Branch coverage** enabled (`[tool.coverage.run] branch = true`); floor
+  recalibrated 90 → 89 → 92 per ADR-004's two-step. `tests/` brought under
+  ruff in CI and pre-commit. CI gains an **OpenAPI freshness gate** that
+  regenerates `docs/openapi.json` and fails on drift (finding 4.8).
+
+### Docs & onboarding (M03, `46f5ef8`)
+- README quick start rewritten around the `cce` CLI (PDR-001); Ollama
+  documented as on-by-default with the keyword-ranking fallback (PDR-002,
+  finding 4.5); `.env.example` now covers all 31 env reads (was 6 of an
+  estimated 41 — finding 4.4); new `docs/configuration.md` precedence guide.
+- `scripts/README.md` classifies every script; research/calibration
+  artifacts moved to `scripts/research/` (finding 4.6); `AGENTS.md` tracked
+  and reconciled with CLAUDE.md; stale code comments citing a never-existent
+  audit path repointed (audit §0.2).
+
+### Not in scope (deliberate — audit Deferred list)
+- Feedback-iteration evidence subsetting (prompt caching absorbs the cost);
+  evidence tags index (await Phase 4 tag-based discovery); configurable
+  writer/verifier temperatures; excerpt sanitization (Firecrawl returns
+  markdown; revisit at Phase 4); formal API envelope versioning (pre-1.0
+  stance documented); `CurationEngine` embedded/remote subclass split
+  (deferred until a third mode exists).
+- The forgiving policy loader still drops unknown top-level YAML keys
+  (`_parse_policy` forwards known keys explicitly); strict checking is
+  `cce validate`'s job by design (PDR-003).
+
 ## [0.2.0] — 2026-04-24
 
 Minor bump: Phase B Layer 2 — contrastive-frame subtype tagging. Schema
