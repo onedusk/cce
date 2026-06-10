@@ -58,6 +58,14 @@ class StageRecord(BaseModel):
     """Timing record for a completed pipeline stage."""
 
     stage: JobStage
+    path: str | None = Field(
+        default=None,
+        description=(
+            "Output path this record belongs to (WRITE/SCORE/EDIT/VERIFY); "
+            "None for job-wide stages. Additive in M07 (T-07.05) — "
+            "metrics['path'] is retained for backward compatibility."
+        ),
+    )
     started_at: datetime
     completed_at: datetime
     metrics: dict[str, Any] | None = Field(

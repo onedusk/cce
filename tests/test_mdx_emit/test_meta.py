@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from cce.models.content import ContentScores
 from cce.models.package import PackageLineage
 from cce.output.mdx.meta import merge_topic_meta
+
+pytestmark = pytest.mark.integration
 
 
 def _scores(confidence: float = 0.9, coverage: float = 0.85, diversity: float = 0.8):

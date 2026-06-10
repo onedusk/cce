@@ -16,6 +16,8 @@ from tests.conftest import (
     make_source_policy,
 )
 
+pytestmark = pytest.mark.integration
+
 
 def _writer_response(citations: str = "ev_test_001") -> str:
     """Build a valid writer JSON response."""

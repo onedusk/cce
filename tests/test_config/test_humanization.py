@@ -120,8 +120,10 @@ def test_compiled_contrastive_patterns_match_known_ai_prose():
     patterns = markers.compiled_contrastive_patterns()
 
     assert patterns
-    assert all(isinstance(p, re.Pattern) and s in {"parasitic", "genuine_alternative"}
-               for p, s in patterns)
+    assert all(
+        isinstance(p, re.Pattern) and s in {"parasitic", "genuine_alternative"}
+        for p, s in patterns
+    )
 
     # Each exemplar should match at least one compiled pattern (any subtype).
     exemplars = [
@@ -131,9 +133,7 @@ def test_compiled_contrastive_patterns_match_known_ai_prose():
         "not just insomnia, but sleep hygiene broadly",
     ]
     for text in exemplars:
-        assert any(p.search(text) for p, _ in patterns), (
-            f"no pattern matched: {text!r}"
-        )
+        assert any(p.search(text) for p, _ in patterns), f"no pattern matched: {text!r}"
 
 
 def test_parasitic_patterns_tagged_and_match_reframe_construction():
@@ -149,7 +149,9 @@ def test_parasitic_patterns_tagged_and_match_reframe_construction():
 
     # Canonical parasitic exemplar (the original trigger case — Phase B analysis)
     assert any(
-        p.search("What replaces the open question is not wisdom. It is the illusion of it.")
+        p.search(
+            "What replaces the open question is not wisdom. It is the illusion of it."
+        )
         for p in parasitic
     )
     # Canonical corpus-drawn parasitic

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
-
 import httpx
 import pytest
+
+from tests.test_api.conftest import wait_for_job_status
 
 pytestmark = pytest.mark.unit
 
@@ -49,8 +49,9 @@ async def test_get_job_after_create(client: httpx.AsyncClient, app):
     )
     job_id = resp.json()["data"]["id"]
 
-    # Give background task a chance to start (it will fail since mock LLM has no responses)
-    await asyncio.sleep(0.05)
+    # Wait for the background task to reach a terminal state (it fails since
+    # the mock LLM has no responses) — poll-with-deadline, not a fixed sleep.
+    await wait_for_job_status(client, job_id, {"failed", "completed"})
 
     # GET should return the job
     resp = await client.get(f"/v1/curate/jobs/{job_id}")
@@ -105,8 +106,9 @@ async def test_delete_job(client: httpx.AsyncClient):
     )
     job_id = resp.json()["data"]["id"]
 
-    # Wait briefly for task to register
-    await asyncio.sleep(0.05)
+    # Wait for the background task to reach a terminal state — poll-with-
+    # deadline, not a fixed sleep (the mock LLM makes the job fail fast).
+    await wait_for_job_status(client, job_id, {"failed", "completed"})
 
     resp = await client.delete(f"/v1/curate/jobs/{job_id}")
     assert resp.status_code == 200

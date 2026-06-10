@@ -12,6 +12,8 @@ from starlette.responses import JSONResponse
 
 from cce.api.middleware import RequestLoggingMiddleware
 
+pytestmark = pytest.mark.integration
+
 
 @pytest.fixture
 def app_with_middleware() -> FastAPI:

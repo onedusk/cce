@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 
+import pytest
+
 from cce.config.types import CrawlConfig
 from cce.discovery.adapters.base import CrawlResult
 from cce.discovery.discoverer import Discoverer
@@ -13,6 +15,8 @@ from tests.conftest import (
     make_curation_request,
     make_source_policy,
 )
+
+pytestmark = pytest.mark.unit
 
 
 def _config() -> CrawlConfig:
@@ -35,11 +39,11 @@ class TestCrawlFailureTracking:
         policy = make_source_policy()
 
         with caplog.at_level(logging.WARNING, logger="cce.discovery.discoverer"):
-            await discoverer.discover(request, policy)
+            result = await discoverer.discover(request, policy)
 
-        assert discoverer.last_discover_metrics["crawl_failed"] == 0
-        assert discoverer.last_discover_metrics["crawl_success"] == 2
-        assert discoverer.last_discover_metrics["crawl_failure_rate"] == 0.0
+        assert result.metrics["crawl_failed"] == 0
+        assert result.metrics["crawl_success"] == 2
+        assert result.metrics["crawl_failure_rate"] == 0.0
         # No warning should be logged
         assert not any(
             "crawl failure rate" in r.message.lower() for r in caplog.records
@@ -58,11 +62,11 @@ class TestCrawlFailureTracking:
         policy = make_source_policy()
 
         with caplog.at_level(logging.WARNING, logger="cce.discovery.discoverer"):
-            await discoverer.discover(request, policy)
+            result = await discoverer.discover(request, policy)
 
-        assert discoverer.last_discover_metrics["crawl_failed"] == 1
-        assert discoverer.last_discover_metrics["crawl_success"] == 1
-        assert discoverer.last_discover_metrics["crawl_failure_rate"] == 0.5
+        assert result.metrics["crawl_failed"] == 1
+        assert result.metrics["crawl_success"] == 1
+        assert result.metrics["crawl_failure_rate"] == 0.5
         assert any("crawl failure rate" in r.message.lower() for r in caplog.records)
 
     async def test_100_percent_failure(self, caplog):
@@ -82,11 +86,12 @@ class TestCrawlFailureTracking:
         policy = make_source_policy()
 
         with caplog.at_level(logging.WARNING, logger="cce.discovery.discoverer"):
-            evidence = await discoverer.discover(request, policy)
+            result = await discoverer.discover(request, policy)
+        evidence = result.evidence
 
         assert evidence == []
-        assert discoverer.last_discover_metrics["crawl_failed"] == 2
-        assert discoverer.last_discover_metrics["crawl_failure_rate"] == 1.0
+        assert result.metrics["crawl_failed"] == 2
+        assert result.metrics["crawl_failure_rate"] == 1.0
         assert any("crawl failure rate" in r.message.lower() for r in caplog.records)
 
     async def test_no_urls_after_filter(self):
@@ -99,12 +104,13 @@ class TestCrawlFailureTracking:
         request = make_curation_request(topic="test topic")
         policy = make_source_policy()
 
-        evidence = await discoverer.discover(request, policy)
+        result = await discoverer.discover(request, policy)
+        evidence = result.evidence
 
         assert evidence == []
-        assert discoverer.last_discover_metrics["crawl_success"] == 0
-        assert discoverer.last_discover_metrics["crawl_failed"] == 0
-        assert discoverer.last_discover_metrics["crawl_failure_rate"] == 0.0
+        assert result.metrics["crawl_success"] == 0
+        assert result.metrics["crawl_failed"] == 0
+        assert result.metrics["crawl_failure_rate"] == 0.0
 
     async def test_success_status_but_empty_content(self):
         """HTTP 200 with empty markdown counts as a crawl failure."""
@@ -120,8 +126,9 @@ class TestCrawlFailureTracking:
         request = make_curation_request(topic="test topic")
         policy = make_source_policy()
 
-        evidence = await discoverer.discover(request, policy)
+        result = await discoverer.discover(request, policy)
+        evidence = result.evidence
 
         assert evidence == []
-        assert discoverer.last_discover_metrics["crawl_failed"] == 1
-        assert discoverer.last_discover_metrics["crawl_success"] == 0
+        assert result.metrics["crawl_failed"] == 1
+        assert result.metrics["crawl_success"] == 0

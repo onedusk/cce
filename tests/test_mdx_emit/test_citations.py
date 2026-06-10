@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from datetime import UTC
 
+import pytest
+
 from cce.output.mdx.citations import build_citation_index
 from tests.conftest import make_evidence
+
+pytestmark = pytest.mark.unit
 
 
 def _make_lookup(*ids: str) -> dict:

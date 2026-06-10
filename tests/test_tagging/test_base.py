@@ -5,6 +5,8 @@ import pytest
 from cce.models.evidence import Evidence
 from cce.tagging.base import TaggingResult, TaxonomyPlugin, TaxonomyUnavailableError
 
+pytestmark = pytest.mark.unit
+
 
 class TestTaggingResult:
     def test_construction(self):

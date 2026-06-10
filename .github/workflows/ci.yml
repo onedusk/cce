@@ -20,11 +20,30 @@ jobs:
 
       - name: Lint
         run: |
-          uv run ruff check src/
-          uv run ruff format --check src/
+          uv run ruff check src/ tests/
+          uv run ruff format --check src/ tests/
 
       - name: Type check
         run: uv run pyright
 
       - name: Test
         run: uv run pytest --tb=short -q
+
+      # Regenerate docs/openapi.json from the app and fail if the committed
+      # copy is stale (audit-2026-06-09 finding 4.8). engine_version is pinned
+      # to the pyproject version so the exported schema tracks releases.
+      - name: OpenAPI freshness
+        run: |
+          uv run python - <<'EOF' > docs/openapi.json
+          import json
+          import tomllib
+
+          from cce.api.app import create_app
+          from cce.config.loader import load_config
+
+          config = load_config()
+          with open("pyproject.toml", "rb") as f:
+              config.engine_version = tomllib.load(f)["project"]["version"]
+          print(json.dumps(create_app(config).openapi(), indent=2))
+          EOF
+          git diff --exit-code docs/openapi.json

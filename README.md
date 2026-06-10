@@ -52,7 +52,7 @@ src/cce/
   output/           # Publish-package writer + MDX emitter
   api/              # REST API via FastAPI
   engine.py         # CurationEngine facade (embedded/remote mode dispatch)
-  cli.py            # `cce` CLI (run, batch, emit-mdx, api key generate)
+  cli.py            # `cce` CLI (curate, batch, status, jobs, validate, emit-mdx, api)
   logging_config.py # JSON/plain log formatter + request-id contextvar
   parsing.py        # Shared JSON extraction helpers for LLM responses
 ```
@@ -78,7 +78,7 @@ src/cce/
 
 **Phase 1** delivered the full pipeline loop across 8 live runs. **Phase 2** added semantic evidence ranking (Ollama + sqlite-vec), rules-based taxonomy classification, per-path writer modulation, verifier trust weighting, jurisdiction pass-through, and domain policy templates. **Phase 3** shipped the FastAPI REST layer, `CurationEngine` embedded/remote dispatch, the `cce` CLI, and post-hoc MDX export.
 
-**Humanization stack** (opt-in via `EngineConfig.humanization.enabled`): programmatic style scorer, LLM editor with citation-preservation checks, and an implied-claim checker that catches unfair contrastive framing. See `docs/decompose/humanization/` for full design.
+**Humanization stack** (opt-in via `EngineConfig.humanization.enabled`): programmatic style scorer, LLM editor with citation-preservation checks, and an implied-claim checker that catches unfair contrastive framing. See `docs/decompose/humanization/` (internal -- not in public clones) for full design.
 
 ## Tech Stack
 
@@ -88,7 +88,7 @@ src/cce/
 - **Ollama** -- local embedding generation (nomic-embed-text-v2-moe)
 - **Anthropic Claude** -- LLM provider for writer and verifier
 - **Firecrawl** -- crawl adapter for source discovery
-- **pytest** -- async test suite (677 tests, 90% coverage floor)
+- **pytest** -- async test suite (~700 tests, 90% coverage floor)
 
 ## Quick Start
 
@@ -99,19 +99,44 @@ uv sync --all-extras
 # Set up environment
 cp .env.example .env  # add ANTHROPIC_API_KEY and FIRECRAWL_API_KEY
 
+# Run a single topic and wait (exit 0 completed / 2 review / 1 failed)
+uv run cce curate "sleep hygiene" --policy-id peer-reviewed
+
+# Run a batch of topics through the pipeline
+uv run cce batch --topics-file policies/examples/topics-batch.yaml --policy-id peer-reviewed
+
+# Inspect job state (reads the jobs store directly; no API server needed)
+uv run cce status <job-id>
+uv run cce jobs
+
+# Strict-check operator YAML before deploying
+uv run cce validate
+
+# Or run the REST API server
+uv run cce api key generate   # writes a bearer key to ~/.cce/api-key (mode 0600)
+uv run cce api start
+
+# Export completed jobs as MDX
+uv run cce emit-mdx --all --target <content-dir>
+
 # Run tests
 uv run pytest
 
 # Lint
 uv run ruff check src/
-
-# Run a live pipeline
-PYTHONPATH=src uv run python scripts/run_live.py
 ```
+
+The `scripts/` directory contains older runners and research artifacts -- see `scripts/README.md`. The CLI above is the supported front door.
+
+### Embeddings (optional but on by default)
+
+Semantic evidence ranking expects a local [Ollama](https://ollama.com) server. Install Ollama, run `ollama serve`, and pull the expected model: `ollama pull nomic-embed-text-v2-moe` (served at `http://localhost:11434`). To run without it, set `CCE_EMBEDDING_ENABLED=false` in `.env` -- discovery falls back to keyword ranking.
 
 ## Configuration
 
-- **Policies:** `policies/` -- YAML source policies (domain rules, reputation, recency). See `docs/internal/policy-authoring.md`.
+Precedence: environment variables > optional YAML config file > built-in defaults. See [docs/configuration.md](docs/configuration.md) for the full guide -- every environment variable, the YAML directories, and the Ollama setup in long form.
+
+- **Policies:** `policies/` -- YAML source policies (domain rules, reputation, recency). See `docs/internal/policy-authoring.md` (internal -- not in public clones).
 - **Taxonomies:** `taxonomies/` -- YAML taxonomy definitions for evidence classification.
 - **Path configs:** `path_configs/` -- YAML output path definitions (tone, structure, depth per path).
-- **Engine config:** Environment variables or `config.yaml`. See `src/cce/config/types.py`.
+- **Engine config:** Environment variables or a YAML config file passed via `--config`. See `docs/configuration.md` and `.env.example`.

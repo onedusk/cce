@@ -14,6 +14,8 @@ from cce.models.job import JobStage, JobStatus, StageRecord
 from cce.orchestrator.pipeline import _terminal_decisions
 from cce.verification.gate import GateDecision
 
+pytestmark = pytest.mark.unit
+
 # ---------------------------------------------------------------------------
 # Helper: simulate the status-determination logic from Pipeline.run
 # ---------------------------------------------------------------------------

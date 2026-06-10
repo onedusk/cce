@@ -14,10 +14,10 @@ repos:
     # bump both together.
     rev: v0.15.10
     hooks:
-      # Lint — mirrors CI's `uv run ruff check src/`.
+      # Lint — mirrors CI's `uv run ruff check src/ tests/`.
       - id: ruff
         args: [--fix]
-        files: ^src/
-      # Format — mirrors CI's `uv run ruff format --check src/`.
+        files: ^(src|tests)/
+      # Format — mirrors CI's `uv run ruff format --check src/ tests/`.
       - id: ruff-format
-        files: ^src/
+        files: ^(src|tests)/

@@ -5,7 +5,9 @@ A CurationRequest is the only required input to run the engine.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import ClassVar
+
+from pydantic import BaseModel, Field, field_validator
 
 
 class CurationConstraints(BaseModel):
@@ -32,6 +34,8 @@ class CurationConstraints(BaseModel):
 
 class CurationRequest(BaseModel):
     """Input contract for a curation run."""
+
+    MAX_SUBTOPIC_LENGTH: ClassVar[int] = 200
 
     topic: str = Field(
         ..., min_length=1, max_length=500, description="Primary topic to curate"
@@ -69,5 +73,15 @@ class CurationRequest(BaseModel):
         pattern=r"^(low|medium|high)$",
         description="Maps to quality gate thresholds: low, medium, high",
     )
+
+    @field_validator("subtopics")
+    @classmethod
+    def _subtopic_elements_bounded(cls, v: list[str]) -> list[str]:
+        for s in v:
+            if len(s) > cls.MAX_SUBTOPIC_LENGTH:
+                raise ValueError(
+                    f"subtopic exceeds {cls.MAX_SUBTOPIC_LENGTH} chars: {s[:50]}…"
+                )
+        return v
 
     model_config = {"frozen": True}

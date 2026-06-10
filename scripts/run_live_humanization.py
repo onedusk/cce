@@ -13,7 +13,7 @@ Usage:
 After the run completes, re-score the published MDX to compare WRITER scores
 (visible in JobStage.SCORE records, captured below) vs FINAL scores (after
 the editor's rewrite):
-    uv run python scripts/run_score_sweep.py --dir output/mdx
+    uv run python scripts/research/run_score_sweep.py --dir output/mdx
 """
 
 from __future__ import annotations

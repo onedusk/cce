@@ -18,6 +18,7 @@ from tests.conftest import (
     make_engine_config,
     make_source_policy,
 )
+from tests.test_api.conftest import wait_for_job_status
 from tests.test_orchestrator.conftest import (
     llm as make_llm,
 )
@@ -76,25 +77,6 @@ async def _make_lifecycle_app(
     return app, job_store, evidence_store
 
 
-async def _poll_until(
-    client: httpx.AsyncClient,
-    job_id: str,
-    terminal_statuses: set[str],
-    timeout: float = 5.0,
-) -> dict:
-    """Poll GET /jobs/{id} until status is terminal or timeout."""
-    deadline = asyncio.get_event_loop().time() + timeout
-    while asyncio.get_event_loop().time() < deadline:
-        resp = await client.get(f"/v1/curate/jobs/{job_id}")
-        data = resp.json()["data"]
-        if data["status"] in terminal_statuses:
-            return data
-        await asyncio.sleep(0.05)
-    raise TimeoutError(
-        f"Job {job_id} did not reach {terminal_statuses} within {timeout}s"
-    )
-
-
 # ---------------------------------------------------------------------------
 # Lifecycle tests
 # ---------------------------------------------------------------------------
@@ -121,7 +103,7 @@ async def test_full_lifecycle_post_to_package(tmp_path: Path):
             job_id = resp.json()["data"]["id"]
 
             # Poll until complete
-            data = await _poll_until(client, job_id, {"completed", "failed"})
+            data = await wait_for_job_status(client, job_id, {"completed", "failed"})
             assert data["status"] == "completed"
 
             # Get package
@@ -182,7 +164,10 @@ async def test_delete_running_job(tmp_path: Path):
                 },
             )
             job_id = resp.json()["data"]["id"]
-            await asyncio.sleep(0.05)
+            # Wait until the background task is actually running — poll-with-
+            # deadline, not a fixed sleep (T-02.01). The slow LLM then keeps
+            # the job running until we delete it.
+            await wait_for_job_status(client, job_id, {"running"})
 
             # Delete while running
             resp = await client.delete(f"/v1/curate/jobs/{job_id}")
@@ -218,7 +203,7 @@ async def test_retry_completed_job(tmp_path: Path):
                 },
             )
             job_id = resp.json()["data"]["id"]
-            data = await _poll_until(client, job_id, {"completed", "failed"})
+            data = await wait_for_job_status(client, job_id, {"completed", "failed"})
             assert data["status"] == "completed"
 
             # Retry
@@ -226,7 +211,7 @@ async def test_retry_completed_job(tmp_path: Path):
             assert resp.status_code == 202
 
             # Poll again
-            data = await _poll_until(client, job_id, {"completed", "failed"})
+            data = await wait_for_job_status(client, job_id, {"completed", "failed"})
             assert data["status"] == "completed"
 
     await job_store.close()
@@ -298,7 +283,7 @@ async def test_pipeline_error_sets_failed_status(tmp_path: Path):
             )
             job_id = resp.json()["data"]["id"]
 
-            data = await _poll_until(client, job_id, {"failed", "completed"})
+            data = await wait_for_job_status(client, job_id, {"failed", "completed"})
             assert data["status"] == "failed"
             assert data["error"] is not None
             assert "crashed" in data["error"]["message"].lower()

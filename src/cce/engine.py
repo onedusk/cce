@@ -23,7 +23,9 @@ from pathlib import Path
 
 import httpx
 
-from cce.config.loader import load_config
+from cce.components import build_pipeline
+from cce.config.loader import load_config, validate_required_keys
+from cce.config.registry import ConfigRegistry
 from cce.config.types import EngineConfig
 from cce.evidence.sqlite import SQLiteEvidenceStore
 from cce.jobs.store import JobStore
@@ -31,7 +33,6 @@ from cce.models.job import Job, JobError, JobStage, JobStatus
 from cce.models.package import PublishPackage
 from cce.models.request import CurationRequest
 from cce.orchestrator.pipeline import Pipeline
-from cce.policy.loader import load_policies
 from cce.policy.types import SourcePolicy
 
 logger = logging.getLogger(__name__)
@@ -231,10 +232,27 @@ class CurationEngine:
         """Create an in-process engine instance.
 
         Loads config, builds all components, returns ready-to-use engine.
+        ``policies_dir`` / ``taxonomies_dir`` / ``path_configs_path`` feed
+        ``ConfigRegistry.load`` (M06) — the registry owns path selection.
         """
         engine = cls()
         engine._mode = "embedded"
-        engine._config = load_config(config_path)
+
+        # Validate required keys BEFORE the registry loads optional surfaces
+        # (markers, taxonomy): a missing API key must surface first, not be
+        # masked by a markers error (final-review finding 3, 2026-06-09).
+        config = load_config(Path(config_path) if config_path else None)
+        validate_required_keys(config)
+
+        # One registry owns every configuration surface (ADR-002, M06).
+        registry = ConfigRegistry.load(
+            Path("."),
+            engine=config,
+            policies_dir=Path(policies_dir),
+            taxonomies_dir=Path(taxonomies_dir),
+            path_configs_path=Path(path_configs_path) if path_configs_path else None,
+        )
+        engine._config = registry.engine
 
         # Open stores
         engine._job_store = JobStore(db_path=engine._config.evidence_store.sqlite_path)
@@ -243,15 +261,12 @@ class CurationEngine:
         engine._evidence_store = SQLiteEvidenceStore(engine._config.evidence_store)
         await engine._evidence_store.connect()
 
-        # Build pipeline (reuses app.py pattern)
-        from cce.api.app import _build_pipeline
+        # Build pipeline through the shared component factory (M05, ADR-001)
+        engine._pipeline = build_pipeline(
+            engine._config, registry, engine._evidence_store
+        )
 
-        engine._pipeline = _build_pipeline(engine._config, engine._evidence_store)
-
-        # Load policies
-        policies_path = Path(policies_dir)
-        if policies_path.exists():
-            engine._policies = load_policies(policies_path)
+        engine._policies = registry.policies
 
         engine._semaphore = asyncio.Semaphore(engine._config.api.max_concurrent_jobs)
 
@@ -262,14 +277,26 @@ class CurationEngine:
         return engine
 
     @classmethod
-    def remote(cls, base_url: str, api_key: str) -> CurationEngine:
-        """Create an HTTP client to a running CCE API server."""
+    def remote(
+        cls,
+        base_url: str,
+        api_key: str,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> CurationEngine:
+        """Create an HTTP client to a running CCE API server.
+
+        ``transport`` is a test seam (audit-2026-06-09 T-04.01): pass
+        ``httpx.ASGITransport(app=...)`` to drive an in-process ASGI app.
+        The default (None) preserves real HTTP transport.
+        """
         engine = cls()
         engine._mode = "remote"
         engine._http_client = httpx.AsyncClient(
             base_url=base_url,
             headers={"Authorization": f"Bearer {api_key}"},
             timeout=30.0,
+            transport=transport,
         )
         return engine
 

@@ -47,12 +47,24 @@ ignore = ["E501"]  # line length handled by formatter; LLM prompts are intention
 [tool.ruff.lint.isort]
 known-first-party = ["cce"]
 
+[tool.coverage.run]
+branch = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-# Coverage floor derived from observed coverage on 2026-04-16 post-M05
-# (92.20% - 2 = 90 per ADR-007 in audit-2026-04-14/stage-1-design-pack.md).
-addopts = "--cov=src/cce --cov-report=term-missing:skip-covered --cov-fail-under=90"
+# Coverage floor recalibrated for *branch* coverage on 2026-06-09 per ADR-004
+# (audit-2026-06-09), step 2 of 2. Branch coverage is a stricter metric than
+# the statement coverage measured before: it also requires each conditional's
+# True/False arms to be exercised. Step 1 (M02) flipped branch coverage on
+# with a transitional floor of 89 (91.58% observed). Step 2 (M04) landed the
+# operational-shell tests — remote mode via ASGITransport, crash->FAILED,
+# the real lifespan shutdown handler, the real embedded() factory, and CLI
+# batch/emit-mdx/key-revoke — raising observed branch coverage to 94.26%
+# (2026-06-09), so the final floor is floor(observed) - 2 = 92. Per-module:
+# engine.py is at 95% branch, meeting the >= 85% PRD success criterion.
+# Replaces the old statement floor of 90 (ADR-007, audit-2026-04-14).
+addopts = "--cov=src/cce --cov-report=term-missing:skip-covered --cov-fail-under=92"
 markers = [
     "unit: Fast tests with no I/O or external dependencies",
     "integration: Tests using real I/O (SQLite, filesystem) with mocked external services",

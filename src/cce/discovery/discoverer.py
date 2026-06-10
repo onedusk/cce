@@ -12,6 +12,7 @@ import hashlib
 import logging
 import math
 import re
+import time
 import uuid
 from collections import defaultdict
 from datetime import UTC, datetime
@@ -21,7 +22,7 @@ from cce.config.types import CrawlConfig
 from cce.discovery.adapters.base import CrawlAdapter, CrawlRequest, CrawlResult
 from cce.discovery.embeddings import EmbeddingProvider, EmbeddingUnavailableError
 from cce.evidence.store import EvidenceStore
-from cce.models.evidence import Evidence, SourceQuality
+from cce.models.evidence import DiscoveryResult, Evidence, SourceQuality
 from cce.models.request import CurationConstraints, CurationRequest
 from cce.policy.types import ReputationRule, SourcePolicy
 
@@ -31,7 +32,7 @@ logger = logging.getLogger(__name__)
 # package (filtering.py, ranking.py, dispatcher.py) before Phase 4 adds
 # more complexity here. Current single-file size is at the upper bound
 # of comfortable scope (~700 LOC post-sprint).
-# See docs/decompose/audit-2026-04-14/audit-2026-04-14.md §M2.
+# See docs/internal/improvement-opportunities-2026-06-09.md §0.2 (audit §M2).
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -68,7 +69,6 @@ class Discoverer:
         self._embedding_batch_size = embedding_batch_size
         self._embedding_concurrency = max(1, embedding_concurrency)
         self._evidence_store = evidence_store
-        self.last_discover_metrics: dict = {}  # Metrics from most recent discover() call
 
     async def _split_fresh_and_reusable(
         self, candidates: list[str]
@@ -100,7 +100,7 @@ class Discoverer:
         self,
         request: CurationRequest,
         policy: SourcePolicy,
-    ) -> list[Evidence]:
+    ) -> DiscoveryResult:
         """Run the full discovery pipeline for a curation request.
 
         1. Build search queries from the request topic + subtopics
@@ -108,40 +108,17 @@ class Discoverer:
         3. Filter URLs against the source policy
         4. Crawl the filtered URLs
         5. Extract and normalize into Evidence objects
+
+        Returns a DiscoveryResult carrying the evidence plus crawl metrics
+        (finding 1.2, ADR-005 — replaces the mutable per-instance metrics
+        side-channel).
         """
-        # Step 1: Build search queries
-        queries = self._build_queries(request)
-        logger.info(
-            "Discovery: %d search queries for topic '%s'", len(queries), request.topic
-        )
-
-        # Step 2: Search for candidate URLs
-        candidate_urls: list[str] = []
-        for query in queries:
-            try:
-                urls = await self._adapter.search(query, limit=SEARCH_RESULT_LIMIT)
-                candidate_urls.extend(urls)
-            except NotImplementedError:
-                logger.info(
-                    "Adapter does not support search, skipping query: %s", query
-                )
-
-        # Add any seed domains from constraints as fallback
-        if request.constraints and request.constraints.domains_allow:
-            for domain in request.constraints.domains_allow:
-                candidate_urls.append(f"https://{domain}")
-
-        # Deduplicate
-        candidate_urls = list(dict.fromkeys(candidate_urls))
-        logger.info(
-            "Discovery: %d candidate URLs before policy filter", len(candidate_urls)
-        )
+        # Steps 1-2: Build search queries and collect candidate URLs
+        candidate_urls = await self._search_candidates(request)
 
         # Step 3: Filter against policy
         effective_policy = self._resolve_overrides(request.topic, policy)
-        filtered_urls = [
-            url for url in candidate_urls if self._passes_policy(url, effective_policy)
-        ]
+        filtered_urls = self._apply_policy_filters(candidate_urls, effective_policy)
 
         # Step 3b: Split into fresh URLs (need crawling) and reusable stored evidence
         # from previously-indexed URLs (audit P3). Happens before the max-sources cap
@@ -179,13 +156,121 @@ class Discoverer:
 
         if not fresh_urls and not reusable_evidence:
             logger.warning("Discovery: no URLs survived policy filter")
-            self.last_discover_metrics = {
-                "crawl_success": 0,
-                "crawl_failed": 0,
-                "crawl_failure_rate": 0.0,
-            }
-            return []
+            return DiscoveryResult(
+                evidence=[],
+                metrics={
+                    "crawl_success": 0,
+                    "crawl_failed": 0,
+                    "crawl_failure_rate": 0.0,
+                },
+            )
 
+        # Steps 4-5: Crawl fresh URLs, extract + filter evidence, merge reusable
+        evidence, metrics = await self._crawl_and_extract(
+            fresh_urls, reusable_evidence, effective_policy, request.constraints
+        )
+
+        # Step 5.5: Compute embedding relevance scores (if available)
+        relevance_scores: dict[str, float] | None = None
+        if self._embedding is not None and evidence:
+            try:
+                relevance_scores = await self._compute_relevance_scores(
+                    evidence,
+                    request.topic,
+                    request.subtopics,
+                )
+                logger.info(
+                    "Embedding ranking: scored %d evidence objects",
+                    len(relevance_scores),
+                )
+            except EmbeddingUnavailableError as e:
+                # PDR-002: name the provider, where it was expected, and the
+                # off switch, so the operator can either fix Ollama or disable
+                # embedding ranking deliberately.
+                base_url = getattr(
+                    getattr(self._embedding, "_config", None), "base_url", None
+                )
+                logger.warning(
+                    "Embedding unavailable (Ollama at %s), falling back to "
+                    "length-based ranking: %s. If embeddings are intentionally "
+                    "off, set CCE_EMBEDDING_ENABLED=false to disable embedding "
+                    "ranking and silence this warning.",
+                    base_url or "unknown base URL",
+                    e,
+                )
+                relevance_scores = None
+
+        # Step 6: Cap evidence volume
+        before_cap = len(evidence)
+        evidence = self._cap_evidence(
+            evidence,
+            max_per_source=self._config.max_excerpts_per_source,
+            max_total=self._config.max_evidence_total,
+            prefer_recent=effective_policy.recency.prefer_recent,
+            relevance_scores=relevance_scores,
+        )
+
+        # Every crawl result is tallied as exactly one success or failure, so
+        # the sum equals the page count previously taken from len(crawl_results).
+        pages_crawled = int(metrics["crawl_success"]) + int(metrics["crawl_failed"])
+        logger.info(
+            "Discovery complete: %d evidence objects from %d pages (%d before cap)",
+            len(evidence),
+            pages_crawled,
+            before_cap,
+        )
+        return DiscoveryResult(evidence=evidence, metrics=metrics)
+
+    async def _search_candidates(self, request: CurationRequest) -> list[str]:
+        """Build search queries and collect deduplicated candidate URLs."""
+        # Step 1: Build search queries
+        queries = self._build_queries(request)
+        logger.info(
+            "Discovery: %d search queries for topic '%s'", len(queries), request.topic
+        )
+
+        # Step 2: Search for candidate URLs
+        candidate_urls: list[str] = []
+        for query in queries:
+            try:
+                urls = await self._adapter.search(query, limit=SEARCH_RESULT_LIMIT)
+                candidate_urls.extend(urls)
+            except NotImplementedError:
+                logger.info(
+                    "Adapter does not support search, skipping query: %s", query
+                )
+
+        # Add any seed domains from constraints as fallback
+        if request.constraints and request.constraints.domains_allow:
+            for domain in request.constraints.domains_allow:
+                candidate_urls.append(f"https://{domain}")
+
+        # Deduplicate
+        candidate_urls = list(dict.fromkeys(candidate_urls))
+        logger.info(
+            "Discovery: %d candidate URLs before policy filter", len(candidate_urls)
+        )
+        return candidate_urls
+
+    def _apply_policy_filters(
+        self, candidate_urls: list[str], policy: SourcePolicy
+    ) -> list[str]:
+        """Drop candidate URLs the (override-resolved) source policy rejects."""
+        return [url for url in candidate_urls if self._passes_policy(url, policy)]
+
+    async def _crawl_and_extract(
+        self,
+        fresh_urls: list[str],
+        reusable_evidence: list[Evidence],
+        effective_policy: SourcePolicy,
+        constraints: CurationConstraints | None,
+    ) -> tuple[list[Evidence], dict[str, int | float]]:
+        """Crawl fresh URLs, extract + filter evidence, merge reusable rows.
+
+        Returns ``(evidence, metrics)`` where metrics carries the
+        crawl_success / crawl_failed / crawl_failure_rate keys previously
+        stashed on the instance side-channel (finding 1.2).
+        """
         # Step 4: Crawl fresh URLs (skip entirely if there are none to crawl)
         crawl_results: list[CrawlResult] = []
         if fresh_urls:
@@ -214,9 +299,7 @@ class Discoverer:
             crawl_success += 1
             extracted = self._extract_evidence(result, effective_policy)
             for ev in extracted:
-                if not self._passes_date_filter(
-                    ev, effective_policy, request.constraints
-                ):
+                if not self._passes_date_filter(ev, effective_policy, constraints):
                     filtered_date += 1
                     continue
                 if not self._passes_reputation_filter(ev, effective_policy.reputation):
@@ -243,7 +326,7 @@ class Discoverer:
                 total_crawls,
                 failure_rate * 100,
             )
-        self.last_discover_metrics = {
+        metrics: dict[str, int | float] = {
             "crawl_success": crawl_success,
             "crawl_failed": crawl_failed,
             "crawl_failure_rate": round(failure_rate, 2),
@@ -256,42 +339,7 @@ class Discoverer:
                 filtered_reputation,
             )
 
-        # Step 5.5: Compute embedding relevance scores (if available)
-        relevance_scores: dict[str, float] | None = None
-        if self._embedding is not None and evidence:
-            try:
-                relevance_scores = await self._compute_relevance_scores(
-                    evidence,
-                    request.topic,
-                    request.subtopics,
-                )
-                logger.info(
-                    "Embedding ranking: scored %d evidence objects",
-                    len(relevance_scores),
-                )
-            except EmbeddingUnavailableError as e:
-                logger.warning(
-                    "Embedding unavailable, falling back to length-based ranking: %s", e
-                )
-                relevance_scores = None
-
-        # Step 6: Cap evidence volume
-        before_cap = len(evidence)
-        evidence = self._cap_evidence(
-            evidence,
-            max_per_source=self._config.max_excerpts_per_source,
-            max_total=self._config.max_evidence_total,
-            prefer_recent=effective_policy.recency.prefer_recent,
-            relevance_scores=relevance_scores,
-        )
-
-        logger.info(
-            "Discovery complete: %d evidence objects from %d pages (%d before cap)",
-            len(evidence),
-            len(crawl_results),
-            before_cap,
-        )
-        return evidence
+        return evidence, metrics
 
     # -- Query building --
 
@@ -445,7 +493,20 @@ class Discoverer:
                 result = await embedder.embed(batch)
                 return result.vectors
 
+        # Finding 2.3: batch timing visibility. The spec sketched
+        # asyncio.get_event_loop().time(); time.monotonic() is the modern
+        # equivalent (get_event_loop() outside a coroutine context is
+        # deprecated) and measures the same monotonic clock.
+        start = time.monotonic()
         per_batch = await asyncio.gather(*[_one(b) for b in batches])
+        elapsed = time.monotonic() - start
+        logger.info(
+            "Embedded %d texts in %d batches (concurrency=%d): %.2fs",
+            len(texts),
+            len(batches),
+            self._embedding_concurrency,
+            elapsed,
+        )
         return [v for group in per_batch for v in group]
 
     async def _compute_relevance_scores(

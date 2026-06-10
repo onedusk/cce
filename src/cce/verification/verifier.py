@@ -150,6 +150,14 @@ class VerificationReport:
         """
         passing = self.supported + self.gaps_acknowledged
         ratio = passing / max(1, self.total_claims)
+        if ratio > 1.0:
+            # T-07.05: surface the inconsistency instead of clamping silently.
+            logger.warning(
+                "Verifier returned inconsistent counts: supported=%d gaps=%d total=%d",
+                self.supported,
+                self.gaps_acknowledged,
+                self.total_claims,
+            )
         return min(1.0, ratio)
 
 

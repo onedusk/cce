@@ -600,7 +600,6 @@ def test_extract_evidence_published_at_parsing():
 # ===========================================================================
 
 
-@pytest.mark.integration
 async def test_discover_full_flow():
     from tests.conftest import MockCrawlAdapter
 
@@ -628,7 +627,7 @@ async def test_discover_full_flow():
     request = make_curation_request(topic="test topic")
     policy = make_source_policy()
 
-    evidence = await discoverer.discover(request, policy)
+    evidence = (await discoverer.discover(request, policy)).evidence
 
     assert len(evidence) >= 2
     urls = {ev.url for ev in evidence}
@@ -639,7 +638,6 @@ async def test_discover_full_flow():
         assert ev.source_quality is not None
 
 
-@pytest.mark.integration
 async def test_discover_no_urls_after_filter():
     from tests.conftest import MockCrawlAdapter
 
@@ -655,11 +653,10 @@ async def test_discover_no_urls_after_filter():
     request = make_curation_request(topic="test topic")
     policy = make_source_policy(domains_deny=["blocked.com"])
 
-    evidence = await discoverer.discover(request, policy)
+    evidence = (await discoverer.discover(request, policy)).evidence
     assert evidence == []
 
 
-@pytest.mark.integration
 async def test_discover_empty_crawl_skipped():
     from tests.conftest import MockCrawlAdapter
 
@@ -675,11 +672,10 @@ async def test_discover_empty_crawl_skipped():
     request = make_curation_request(topic="test topic")
     policy = make_source_policy()
 
-    evidence = await discoverer.discover(request, policy)
+    evidence = (await discoverer.discover(request, policy)).evidence
     assert evidence == []
 
 
-@pytest.mark.integration
 async def test_discover_max_sources_cap():
     from tests.conftest import MockCrawlAdapter
 
@@ -696,13 +692,12 @@ async def test_discover_max_sources_cap():
     request = make_curation_request(topic="test topic")
     policy = make_source_policy(max_sources_per_run=2)
 
-    evidence = await discoverer.discover(request, policy)
+    evidence = (await discoverer.discover(request, policy)).evidence
     # Only 2 sources should be crawled — each has extractable content, so exactly 2 URLs
     evidence_urls = {ev.url for ev in evidence}
     assert len(evidence_urls) == 2
 
 
-@pytest.mark.integration
 async def test_discover_dedup_by_hash():
     from tests.conftest import MockCrawlAdapter
 
@@ -722,13 +717,12 @@ async def test_discover_dedup_by_hash():
     request = make_curation_request(topic="test topic")
     policy = make_source_policy()
 
-    evidence = await discoverer.discover(request, policy)
+    evidence = (await discoverer.discover(request, policy)).evidence
     # Same content → same hash → deduped to 1
     hashes = [ev.excerpt_hash for ev in evidence]
     assert len(hashes) == len(set(hashes))
 
 
-@pytest.mark.integration
 async def test_discover_filters_old_and_marketing_evidence():
     """Evidence that is too old or marketing-flagged is filtered out post-extraction."""
     from tests.conftest import MockCrawlAdapter
@@ -767,7 +761,7 @@ async def test_discover_filters_old_and_marketing_evidence():
         reputation=ReputationRule(block_marketing=True),
     )
 
-    evidence = await discoverer.discover(request, policy)
+    evidence = (await discoverer.discover(request, policy)).evidence
 
     urls = {ev.url for ev in evidence}
     assert "https://good.org/page" in urls
@@ -872,7 +866,6 @@ def test_cap_evidence_empty_relevance_scores_degrades():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.integration
 async def test_discover_with_embedding_provider():
     """discover() calls embed and uses relevance scores for ranking."""
     from tests.conftest import MockCrawlAdapter, MockEmbeddingProvider
@@ -895,7 +888,7 @@ async def test_discover_with_embedding_provider():
     request = make_curation_request(topic="test topic")
     policy = make_source_policy()
 
-    evidence = await discoverer.discover(request, policy)
+    evidence = (await discoverer.discover(request, policy)).evidence
 
     assert len(evidence) >= 1
     # Embedding provider should have been called once
@@ -904,7 +897,6 @@ async def test_discover_with_embedding_provider():
     assert embedding.calls[0][0] == "test topic"
 
 
-@pytest.mark.integration
 async def test_discover_embedding_fallback_on_failure():
     """discover() falls back to length-based ranking when embeddings fail."""
     from tests.conftest import MockCrawlAdapter, MockEmbeddingProvider
@@ -928,11 +920,48 @@ async def test_discover_embedding_fallback_on_failure():
     policy = make_source_policy()
 
     # Should not raise — falls back gracefully
-    evidence = await discoverer.discover(request, policy)
+    evidence = (await discoverer.discover(request, policy)).evidence
     assert len(evidence) >= 1
 
 
-@pytest.mark.integration
+async def test_discover_embedding_failure_warning_names_ollama_and_env_flag(caplog):
+    """PDR-002 (T-07.01): the fallback warning must tell the operator what
+    was down (Ollama + base URL when known) and how to silence the fallback
+    deliberately (CCE_EMBEDDING_ENABLED=false)."""
+    import logging
+
+    from tests.conftest import MockCrawlAdapter, MockEmbeddingProvider
+
+    adapter = MockCrawlAdapter(
+        search_map={"test topic": ["https://example.com/page"]},
+        url_map={
+            "https://example.com/page": make_crawl_result(
+                url="https://example.com/page",
+                markdown="Content about the test topic with enough words for extraction purposes.",
+            ),
+        },
+    )
+    discoverer = Discoverer(
+        adapter=adapter,
+        config=CrawlConfig(api_key="test"),
+        embedding_provider=MockEmbeddingProvider(fail=True),
+    )
+    request = make_curation_request(topic="test topic")
+    policy = make_source_policy()
+
+    with caplog.at_level(logging.WARNING, logger="cce.discovery.discoverer"):
+        result = await discoverer.discover(request, policy)
+
+    assert len(result.evidence) >= 1  # length-based fallback still ran
+    warning = next(
+        r.getMessage()
+        for r in caplog.records
+        if "Embedding unavailable" in r.getMessage()
+    )
+    assert "Ollama" in warning
+    assert "CCE_EMBEDDING_ENABLED=false" in warning
+
+
 async def test_discover_no_embedding_provider():
     """discover() with embedding_provider=None behaves identically to before."""
     from tests.conftest import MockCrawlAdapter
@@ -954,5 +983,5 @@ async def test_discover_no_embedding_provider():
     request = make_curation_request(topic="test topic")
     policy = make_source_policy()
 
-    evidence = await discoverer.discover(request, policy)
+    evidence = (await discoverer.discover(request, policy)).evidence
     assert len(evidence) >= 1

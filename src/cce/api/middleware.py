@@ -7,11 +7,36 @@ import logging
 import time
 import uuid
 
+from fastapi import FastAPI
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
+
+from cce.api.schemas import error_envelope
 
 logger = logging.getLogger(__name__)
+
+MAX_BODY_BYTES = 1_048_576  # 1 MiB — finding 5.1
+
+
+def install_body_size_limit(app: FastAPI, max_bytes: int = MAX_BODY_BYTES) -> None:
+    """Reject oversized requests before parsing (413). Content-Length
+    check only — chunked bodies are bounded downstream by uvicorn's
+    h11 max-incomplete-size; documented limitation, acceptable pre-1.0."""
+
+    @app.middleware("http")
+    async def _limit_body(request: Request, call_next):  # type: ignore[no-untyped-def]
+        declared = request.headers.get("content-length")
+        if declared is not None and int(declared) > max_bytes:
+            return JSONResponse(
+                status_code=413,
+                content=error_envelope(
+                    code="payload_too_large",
+                    message=f"Request body exceeds {max_bytes} bytes",
+                    request_id=get_request_id(),
+                ).model_dump(mode="json"),
+            )
+        return await call_next(request)
 
 
 # --- Request-ID correlation (audit U1, ADR-003) ---------------------------

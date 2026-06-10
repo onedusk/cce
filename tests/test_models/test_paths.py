@@ -5,6 +5,8 @@ from pydantic import ValidationError
 
 from cce.models.paths import PathConfig
 
+pytestmark = pytest.mark.unit
+
 
 class TestPathConfig:
     def test_defaults(self):

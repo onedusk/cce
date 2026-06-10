@@ -13,9 +13,9 @@ Output:
 Cost: $0. No network, no LLM. Pure Python text analysis.
 
 Usage:
-    uv run python scripts/run_score_sweep.py
-    uv run python scripts/run_score_sweep.py --dir output/mdx   # override default
-    uv run python scripts/run_score_sweep.py --csv scores.csv   # also emit CSV
+    uv run python scripts/research/run_score_sweep.py
+    uv run python scripts/research/run_score_sweep.py --dir output/mdx   # override default
+    uv run python scripts/research/run_score_sweep.py --csv scores.csv   # also emit CSV
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from cce.config.types import HumanizationThresholds
 from cce.models.style import StyleScores
 from cce.synthesis.scoring import Scorer
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent
 
 # MDX emitter wraps citations as [^1], [^2], etc. Some older runs emit
 # [^?] placeholders when citation resolution failed. Strip both before

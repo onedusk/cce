@@ -12,6 +12,7 @@ from typing import Any, Generic, TypeVar
 from pydantic import BaseModel, Field
 
 from cce.models.job import Job
+from cce.models.request import CurationRequest
 
 T = TypeVar("T")
 
@@ -93,12 +94,19 @@ def error_envelope(
 
 
 class JobResponse(BaseModel):
-    """Job state as returned by the API."""
+    """Job state as returned by the API.
+
+    ``request`` carries the full CurationRequest (additive, audit-2026-06-09
+    T-04.01): remote-mode ``JobHandle.status()``/``retry()`` parse this
+    payload back into a ``Job``, which requires the request — without it the
+    parse fails validation. Do not remove.
+    """
 
     id: str
     status: str
     topic: str
     policy_id: str
+    request: CurationRequest
     stage: str | None = None
     progress: dict[str, int] | None = None
     created_at: datetime
@@ -185,6 +193,7 @@ def job_to_response(job: Job) -> JobResponse:
         status=job.status.value,
         topic=job.request.topic,
         policy_id=job.request.policy_id,
+        request=job.request,
         stage=job.stage.value if job.stage else None,
         progress=job.progress.model_dump() if job.progress else None,
         created_at=job.created_at,

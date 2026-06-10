@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Content Curation Engine",
-    "version": "0.1.0"
+    "version": "0.2.0"
   },
   "paths": {
     "/v1/curate/jobs": {
@@ -58,6 +58,11 @@
         "summary": "List Jobs",
         "description": "List jobs with optional filters and pagination.",
         "operationId": "list_jobs_v1_curate_jobs_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "status",
@@ -147,6 +152,11 @@
         "summary": "Get Job",
         "description": "Get job status.",
         "operationId": "get_job_v1_curate_jobs__job_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "job_id",
@@ -284,6 +294,11 @@
         "summary": "Get Package",
         "description": "Get the completed pipeline output for a job.",
         "operationId": "get_package_v1_curate_jobs__job_id__package_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "job_id",
@@ -325,8 +340,13 @@
           "evidence"
         ],
         "summary": "Get Evidence",
-        "description": "Get a single evidence object by ID.",
+        "description": "Get a single evidence object by ID. Requires auth (router-level).",
         "operationId": "get_evidence_v1_curate_evidence__evidence_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "evidence_id",
@@ -368,8 +388,13 @@
           "evidence"
         ],
         "summary": "Search Evidence",
-        "description": "Search evidence store with optional filters.",
+        "description": "Search evidence store with optional filters. Requires auth (router-level).",
         "operationId": "search_evidence_v1_curate_evidence_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "url",
@@ -502,13 +527,12 @@
           "error": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/ErrorBody"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Error"
+            ]
           },
           "meta": {
             "additionalProperties": true,
@@ -534,13 +558,12 @@
           "error": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/ErrorBody"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Error"
+            ]
           },
           "meta": {
             "additionalProperties": true,
@@ -566,13 +589,12 @@
           "error": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/ErrorBody"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Error"
+            ]
           },
           "meta": {
             "additionalProperties": true,
@@ -598,13 +620,12 @@
           "error": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/ErrorBody"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Error"
+            ]
           },
           "meta": {
             "additionalProperties": true,
@@ -632,13 +653,12 @@
           "error": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/ErrorBody"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Error"
+            ]
           },
           "meta": {
             "additionalProperties": true,
@@ -666,13 +686,12 @@
           "error": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/ErrorBody"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Error"
+            ]
           },
           "meta": {
             "additionalProperties": true,
@@ -682,6 +701,194 @@
         },
         "type": "object",
         "title": "APIEnvelope[list]"
+      },
+      "CurationConstraints": {
+        "properties": {
+          "date_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date From",
+            "description": "ISO date string, lower bound for source recency"
+          },
+          "date_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date To",
+            "description": "ISO date string, upper bound for source recency"
+          },
+          "domains_allow": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Domains Allow",
+            "description": "Only include sources from these domains"
+          },
+          "domains_deny": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Domains Deny",
+            "description": "Exclude sources from these domains"
+          },
+          "jurisdiction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Jurisdiction",
+            "description": "Legal/regulatory jurisdiction filter"
+          }
+        },
+        "type": "object",
+        "title": "CurationConstraints",
+        "description": "Filters applied to source discovery."
+      },
+      "CurationRequest": {
+        "properties": {
+          "topic": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Topic",
+            "description": "Primary topic to curate"
+          },
+          "subtopics": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "title": "Subtopics",
+            "description": "Optional subtopics to cover"
+          },
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 10,
+            "minItems": 1,
+            "title": "Paths",
+            "description": "Output paths to generate, drawn from registered PathConfig"
+          },
+          "audience": {
+            "type": "string",
+            "maxLength": 100,
+            "title": "Audience",
+            "description": "Target audience (free-form or enum per product)",
+            "default": "general"
+          },
+          "constraints": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CurationConstraints"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Discovery filters"
+          },
+          "policy_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Policy Id",
+            "description": "Which SourcePolicy config to use"
+          },
+          "taxonomy_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Taxonomy Id",
+            "description": "Which TaxonomyConfig to use (Phase 2, optional for Phase 1)"
+          },
+          "path_config_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path Config Id",
+            "description": "Which PathConfig to use (Phase 2, optional for Phase 1)"
+          },
+          "risk_profile": {
+            "type": "string",
+            "pattern": "^(low|medium|high)$",
+            "title": "Risk Profile",
+            "description": "Maps to quality gate thresholds: low, medium, high",
+            "default": "medium"
+          }
+        },
+        "type": "object",
+        "required": [
+          "topic",
+          "paths",
+          "policy_id"
+        ],
+        "title": "CurationRequest",
+        "description": "Input contract for a curation run."
+      },
+      "ErrorBody": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "title": "ErrorBody",
+        "description": "Structured error payload for APIEnvelope.error (audit U1).\n\nFields:\n  - ``code``: short machine-readable identifier clients can switch on\n    (e.g. ``\"not_found\"``, ``\"internal_error\"``).\n  - ``message``: optional human-readable detail.\n  - ``request_id``: correlation ID set by RequestIdMiddleware; absent\n    on synthetic envelopes constructed outside a request."
       },
       "HTTPValidationError": {
         "properties": {
@@ -847,6 +1054,9 @@
             "type": "string",
             "title": "Policy Id"
           },
+          "request": {
+            "$ref": "#/components/schemas/CurationRequest"
+          },
           "stage": {
             "anyOf": [
               {
@@ -913,11 +1123,12 @@
           "status",
           "topic",
           "policy_id",
+          "request",
           "created_at",
           "updated_at"
         ],
         "title": "JobResponse",
-        "description": "Job state as returned by the API."
+        "description": "Job state as returned by the API.\n\n``request`` carries the full CurationRequest (additive, audit-2026-06-09\nT-04.01): remote-mode ``JobHandle.status()``/``retry()`` parse this\npayload back into a ``Job``, which requires the request \u2014 without it the\nparse fails validation. Do not remove."
       },
       "MetaResponse": {
         "properties": {
