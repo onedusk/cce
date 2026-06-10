@@ -5,14 +5,14 @@ All notable changes to the Content Curation Engine (CCE).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — audit-2026-06-09 remediation (PR #2)
+## [0.3.0] — 2026-06-10
 
 Full remediation sprint from the 2026-06-09 codebase audit
 (`docs/internal/improvement-opportunities-2026-06-09.md`, local-only),
-implemented as 8 ordered milestone commits plus 2 review-fix commits on
-`feature/audit-2026-06-09`. Suggested bump on release: **minor (0.3.0)** —
-additive API schema change (`JobResponse.request`), new CLI commands and
-config surface, plus operator-facing validation tightening (noted below).
+implemented as 8 ordered milestone commits plus 2 review-fix commits,
+merged via PR #2. Minor bump: additive API schema change
+(`JobResponse.request`), new CLI commands and config surface, plus
+operator-facing validation tightening (noted below).
 Suite: 695 → **797 passed**; coverage measurement switched from statement
 to branch (floor 90 → 92, observed 94.71%).
 
