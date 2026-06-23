@@ -30,7 +30,14 @@ class LLMConfig(BaseModel):
         le=2.0,
         description="Lower = more deterministic. Writer and verifier may override.",
     )
-    max_tokens: int = Field(default=4096, description="Max tokens per LLM call")
+    max_tokens: int = Field(
+        default=8192,
+        description=(
+            "Max tokens per LLM call. 8192 (was 4096) — the writer's long "
+            "learn/explore essays wrapped in JSON exceed 4096 and truncate "
+            "mid-object, forcing the raw-markdown fallback."
+        ),
+    )
 
 
 class EvidenceStoreConfig(BaseModel):

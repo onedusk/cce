@@ -220,7 +220,10 @@ exists, and mark remaining gaps as [INSUFFICIENT EVIDENCE].
                 f"Required sections: {', '.join(path_config.section_requirements)}"
             )
         if path_config.max_words:
-            parts.append(f"Target length: ~{path_config.max_words} words")
+            parts.append(
+                f"Length ceiling: up to ~{path_config.max_words} words — match length to what "
+                f"the evidence supports; brevity is fine, do not pad to reach this number"
+            )
         if path_config.max_paragraphs:
             parts.append(
                 f"Structure: ~{path_config.max_paragraphs} substantive paragraphs"

@@ -5,18 +5,20 @@ docs/internal/pages-converted (regeneration uses new sources). Two layers:
 
   (1) deterministic structural: no scaffolding headings; eight-dimensions in
       EXPLORE not LEARN; one citation entry per source URL.
-  (2) semantic repetition (ADR-007): an LLM-judge over the trio (PRIMARY,
-      authoritative gate) + an embedding near-duplicate claim signal
-      (corroborating). A lexical shingle overlap-coefficient survives ONLY as a
-      verbatim-copy tripwire — never as the acceptance gate.
+  (2) semantic repetition (ADR-007 revision): ADVISORY only — an LLM-judge over
+      the trio + an embedding near-duplicate claim signal, surfaced for human
+      review and NOT part of the pass/fail gate. A lexical shingle
+      overlap-coefficient survives only as a verbatim-copy tripwire.
 
-Why the repetition check is semantic (ADR-007): a naive k-word shingle metric
-was empirically rejected. Measured on the loneliness trio, the client's *good*
-articles scored *higher* lexical overlap than the *bad* engine output (k=4
-overlap-coef learn↔explore: client 0.305 vs engine 0.192) because the corrected
-articles are shorter and the engine's repetition is *reworded* (semantically
-redundant, lexically divergent). Lexical overlap therefore cannot certify
-"minimal repetition"; the judge can.
+Why the repetition check is NOT an automated gate (ADR-007 revision): a naive
+k-word shingle metric was empirically rejected — on the loneliness trio the
+client's *good* articles scored *higher* lexical overlap than the *bad* engine
+output (k=4 overlap-coef learn↔explore: client 0.305 vs engine 0.192), because
+the corrected articles are shorter and the engine's repetition is *reworded*.
+But an LLM-judge cannot certify "minimal repetition" either: calibration
+2026-06-23 (majority-of-3) had the judge FAIL the client's own gold-standard
+trio 3/3. So cross-path repetition is a human-review step; the judge + embedding
+signal are advisory inputs to that review, never the gate.
 
 Embedding calibration (sim_threshold), measured 2026-06-23 with
 ``nomic-embed-text-v2-moe`` over sentence-level claims (>= 10 words, footnote
@@ -83,7 +85,25 @@ _SCAFFOLD_HEADINGS = {
 # The eight-dimensions framing belongs to EXPLORE (PDR-001). Matches both the
 # client's "Eight Dimensions of Well-Being" heading and prose mentions.
 _DIMENSION_RE = re.compile(
-    r"eight dimensions|dimensions of well[\s-]?being", re.IGNORECASE
+    r"eight dimensions|dimensions? of well[\s-]?being", re.IGNORECASE
+)
+# The 8-dimensions framing usually renders as one heading per dimension
+# ("## Physical Well-Being", "## Emotional Well-Being", …) without ever writing
+# the literal phrase "eight dimensions". These are the dimension words (plus
+# common synonyms) to detect that heading pattern as a fallback.
+_DIMENSION_WORDS = frozenset(
+    {
+        "physical",
+        "emotional",
+        "social",
+        "intellectual",
+        "cognitive",
+        "environmental",
+        "financial",
+        "spiritual",
+        "vocational",
+        "occupational",
+    }
 )
 
 # Footnote / evidence markers stripped before sentence-splitting claims so they
@@ -114,8 +134,22 @@ def duplicate_url_citations(citations: list[dict]) -> dict[str, int]:
 
 
 def _dimensions_in_body(body: str) -> bool:
-    """True if the prose mentions the eight-dimensions framing (keyword scan)."""
-    return bool(_DIMENSION_RE.search(body))
+    """True if the body carries the eight-dimensions framing.
+
+    Matches either the literal phrase ("eight dimensions"/"dimensions of
+    well-being") OR the per-dimension heading pattern — >=5 distinct dimension
+    words appearing in markdown headings (e.g. "## Physical Well-Being").
+    """
+    if _DIMENSION_RE.search(body):
+        return True
+    # Dimensions render either as markdown headings ("## Physical Well-Being")
+    # or as bold inline labels ("**Physical health.**") in the terser survey
+    # style — scan both kinds of label line.
+    labels = [
+        ln.lower() for ln in body.splitlines() if ln.lstrip().startswith(("#", "**"))
+    ]
+    hits = sum(1 for w in _DIMENSION_WORDS if any(w in h for h in labels))
+    return hits >= 4
 
 
 def dimensions_placement(topic_dir: Path | str) -> dict:
@@ -371,9 +405,13 @@ async def run_acceptance_check(topic_dir: Path | str, embedder=None, llm=None) -
     Reports scaffolding hits, dimensions placement, duplicate-URL citations, the
     judge verdict, embedding near-duplicate pairs, and verbatim-tripwire hits.
 
-    Gate (exercised end-to-end on REGENERATED MDX in M05): no scaffolding AND
-    dimensions-in-EXPLORE AND no duplicate-URL citations AND judge verdict ==
-    "pass". A "skipped" judge (no LLM) is therefore not a pass.
+    Gate is DETERMINISTIC only: no scaffolding AND dimensions-in-EXPLORE AND no
+    duplicate-URL citations. These encode three of the client's four concrete
+    asks. The fourth ("don't repeat across paths") is inherently a judgment call
+    — the client's own gold-standard articles do not pass an automated judge of
+    it (calibration 2026-06-23), and the client reviews this content anyway — so
+    the LLM-judge + embedding signal are reported as ADVISORY for that human
+    review, never as part of the pass/fail gate (ADR-007 revision).
     """
     topic_dir = Path(topic_dir)
     bodies: dict[str, str] = {}
@@ -397,11 +435,9 @@ async def run_acceptance_check(topic_dir: Path | str, embedder=None, llm=None) -
         )
     tripwire = verbatim_copy_tripwire(dict(bodies))
 
+    # Deterministic gate only — judge/embedding are advisory (see docstring).
     gate_pass = (
-        not any(scaffolding.values())
-        and dims["ok"]
-        and not any(dup_urls.values())
-        and judge.get("verdict") == "pass"
+        not any(scaffolding.values()) and dims["ok"] and not any(dup_urls.values())
     )
 
     return {

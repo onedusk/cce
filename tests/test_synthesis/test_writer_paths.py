@@ -61,7 +61,7 @@ class TestBuildPathAddendum:
     def test_includes_max_words(self):
         pc = _make_learn_config(max_words=3000)
         addendum = Writer._build_path_addendum(pc)
-        assert "Target length: ~3000 words" in addendum
+        assert "Length ceiling: up to ~3000 words" in addendum
 
     def test_includes_prompt_addendum(self):
         pc = _make_learn_config(prompt_addendum="Write calmly and clearly.")
@@ -80,7 +80,7 @@ class TestBuildPathAddendum:
         )
         addendum = Writer._build_path_addendum(pc)
         assert "Required sections" not in addendum
-        assert "Target length" not in addendum
+        assert "Length ceiling" not in addendum
 
     def test_max_paragraphs_in_addendum(self):
         pc = _make_learn_config(max_paragraphs=10)
