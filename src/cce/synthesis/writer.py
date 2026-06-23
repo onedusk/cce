@@ -91,6 +91,7 @@ class Writer:
         lineage: ContentLineage | None = None,
         evidence_block: str | None = None,
         ev_lookup: dict[str, Evidence] | None = None,
+        sibling_context: str | None = None,
     ) -> WriterOutput:
         """Produce a draft for one output path from the given evidence.
 
@@ -108,6 +109,13 @@ class Writer:
                 ``format_evidence_for_prompt`` call — the caller has already
                 paid that cost once for the whole run. None -> fall back to
                 computing it here (backward-compat for direct callers).
+            sibling_context: Optional digest of points already covered by
+                sibling paths written earlier in the same topic run (M03,
+                ADR-003). When set, the writer is told to build on rather than
+                re-explain those points; de-duplication is PROSE-level, not
+                citation-level — later paths may and should cite shared
+                sources. None -> omit the block entirely (first path / direct
+                callers).
         """
         if not evidence:
             logger.warning("Writer called with no evidence for path '%s'", path)
@@ -146,6 +154,18 @@ You have {len(evidence)} evidence excerpts to work with.
 === EVIDENCE START ===
 {evidence_block}
 === EVIDENCE END ===
+"""
+
+        if sibling_context:
+            user_prompt += f"""
+=== ALREADY COVERED BY SIBLING ARTICLES (do not re-explain) ===
+The reader will have read these companion articles. Do NOT re-explain or reword \
+the points below — add new framing, dimensions, or actions instead. You MAY and \
+SHOULD cite the same sources where they support your new points; the constraint is \
+on repeated PROSE, not on citations. Citing a shared source for a genuinely new \
+point is correct.
+{sibling_context}
+=== END SIBLING CONTEXT ===
 """
 
         if feedback:

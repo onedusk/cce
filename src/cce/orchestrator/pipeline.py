@@ -1,13 +1,14 @@
 """Pipeline orchestrator.
 
 Wires the core loop: discover -> store -> write -> verify -> gate -> (loop or publish).
-Phase 1 entry point. Single-threaded at the process level; per-path
-writer/verifier loops fan out concurrently via asyncio.gather (audit P1).
+Phase 1 entry point. Single-threaded at the process level; the per-path
+writer/verifier loops run sequentially in path order (learn -> explore -> apply)
+so each path receives a digest of its already-written siblings and builds on
+rather than re-explains them (M03, ADR-003).
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from collections.abc import Mapping
@@ -40,8 +41,8 @@ logger = logging.getLogger(__name__)
 
 
 # --- Token-usage helpers (audit P1) ---------------------------------------
-# Each per-path task owns its own dict to avoid contention during LLM calls;
-# the parent merges them after asyncio.gather returns.
+# Each per-path loop owns its own dict; the parent merges it back into the
+# job-level accumulator after the path finishes (sequential since M03).
 
 _TOKEN_KEYS: tuple[str, ...] = (
     "input_tokens",
@@ -149,6 +150,10 @@ def _terminal_decisions(
                 decisions.append(GateDecision.FAIL)
         return decisions
 
+    # Flat-stream fallback (``by_path is None``): no longer reached from the
+    # pipeline since M03 — _run_all_paths always builds and passes
+    # gate_results_by_path — but kept for direct/test callers that only hold the
+    # flat result stream.
     if not gate_results:
         # Every path silently produced no gate result — treat each as FAIL
         # so callers doing `all(d == PASS)` see the right answer (review F-2).
@@ -175,6 +180,36 @@ def _terminal_decisions(
     if len(decisions) < n_paths:
         decisions.extend([GateDecision.FAIL] * (n_paths - len(decisions)))
     return decisions
+
+
+def _build_sibling_digest(units: list[ContentUnit]) -> str:
+    """Compact digest of already-written sibling drafts, fed to the next path's writer.
+
+    Uses the claim text from each unit's evidence_map (already a structured list
+    of the claims the writer made) so the next path sees WHAT was covered without
+    re-ingesting full prose. Kept short — at most 25 claims per sibling — to bound
+    the added input-token cost (Stage 1 security plan, ADR-003).
+
+    Prose-level de-duplication only: the digest tells the next writer what NOT to
+    re-explain; it never touches citations or the evidence pool, so later paths
+    remain free to cite the same sources.
+    """
+    parts: list[str] = []
+    for u in units:
+        claims = [m.claim for m in u.evidence_map][:25]
+        if not claims:
+            # Fallback for the writer's degraded (non-JSON) parse path, which
+            # yields evidence_map=[]: use the draft's own section headings so a
+            # degraded sibling still signals what it covered.
+            claims = [
+                ln.lstrip("#").strip()
+                for ln in u.content.splitlines()
+                if ln.strip().startswith("#")
+            ][:25]
+        parts.append(
+            f"## From the '{u.path}' article:\n" + "\n".join(f"- {c}" for c in claims)
+        )
+    return "\n\n".join(parts)
 
 
 class Pipeline:
@@ -232,8 +267,8 @@ class Pipeline:
         job_logger = logging.LoggerAdapter(logger, extra={"job_id": job.id})
         job_logger.info("Pipeline run %s started for topic '%s'", run_id, request.topic)
 
-        # Token accumulator — parent dict; each path task gets its own local
-        # dict that is merged back after gather (see _run_all_paths).
+        # Token accumulator — parent dict; each path gets its own local dict
+        # that is merged back as the path finishes (see _run_all_paths).
         token_usage = _zero_tokens()
 
         # Resolve quality gate config for the risk profile
@@ -272,7 +307,7 @@ class Pipeline:
             # --- Stage 2: Store evidence ---
             ev_lookup = await self._store_evidence(evidence, job_logger)
 
-            # --- Stage 3: Write + Verify loop (per output path, run concurrently) ---
+            # --- Stage 3: Write + Verify loop (per output path, run sequentially) ---
             (
                 all_units,
                 all_gate_results,
@@ -316,15 +351,12 @@ class Pipeline:
             )
 
         except Exception as e:
-            # TaskGroup wraps failures in ExceptionGroup; unwrap to the first
-            # underlying exception so job.error.message stays readable.
-            inner = e
-            if isinstance(e, BaseExceptionGroup) and e.exceptions:
-                inner = e.exceptions[0]
-            job_logger.exception("Pipeline run %s failed: %s", run_id, inner)
+            # Paths now run sequentially (M03), so a failing path raises its
+            # exception directly — no grouped-exception unwrap needed.
+            job_logger.exception("Pipeline run %s failed: %s", run_id, e)
             return PipelineResult(
                 package=None,
-                job=self._update_job(job, JobStatus.FAILED, error_msg=str(inner)),
+                job=self._update_job(job, JobStatus.FAILED, error_msg=str(e)),
                 gate_results=[],
             )
 
@@ -512,8 +544,13 @@ class Pipeline:
         parent_logger: logging.Logger | logging.LoggerAdapter,
         ev_lookup: dict[str, Evidence],
         job_token_usage: Mapping[str, int] | None = None,
+        sibling_context: str | None = None,
     ) -> tuple[ContentUnit | None, list[GateResult], dict[str, int]]:
-        """Run one path's writer/verifier loop with a local token dict and child logger."""
+        """Run one path's writer/verifier loop with a local token dict and child logger.
+
+        ``sibling_context`` (M03) is threaded straight through to the writer so
+        this path builds on, rather than re-explains, the paths written before it.
+        """
         # LoggerAdapter doesn't expose .getChild on every Python version — reach
         # through to the underlying logger, then re-wrap to preserve any `extra`.
         if isinstance(parent_logger, logging.LoggerAdapter):
@@ -536,6 +573,7 @@ class Pipeline:
             token_usage=path_tokens,
             ev_lookup=ev_lookup,
             job_token_usage=job_token_usage,
+            sibling_context=sibling_context,
         )
         return unit, gate_results, path_tokens
 
@@ -551,16 +589,23 @@ class Pipeline:
         token_usage: dict[str, int],
         ev_lookup: dict[str, Evidence],
     ) -> tuple[list[ContentUnit], list[GateResult], dict[str, list[GateResult]]]:
-        """Fan per-path write-verify loops out concurrently (audit P1).
+        """Run per-path write-verify loops SEQUENTIALLY so each path sees its
+        siblings (M03, ADR-003).
 
-        Per-task token dicts are merged back into `token_usage` after gather.
-        A lock-protected completion counter drives in-progress job updates so
-        callers watching `job.progress` still see monotonically increasing
-        completion numbers even though paths finish out of submission order.
+        Replaces the prior parallel per-path fan-out (audit P1) with a serial
+        loop over ``request.paths`` (learn -> explore -> apply) to enable
+        cross-path de-duplication. Before each path a digest of written siblings
+        is built (``_build_sibling_digest``) and threaded into the writer prompt;
+        de-duplication is prose-level only, so citations and the shared evidence
+        pool are untouched.
 
-        Returns ``(units, flat gate results, gate results grouped by path)``;
-        the by-path mapping feeds the explicit (path, iteration) terminal-
-        decision grouping in ``_interpret_terminal_decisions`` (T-07.05).
+        Gate attribution is unaffected: results are still grouped explicitly in
+        ``gate_results_by_path``, which feeds the (path, iteration) terminal-
+        decision grouping in ``_interpret_terminal_decisions`` (T-07.05). Each
+        path's local token dict is merged into ``token_usage`` as it finishes, so
+        a later path's budget checkpoint sees every prior path's spend.
+
+        Returns ``(units, flat gate results, gate results grouped by path)``.
         """
         total = len(request.paths)
         job = self._update_job(
@@ -569,14 +614,16 @@ class Pipeline:
             JobStage.WRITE,
             progress=JobProgress(completed=0, total=total),
         )
-        job_logger.info("Starting write-verify across %d path(s) concurrently", total)
-        completed = 0
-        counter_lock = asyncio.Lock()
+        job_logger.info("Starting write-verify across %d path(s) sequentially", total)
 
-        async def _wrapped(
-            path: str,
-        ) -> tuple[ContentUnit | None, list[GateResult], dict[str, int], str]:
-            nonlocal completed
+        all_units: list[ContentUnit] = []
+        all_gate_results: list[GateResult] = []
+        gate_results_by_path: dict[str, list[GateResult]] = {}
+
+        for completed, path in enumerate(request.paths, start=1):
+            # Build the sibling digest from prior paths' drafts (None for the
+            # first path) and thread it into this path's writer prompt.
+            sibling_context = _build_sibling_digest(all_units) if all_units else None
             unit, gate_results, path_tokens = await self._run_one_path(
                 request=request,
                 evidence=evidence,
@@ -587,41 +634,22 @@ class Pipeline:
                 parent_logger=job_logger,
                 ev_lookup=ev_lookup,
                 job_token_usage=token_usage,
+                sibling_context=sibling_context,
             )
-            async with counter_lock:
-                completed += 1
-                job_logger.info(
-                    "Progress: %d/%d paths complete (finished '%s')",
-                    completed,
-                    total,
-                    path,
-                )
-                self._update_job(
-                    job,
-                    JobStatus.RUNNING,
-                    JobStage.WRITE,
-                    progress=JobProgress(completed=completed, total=total),
-                )
-            return unit, gate_results, path_tokens, path
-
-        # Preserve submission order in the output so downstream ordering
-        # (e.g. _terminal_decisions) remains stable across runs.
-        # TaskGroup cancels all sibling tasks atomically on the first exception,
-        # so no abandoned path task can mutate `job` after the outer try/except
-        # has marked it FAILED (review finding C1 from M01-M05 review).
-        async with asyncio.TaskGroup() as tg:
-            path_tasks = [tg.create_task(_wrapped(p)) for p in request.paths]
-        results = [t.result() for t in path_tasks]
-
-        all_units: list[ContentUnit] = []
-        all_gate_results: list[GateResult] = []
-        gate_results_by_path: dict[str, list[GateResult]] = {}
-        for unit, gate_results, path_tokens, path in results:
             all_gate_results.extend(gate_results)
             gate_results_by_path[path] = gate_results
             if unit is not None:
                 all_units.append(unit)
             _merge_tokens(token_usage, path_tokens)
+            job_logger.info(
+                "Progress: %d/%d paths complete (finished '%s')", completed, total, path
+            )
+            self._update_job(
+                job,
+                JobStatus.RUNNING,
+                JobStage.WRITE,
+                progress=JobProgress(completed=completed, total=total),
+            )
 
         return all_units, all_gate_results, gate_results_by_path
 
@@ -637,6 +665,7 @@ class Pipeline:
         token_usage: dict | None = None,
         ev_lookup: dict[str, Evidence] | None = None,
         job_token_usage: Mapping[str, int] | None = None,
+        sibling_context: str | None = None,
     ) -> tuple[ContentUnit | None, list[GateResult]]:
         """Run the writer-verifier loop for a single output path.
 
@@ -647,10 +676,10 @@ class Pipeline:
         Token budget (M08, ADR-003): when ``max_tokens_per_job`` is set, a
         checkpoint at the top of each writer iteration compares the job-level
         accumulated usage against the budget. ``job_token_usage`` is the
-        shared job dict (the baseline merged after previous gathers); see the
-        checkpoint comment for the read pattern. Checkpoint granularity is
-        one iteration, so the worst-case overshoot is one writer+verifier
-        call pair per in-flight path.
+        shared job dict (the baseline of all previously-completed paths, merged
+        after each path); see the checkpoint comment for the read pattern.
+        Checkpoint granularity is one iteration, so the worst-case overshoot is
+        one writer+verifier call pair (paths run sequentially since M03).
         """
         _log = job_logger or logger
         _tokens = token_usage  # may be None if called outside full pipeline
@@ -683,11 +712,11 @@ class Pipeline:
             budget = self._config.max_tokens_per_job
             if budget is not None:
                 # Job-level accumulated usage = the shared job dict plus this
-                # path's local dict. Per-path dicts merge into the parent only
-                # after asyncio.gather returns (_run_all_paths, audit P1), so
-                # `job_token_usage` holds the baseline from previously merged
-                # work while sibling paths' in-flight spend is not yet visible
-                # here — the checkpoint sees baseline + this path's tokens.
+                # path's local dict. Paths run sequentially (M03), so
+                # `job_token_usage` already holds every previously-completed
+                # path's spend (merged after each path in _run_all_paths) and
+                # there are no in-flight siblings — the checkpoint sees the full
+                # prior spend plus this path's tokens so far.
                 spent_view: dict[str, int] = dict(job_token_usage or {})
                 for key, value in (_tokens or {}).items():
                     spent_view[key] = spent_view.get(key, 0) + int(value)
@@ -750,6 +779,7 @@ class Pipeline:
                 lineage=lineage,
                 evidence_block=writer_block,
                 ev_lookup=ev_lookup,
+                sibling_context=sibling_context,
             )
 
             # Accumulate token usage from writer
@@ -841,7 +871,7 @@ class Pipeline:
         ``input_tokens + output_tokens`` count toward the budget; cache
         read/write counts are reported separately and stay outside it. Since
         the checkpoint granularity is one iteration, the worst-case overshoot
-        is one writer+verifier call pair per in-flight path.
+        is one writer+verifier call pair (paths run sequentially since M03).
         """
         if max_tokens_per_job is None:
             return False

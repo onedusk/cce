@@ -18,7 +18,7 @@ from tests.conftest import (
     make_source_policy,
 )
 from tests.test_orchestrator.conftest import make_adapter
-from tests.test_orchestrator.test_pipeline_parallel_paths import _SleepyLLM
+from tests.test_orchestrator.test_pipeline_sequential_paths import _RecordingLLM
 
 pytestmark = pytest.mark.integration
 
@@ -56,7 +56,7 @@ async def test_formatter_called_twice_per_path(sqlite_store, monkeypatch):
         config=config,
         crawl_adapter=make_adapter(),
         evidence_store=sqlite_store,
-        llm=_SleepyLLM(),
+        llm=_RecordingLLM(),
     )
     result = await pipeline.run(
         make_curation_request(paths=["blog", "summary", "faq"]),
@@ -129,7 +129,7 @@ async def test_ev_lookup_built_once_across_paths_and_iterations(
         config=config,
         crawl_adapter=make_adapter(),
         evidence_store=sqlite_store,
-        llm=_SleepyLLM(),
+        llm=_RecordingLLM(),
     )
     result = await pipeline.run(
         make_curation_request(paths=["blog", "summary", "faq"]),

@@ -134,6 +134,57 @@ async def test_budget_breach_stops_at_iteration_boundary(sqlite_store, caplog):
 
 
 # ---------------------------------------------------------------------------
+# Cross-path accumulation: the cap spans paths (ADR-003 "all paths"). Under
+# sequential execution (M03) a later path's checkpoint sees earlier paths'
+# spend — untestable under the old concurrent model where a path could not
+# observe its siblings' spend within the gather.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_budget_accumulates_across_paths_sequentially(sqlite_store):
+    """A budget that path 1 alone does not breach stops path 2 before its
+    writer, because path 2's checkpoint sees path 1's already-merged spend."""
+    config = make_engine_config(max_tokens_per_job=ONE_ITERATION_TOKENS)
+    adapter = _make_adapter()
+    # Only path 1 ("blog") calls the LLM: writer1 PASSes the gate in one
+    # iteration (2000 tokens). Path 2 ("summary") breaches at its iteration-1
+    # checkpoint (cumulative 2000 >= budget) BEFORE any writer call, so no
+    # responses are scripted for it — a stray call would raise in MockLLMProvider.
+    llm = _llm_with_usage(
+        (_writer_json(content="Blog draft [ev:ev_001]."), WRITER_USAGE),
+        (_verifier_json(supported=10, total=10, gaps=0), VERIFIER_USAGE),
+    )
+
+    pipeline = Pipeline(
+        config=config, crawl_adapter=adapter, evidence_store=sqlite_store, llm=llm
+    )
+    result = await pipeline.run(
+        make_curation_request(paths=["blog", "summary"]), make_source_policy()
+    )
+
+    # Only path 1 ran the LLM; path 2 stopped before its writer.
+    assert len(llm.calls) == 2
+    # Path 1 produced a draft; path 2 produced none (stopped pre-writer).
+    assert result.package is not None
+    assert [u.path for u in result.package.units] == ["blog"]
+    # The job did not complete cleanly — the cumulative cap bit on path 2.
+    assert result.job.status != JobStatus.COMPLETED
+
+    # The breach is recorded against the SECOND path, driven by cumulative spend
+    # (the spend came entirely from path 1).
+    budget_records = [
+        rec
+        for rec in result.job.stages
+        if rec.metrics and rec.metrics.get("budget_exceeded")
+    ]
+    assert len(budget_records) == 1
+    assert budget_records[0].path == "summary"
+    assert budget_records[0].metrics["stopped_before_iteration"] == 1
+    assert budget_records[0].metrics["tokens_spent"] == ONE_ITERATION_TOKENS
+
+
+# ---------------------------------------------------------------------------
 # Regression pin: budget None (and a budget that never breaches) leave the
 # multi-iteration rewrite scenario untouched
 # ---------------------------------------------------------------------------

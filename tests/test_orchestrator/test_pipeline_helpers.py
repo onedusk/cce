@@ -16,11 +16,12 @@ from datetime import UTC, datetime
 
 import pytest
 
-from cce.models.content import Citation
+from cce.models.content import Citation, ClaimMapping
 from cce.models.job import Job, JobStage, JobStatus, StageRecord
 from cce.models.style import StyleScores
 from cce.orchestrator.pipeline import (
     Pipeline,
+    _build_sibling_digest,
     _per_path_iteration_counts,
     _zero_tokens,
 )
@@ -384,3 +385,77 @@ class TestPerPathIterationCountsGrouping:
 
         assert legacy.path is None
         assert _per_path_iteration_counts(job, ["a"]) == [4]
+
+
+# ---------------------------------------------------------------------------
+# _build_sibling_digest — claims path, empty input, heading fallback (M03)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildSiblingDigest:
+    def test_empty_units_returns_empty_string(self):
+        assert _build_sibling_digest([]) == ""
+
+    def test_claims_path_lists_evidence_map_claims_under_path_heading(self):
+        unit = make_content_unit(
+            path="learn",
+            evidence_map=[
+                ClaimMapping(
+                    claim="Loneliness affects 16% of people", evidence_ids=["e1"]
+                ),
+                ClaimMapping(
+                    claim="Isolation raises heart-disease risk 29%", evidence_ids=["e2"]
+                ),
+            ],
+        )
+
+        digest = _build_sibling_digest([unit])
+
+        assert "## From the 'learn' article:" in digest
+        assert "- Loneliness affects 16% of people" in digest
+        assert "- Isolation raises heart-disease risk 29%" in digest
+
+    def test_claims_capped_at_25(self):
+        unit = make_content_unit(
+            path="learn",
+            evidence_map=[
+                ClaimMapping(claim=f"claim {i}", evidence_ids=[]) for i in range(40)
+            ],
+        )
+
+        digest = _build_sibling_digest([unit])
+
+        assert digest.count("- claim ") == 25
+
+    def test_empty_evidence_map_falls_back_to_content_headings(self):
+        """Degraded (non-JSON) writer parse yields evidence_map=[]; the digest
+        falls back to the draft's own '#' headings so it stays non-empty."""
+        unit = make_content_unit(
+            path="explore",
+            content=(
+                "# Eight Dimensions\n\nSome prose here.\n\n"
+                "## Curated Resources\n\nMore prose."
+            ),
+            evidence_map=[],
+        )
+
+        digest = _build_sibling_digest([unit])
+
+        assert digest != ""
+        assert "- Eight Dimensions" in digest
+        assert "- Curated Resources" in digest
+
+    def test_multiple_units_each_get_their_own_heading(self):
+        u1 = make_content_unit(
+            path="learn",
+            evidence_map=[ClaimMapping(claim="A", evidence_ids=[])],
+        )
+        u2 = make_content_unit(
+            path="explore",
+            evidence_map=[ClaimMapping(claim="B", evidence_ids=[])],
+        )
+
+        digest = _build_sibling_digest([u1, u2])
+
+        assert "## From the 'learn' article:" in digest
+        assert "## From the 'explore' article:" in digest

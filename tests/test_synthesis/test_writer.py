@@ -284,6 +284,49 @@ async def test_write_with_feedback():
 
 
 @pytest.mark.integration
+async def test_write_with_sibling_context_injects_block():
+    """M03: sibling_context produces the prose-level de-dup block, including the
+    'not on citations' clause that protects the citation invariant (ADR-003)."""
+    ev = make_evidence(id="ev_001")
+    raw_json = _make_writer_json()
+    llm = MockLLMProvider(
+        [LLMResponse(content=raw_json, model="mock", stop_reason="end_turn")]
+    )
+    writer = Writer(llm)
+
+    await writer.write(
+        make_curation_request(),
+        [ev],
+        "explore",
+        sibling_context="## From the 'learn' article:\n- Loneliness affects 16% of people",
+    )
+
+    user_msg = llm.calls[0]["messages"][0].content
+    assert "ALREADY COVERED BY SIBLING ARTICLES" in user_msg
+    assert "From the 'learn' article" in user_msg
+    assert "Loneliness affects 16% of people" in user_msg
+    # The clause that keeps de-dup prose-level, not citation-level.
+    assert "not on citations" in user_msg
+
+
+@pytest.mark.integration
+async def test_write_without_sibling_context_omits_block():
+    """sibling_context=None (the default / first path) omits the block entirely."""
+    ev = make_evidence(id="ev_001")
+    raw_json = _make_writer_json()
+    llm = MockLLMProvider(
+        [LLMResponse(content=raw_json, model="mock", stop_reason="end_turn")]
+    )
+    writer = Writer(llm)
+
+    await writer.write(make_curation_request(), [ev], "learn")
+
+    user_msg = llm.calls[0]["messages"][0].content
+    assert "ALREADY COVERED BY SIBLING ARTICLES" not in user_msg
+    assert "SIBLING CONTEXT" not in user_msg
+
+
+@pytest.mark.integration
 async def test_write_temperature():
     ev = make_evidence(id="ev_001")
     raw_json = _make_writer_json()
