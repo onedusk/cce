@@ -5,6 +5,73 @@ All notable changes to the Content Curation Engine (CCE).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — content-revision (client editorial feedback)
+
+Engine remediation of the thnkLabs client editorial feedback
+(`docs/internal/thnklabs-content-revision-plan-2026-06-18.md`, local-only),
+decomposed under `docs/decompose/content-revision/` (local-only) and
+implemented as milestone commits **M01–M04** on `feature/content-revision`. **M05**
+(corpus regeneration + `emit-mdx` to the thnkLabs site) is an operational/e2e
+step and is intentionally not part of these commits — it needs live API keys
+and the corrected local `thnklabs.yaml`. Suite: 797 → **835 passed**;
+coverage 94.8%.
+
+### Changed — editorial structure (M01)
+- **`path_configs/thnklabs.yaml`** (operator config, gitignored `*thnk*` — the
+  change ships to the operator environment, not to main): LEARN
+  `section_requirements`/`prompt_addendum` no longer carry the eight-dimensions
+  framing or the `overview`/`closing_frame` scaffolding sections; EXPLORE is now
+  the home of the eight-dimensions framing + curated resources; APPLY assumes
+  Learn+Explore already read. (Client: each path should have a distinct mandate.)
+- **`WRITER_SYSTEM_PROMPT`** (`synthesis/writer.py`) gains a `STRUCTURE GUIDANCE`
+  block banning meta-introductions ("In this essay…") and labelled scaffolding
+  headings ("Overview", "Closing Frame", "Conclusion", …). PDR-001, ADR-004.
+
+### Fixed — citation de-duplication (M02)
+- **`build_citation_index`** (`output/mdx/citations.py`) now keys footnote
+  de-dup on the canonical source URL instead of `evidence_id`: a source cited
+  via multiple evidence excerpts gets **one** footnote number per article
+  (client finding: the same resource was listed under several numbers).
+  Emit-time only — `ContentUnit.citations`/`evidence_map` keep full per-evidence
+  granularity, so the "no citation, no ship" invariant is untouched. New
+  `_canonical_url` strips the fragment + trailing slash (query strings
+  preserved). ADR-001/002, PDR-003.
+
+### Changed — cross-article de-duplication (M03)
+- The three paths now generate **sequentially** (learn → explore → apply)
+  instead of concurrently; each later path receives a digest of its siblings'
+  claims and is instructed not to re-explain them. De-dup is **prose-level
+  only** — a later path may and should re-cite shared sources. Replaces the
+  `asyncio.TaskGroup` fan-out with a serial loop; adds
+  `Writer.write(sibling_context=…)` and `_build_sibling_digest`. ADR-003/006,
+  PDR-002.
+- **Token budget now accumulates across paths** (ADR-003 "all paths"
+  semantics): under sequential execution a later path's checkpoint sees earlier
+  paths' spend. New regression test
+  `test_budget_accumulates_across_paths_sequentially`.
+- Gate attribution unchanged (already keyed by `gate_results_by_path`,
+  T-07.05); the now-vestigial `BaseExceptionGroup` unwrap in `run()` removed;
+  `test_pipeline_parallel_paths.py` → `test_pipeline_sequential_paths.py`
+  (stale-name standard).
+
+### Added — acceptance harness (M04)
+- **`scripts/research/run_acceptance_check.py`** — deterministic structural
+  checks (no scaffolding headings; dimensions-in-EXPLORE; one citation per URL)
+  plus a semantic repetition check: an LLM-judge (authoritative, temp 0) and an
+  embedding near-duplicate signal (reuses `EmbeddingProvider` +
+  `_cosine_similarity`; sim_threshold 0.85). A lexical shingle overlap is a
+  verbatim-copy tripwire only — lexical-overlap-as-gate was **empirically
+  rejected** (ADR-007): the client's corrected trio scores *higher* shingle
+  overlap than the bad engine output (shorter text + reworded repetition).
+
+### Not in scope (this branch)
+- **M05** — corpus regeneration + `emit-mdx --target` to the thnkLabs site:
+  operational/e2e, run separately in an environment with the corrected local
+  `thnklabs.yaml` present (else it regenerates the old structure).
+- Unified cross-article bibliography (per-article chosen, ADR-002); ingesting
+  the hand-edited `.pages` (references only, ADR-005); the LLM-judge live
+  calibration (deferred to the M05 environment).
+
 ## [0.3.0] — 2026-06-10
 
 Full remediation sprint from the 2026-06-09 codebase audit
