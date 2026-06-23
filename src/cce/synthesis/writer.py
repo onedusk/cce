@@ -50,6 +50,13 @@ STYLE GUIDANCE (light -- the editor handles details):
 - Make declarative claims where the evidence is strong. Reserve hedging \
 ("may", "suggests", "could") for genuinely uncertain claims.
 
+STRUCTURE GUIDANCE (applies to every path):
+- Do NOT open with meta-introductions ("In this essay...", "This guide will...", \
+"Here we explore...").
+- Do NOT emit labelled scaffolding headings such as "Overview", "Introduction", \
+"Closing Frame", "Conclusion", or "Summary". Open on substance; end on substance.
+- Headings name the actual subject of their section, not its role in the document.
+
 OUTPUT FORMAT:
 Return a JSON object with exactly these fields:
 {

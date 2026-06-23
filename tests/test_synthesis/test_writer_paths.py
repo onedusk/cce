@@ -1,13 +1,17 @@
 """Tests for path-aware writer (PathConfig integration)."""
 
 import json
+from pathlib import Path
 
 import pytest
 
 from cce.llm.base import LLMResponse
 from cce.models.paths import PathConfig
 from cce.synthesis.writer import WRITER_SYSTEM_PROMPT, Writer
+from cce.tagging.loader import load_path_configs
 from tests.conftest import MockLLMProvider, make_curation_request, make_evidence
+
+_THNKLABS_YAML = Path(__file__).resolve().parents[2] / "path_configs" / "thnklabs.yaml"
 
 
 def _make_learn_config(**overrides) -> PathConfig:
@@ -17,7 +21,11 @@ def _make_learn_config(**overrides) -> PathConfig:
         tone="pedagogical",
         structure="essay",
         depth="foundational",
-        section_requirements=["overview", "8_dimensions_framing", "closing_frame"],
+        section_requirements=[
+            "definition_and_mechanisms",
+            "studies_and_evidence",
+            "causes_and_risk_factors",
+        ],
         max_words=3000,
         prompt_addendum="Write as a foundational essay.",
     )
@@ -191,3 +199,27 @@ class TestWriteWithPathConfig:
         user_msg = llm.calls[0]["messages"][0].content
         assert "sub1" in user_msg
         assert "sub2" in user_msg
+
+
+@pytest.mark.unit
+@pytest.mark.skipif(
+    not _THNKLABS_YAML.exists(),
+    reason="path_configs/thnklabs.yaml is gitignored client config (.gitignore '*thnk*'); "
+    "absent in fresh clones / CI",
+)
+def test_thnklabs_paths_mandate_realignment():
+    """The real thnklabs.yaml moves the eight-dimensions framing out of LEARN
+    into EXPLORE (PDR-001 / ADR-004)."""
+    load_path_configs.cache_clear()
+    configs = load_path_configs(_THNKLABS_YAML)
+
+    learn = configs["learn"]
+    explore = configs["explore"]
+
+    # LEARN no longer carries the eight-dimensions framing.
+    assert "8_dimensions_framing" not in learn.section_requirements
+    assert "dimensions" not in (learn.prompt_addendum or "").lower()
+
+    # EXPLORE is the new home of the eight-dimensions framing.
+    assert "eight_dimensions_framing" in explore.section_requirements
+    assert "dimensions" in (explore.prompt_addendum or "").lower()

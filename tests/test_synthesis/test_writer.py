@@ -75,6 +75,19 @@ def testformat_evidence_for_prompt_optional_fields():
 
 
 # ---------------------------------------------------------------------------
+# WRITER_SYSTEM_PROMPT — scaffolding ban (M01)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_writer_system_prompt_bans_scaffolding():
+    assert "STRUCTURE GUIDANCE" in WRITER_SYSTEM_PROMPT
+    assert "In this essay" in WRITER_SYSTEM_PROMPT
+    assert "Closing Frame" in WRITER_SYSTEM_PROMPT
+    assert "Overview" in WRITER_SYSTEM_PROMPT
+
+
+# ---------------------------------------------------------------------------
 # Writer.write — early return
 # ---------------------------------------------------------------------------
 
