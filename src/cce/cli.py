@@ -293,6 +293,12 @@ def emit_mdx_command(
         False, "--dry-run", help="Preview files without writing"
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed stats"),
+    emit_format: str = typer.Option(
+        "generic", "--format", help="Output format: 'generic' (engine) or 'thnklabs'"
+    ),
+    status: str = typer.Option(
+        "draft", help="ArticleMetadata status for --format thnklabs (e.g. draft, published)"
+    ),
 ) -> None:
     """Emit MDX files from a completed curation job."""
     if sum([bool(job), bool(topic), all_jobs]) > 1:
@@ -307,6 +313,13 @@ def emit_mdx_command(
     from cce.models.job import JobStatus
     from cce.models.package import PublishPackage
     from cce.output.mdx import EmitResult, emit_mdx, slugify
+    from cce.output.mdx.thnklabs import emit_thnklabs
+
+    if emit_format not in ("generic", "thnklabs"):
+        typer.echo(
+            f"Error: unknown --format '{emit_format}' (use generic|thnklabs)", err=True
+        )
+        raise typer.Exit(1)
 
     target_path = Path(target)
     if not target_path.is_dir():
@@ -379,14 +392,25 @@ def emit_mdx_command(
 
     results: list[EmitResult] = []
     for pkg, slug_override, topic_name in packages:
-        results.append(
-            emit_mdx(
-                package=pkg,
-                target_dir=target_path,
-                topic_slug=slug_override,
-                topic_name=topic_name,
+        if emit_format == "thnklabs":
+            results.append(
+                emit_thnklabs(
+                    package=pkg,
+                    target_dir=target_path,
+                    topic_slug=slug_override,
+                    topic_name=topic_name,
+                    status=status,
+                )
             )
-        )
+        else:
+            results.append(
+                emit_mdx(
+                    package=pkg,
+                    target_dir=target_path,
+                    topic_slug=slug_override,
+                    topic_name=topic_name,
+                )
+            )
 
     for result in results:
         typer.echo(f"Emitted: {result.topic_slug}/")
