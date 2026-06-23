@@ -53,6 +53,9 @@ evidence_live.db
 # Client-specific files (NDA)
 *thnklabs*
 *thnk*
+# ...except engine source for the thnkLabs emit format (tracked code, not client material)
+!src/cce/output/mdx/thnklabs.py
+!tests/test_mdx_emit/test_thnklabs.py
 docs/decompose/
 docs/internal/
 docs/security/
