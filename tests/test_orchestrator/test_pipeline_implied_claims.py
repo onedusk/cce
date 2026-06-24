@@ -376,7 +376,13 @@ async def test_checker_factory_triple_gate(monkeypatch, tmp_path):
     cfg_master_only = EngineConfig(
         llm=LLMConfig(api_key="test"),
         crawl=crawl,
-        humanization=HumanizationConfig(enabled=True),
+        # editor + implied_claims explicitly off (both now default True) to test
+        # that the master switch alone wires only the scorer.
+        humanization=HumanizationConfig(
+            enabled=True,
+            editor=EditorConfig(enabled=False),
+            implied_claims=ImpliedClaimsConfig(enabled=False),
+        ),
     )
     pipe_master_only = _build_pipeline(cfg_master_only, store)
     assert pipe_master_only._scorer is not None

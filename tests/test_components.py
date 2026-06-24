@@ -162,6 +162,7 @@ async def test_embedding_fallback_warn_and_continue(
         crawl=CrawlConfig(api_key="test-key"),
         evidence_store=EvidenceStoreConfig(sqlite_path=tmp_path / "ev.db"),
         embedding=EmbeddingConfig(enabled=True, base_url="http://127.0.0.1:9"),
+        humanization=HumanizationConfig(enabled=False),  # isolate the embedding path
     )
 
     class _UnreachableProvider:

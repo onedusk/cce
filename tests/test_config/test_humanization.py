@@ -32,19 +32,19 @@ def _clear_env(monkeypatch):
 
 
 def test_humanization_config_defaults():
-    """Defaults: everything off, marker path in config/ directory."""
+    """Defaults: full stack ON (operator preference 2026-06-24), marker path in config/."""
     cfg = HumanizationConfig()
 
-    assert cfg.enabled is False
+    assert cfg.enabled is True
     assert cfg.markers_path == Path("config/humanization_markers.yaml")
     assert isinstance(cfg.thresholds, HumanizationThresholds)
     assert isinstance(cfg.editor, EditorConfig)
     assert isinstance(cfg.implied_claims, ImpliedClaimsConfig)
     assert cfg.thresholds.min_sentence_length_stddev == 10.0
     assert cfg.thresholds.min_type_token_ratio == 0.38
-    assert cfg.editor.enabled is False
+    assert cfg.editor.enabled is True
     assert cfg.editor.temperature == 0.4
-    assert cfg.implied_claims.enabled is False
+    assert cfg.implied_claims.enabled is True
     assert cfg.implied_claims.search_strategy == "llm_extract"
 
 
@@ -70,8 +70,8 @@ def test_humanization_config_yaml_overlay(monkeypatch, tmp_path):
     assert cfg.humanization.editor.temperature == 0.7
     # Unspecified threshold stays at the calibrated default (0.38, not 0.45)
     assert cfg.humanization.thresholds.min_type_token_ratio == 0.38
-    # Unspecified editor field stays at default
-    assert cfg.humanization.editor.enabled is False
+    # Unspecified editor field stays at default (now ON by default)
+    assert cfg.humanization.editor.enabled is True
 
 
 def test_humanization_env_var_overrides_yaml(monkeypatch, tmp_path):

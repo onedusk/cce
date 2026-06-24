@@ -63,6 +63,23 @@ coverage 94.8%.
   verbatim-copy tripwire only — lexical-overlap-as-gate was **empirically
   rejected** (ADR-007): the client's corrected trio scores *higher* shingle
   overlap than the bad engine output (shorter text + reworded repetition).
+- **Resources-section grounding:** the thnkLabs emitter rebuilds the explore
+  "Curated Resources" section deterministically from the article's citations
+  (`_rebuild_resources_section`), and the gate gains a `resources_ungrounded`
+  check — the LLM-written section was an unreliable leakage vector (3/7 topics
+  recommended uncited sources). Judge demoted to **advisory** (it fails the
+  client's own gold standard); the gate is deterministic only.
+
+### Changed — humanization ON by default (operator preference, 2026-06-24)
+- **`HumanizationConfig.enabled`, `EditorConfig.enabled`, `ImpliedClaimsConfig.enabled`
+  now default `True`** (`config/types.py`) — the scorer + editor + implied-claim
+  checker run for every consumer (CLI, batch, **and the API**) unless explicitly
+  disabled. Motivation: regenerated drafts carried ~13 em dashes/1000 (target
+  4.0) and stray contrastive frames; the editor cuts em-dash density and
+  collapses parasitic "X is not A. It is B" frames while preserving `[ev:ID]`.
+- Consequence: `ConfigRegistry.load` now loads `config/humanization_markers.yaml`
+  on every default load (fail-fast `ConfigError` if absent). Tests that don't
+  exercise humanization pass `HumanizationConfig(enabled=False)`.
 
 ### Not in scope (this branch)
 - **M05** — corpus regeneration + `emit-mdx --target` to the thnkLabs site:

@@ -265,8 +265,8 @@ class EditorConfig(BaseModel):
     """Editor agent configuration (H3)."""
 
     enabled: bool = Field(
-        default=False,
-        description="Independent kill-switch — lets H1+H2 ship without H3.",
+        default=True,
+        description="Independent kill-switch — set False to ship H1+H2 without H3.",
     )
     model: str | None = Field(
         default=None,
@@ -290,8 +290,8 @@ class ImpliedClaimsConfig(BaseModel):
     """Implied-claim checker configuration (H4)."""
 
     enabled: bool = Field(
-        default=False,
-        description="Independent kill-switch for H4.",
+        default=True,
+        description="Independent kill-switch for H4 (set False to disable).",
     )
     search_strategy: Literal["keyword", "embedding", "llm_extract"] = Field(
         default="llm_extract",
@@ -323,10 +323,11 @@ class HumanizationConfig(BaseModel):
     """Master humanization config attached to EngineConfig."""
 
     enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "Master switch. When False, scoring/editor/implied-claim stages "
-            "skip entirely — pipeline behaves identically to pre-humanization."
+            "Master switch — ON by default (operator preference, 2026-06-24). "
+            "When False, scoring/editor/implied-claim stages skip entirely and "
+            "the pipeline behaves identically to pre-humanization."
         ),
     )
     markers_path: Path = Field(
