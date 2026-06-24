@@ -81,6 +81,22 @@ class TestFormatThnklabsPage:
         mdx = format_thnklabs_page(_unit("# T\n\nNo sources here."), {}, topic_slug="t")
         assert "citations" not in _parse_metadata(mdx)
 
+    def test_resources_section_rebuilt_grounded(self):
+        body = (
+            "# T\n\n## Physical Well-Being\n\nLoneliness raises risk [ev:ev_1].\n\n"
+            "## Curated Resources\n\n"
+            "- **Real Source** [ev:ev_1]: a grounded source\n"
+            "- **Invented Podcast — Someone**: recalled, not in evidence\n"
+        )
+        lookup = {"ev_1": make_evidence(id="ev_1", url="https://who.int/x", title="WHO X")}
+        mdx = format_thnklabs_page(_unit(body), lookup, topic_slug="t")
+        res = mdx.split("## Curated Resources", 1)[1]
+        bullets = [ln for ln in res.splitlines() if ln.strip().startswith("-")]
+        assert bullets, "rebuilt resources section has bullets"
+        assert all("[^" in b for b in bullets), "every resource bullet is cited"
+        assert "Invented Podcast" not in mdx, "ungrounded source dropped"
+        assert "WHO X" in res, "grounded cited source listed"
+
 
 class TestHelpers:
     def test_read_time_rounds_on_200_wpm(self):

@@ -32,7 +32,12 @@ from cce.output.mdx.formatter import _citation_to_dict, _derive_title
 from cce.output.mdx.meta import merge_topic_meta
 
 _WORDS_PER_MINUTE = 200  # observed across deployed thnkLabs articles (~200-210 wpm)
-_FOOTNOTE_RE = re.compile(r"\[\^(?:[0-9]+|\?)\]")  # rendered markers, stripped from excerpt
+_FOOTNOTE_RE = re.compile(
+    r"\[\^(?:[0-9]+|\?)\]"
+)  # rendered markers, stripped from excerpt
+_RESOURCES_HEADING_RE = re.compile(
+    r"^#{2,3}[ \t]+.*resources.*$", re.IGNORECASE | re.MULTILINE
+)
 
 
 def _read_time(body: str) -> int:
@@ -57,6 +62,33 @@ def _derive_excerpt(body: str, limit: int = 200) -> str:
     return ""
 
 
+def _rebuild_resources_section(body: str, citations) -> str:
+    """Replace an LLM-written 'Curated Resources' section with a deterministic,
+    grounded one built from the article's actual citations.
+
+    The writer's free-form resources section is an unreliable leakage vector — it
+    sometimes recommends sources not in the evidence (uncited). This rewrites the
+    section (its heading through the next heading / EOF) as one bullet per UNIQUE
+    cited source, so every entry is grounded by construction. No-op when the body
+    has no resources section or there are no citations.
+    """
+    m = _RESOURCES_HEADING_RE.search(body)
+    if m is None or not citations:
+        return body
+    rest = body[m.end() :]
+    nxt = re.search(r"^#{2,3}[ \t]+", rest, re.MULTILINE)
+    end = m.end() + nxt.start() if nxt else len(body)
+
+    bullets = "\n".join(
+        f"- **{(c.title or c.url or '').strip()}** [^{c.index}]" for c in citations
+    )
+    new_section = f"## Curated Resources\n\n{bullets}\n"
+    tail = body[end:]
+    if tail.strip():
+        new_section += "\n"
+    return body[: m.start()] + new_section + tail.lstrip("\n")
+
+
 def format_thnklabs_page(
     unit: ContentUnit,
     evidence_by_id: dict[str, Evidence],
@@ -67,7 +99,7 @@ def format_thnklabs_page(
 ) -> str:
     """Render one ContentUnit as a thnkLabs `page.mdx` (ArticleMetadata + body)."""
     result = build_citation_index(unit.content, evidence_by_id)
-    body = result.content
+    body = _rebuild_resources_section(result.content, result.citations)
 
     metadata: dict = {
         "title": _derive_title(body),

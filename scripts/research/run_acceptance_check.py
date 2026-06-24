@@ -133,6 +133,45 @@ def duplicate_url_citations(citations: list[dict]) -> dict[str, int]:
     return {u: len(ix) for u, ix in by_url.items() if len(ix) > 1}
 
 
+_RESOURCES_HEADING_RE = re.compile(
+    r"^#{2,3}[ \t]+.*resources.*$", re.IGNORECASE | re.MULTILINE
+)
+
+
+def resources_ungrounded(body: str) -> list[str]:
+    """Resource bullets under a 'Resources' heading that lack a [^N] citation.
+
+    Empty list = grounded (or no resources section). Non-empty means the writer
+    recommended sources it cannot cite from the evidence (leakage). The thnkLabs
+    emitter rebuilds this section deterministically from citations, so emitted
+    pages are grounded by construction; this is the gate's safety net.
+    """
+    m = _RESOURCES_HEADING_RE.search(body)
+    if m is None:
+        return []
+    rest = body[m.end() :]
+    nxt = re.search(r"^#{2,3}[ \t]+", rest, re.MULTILINE)
+    section = rest[: nxt.start()] if nxt else rest
+    bullets = [
+        ln.strip() for ln in section.splitlines() if ln.lstrip().startswith(("-", "*"))
+    ]
+    return [b[:80] for b in bullets if "[^" not in b]
+
+
+def _raw_body(mdx_path: Path) -> str:
+    """Body text after the metadata block, with [^N] markers INTACT.
+
+    ``extract_body`` strips footnote refs (it serves prose analysis), so the
+    resources-grounding check — which needs to see [^N] — reads the raw body
+    instead: everything after the metadata's closing ``}``/``};`` line.
+    """
+    lines = mdx_path.read_text().splitlines()
+    for i, ln in enumerate(lines):
+        if ln.rstrip() in ("}", "};"):
+            return "\n".join(lines[i + 1 :])
+    return mdx_path.read_text()
+
+
 def _dimensions_in_body(body: str) -> bool:
     """True if the body carries the eight-dimensions framing.
 
@@ -415,16 +454,20 @@ async def run_acceptance_check(topic_dir: Path | str, embedder=None, llm=None) -
     """
     topic_dir = Path(topic_dir)
     bodies: dict[str, str] = {}
+    raw_bodies: dict[str, str] = {}
     citations: dict[str, list[dict]] = {}
     for role in _PATHS:
         mdx = topic_dir / role / "page.mdx"
         if mdx.exists():
             bodies[role] = extract_body(mdx) or ""
+            raw_bodies[role] = _raw_body(mdx)
             citations[role] = _read_citations(mdx)
 
     scaffolding = {r: has_scaffolding_heading(b) for r, b in bodies.items()}
     dims = dimensions_placement(topic_dir)
     dup_urls = {r: duplicate_url_citations(c) for r, c in citations.items()}
+    # resources_ungrounded needs [^N] intact -> use raw_bodies (not stripped).
+    ungrounded_resources = {r: resources_ungrounded(b) for r, b in raw_bodies.items()}
 
     judge = await judge_repetition(dict(bodies), llm)
     embedding_pairs: list[tuple[str, str, str, float]] = []
@@ -437,7 +480,10 @@ async def run_acceptance_check(topic_dir: Path | str, embedder=None, llm=None) -
 
     # Deterministic gate only — judge/embedding are advisory (see docstring).
     gate_pass = (
-        not any(scaffolding.values()) and dims["ok"] and not any(dup_urls.values())
+        not any(scaffolding.values())
+        and dims["ok"]
+        and not any(dup_urls.values())
+        and not any(ungrounded_resources.values())
     )
 
     return {
@@ -445,6 +491,7 @@ async def run_acceptance_check(topic_dir: Path | str, embedder=None, llm=None) -
         "scaffolding": scaffolding,
         "dimensions": dims,
         "duplicate_url_citations": dup_urls,
+        "ungrounded_resources": ungrounded_resources,
         "judge": judge,
         "embedding_near_duplicate_pairs": embedding_pairs,
         "verbatim_tripwire": tripwire,
