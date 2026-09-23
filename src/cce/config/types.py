@@ -94,7 +94,8 @@ class VerifierConfig(BaseModel):
             "Optional verifier-specific model so the writer and verifier "
             "don't share blind spots (B3). None = the verifier uses "
             "LLMConfig.model. Credentials and the other LLMConfig settings "
-            "are inherited."
+            "are inherited, including thinking/effort, so those must also be "
+            "valid for this model (e.g. effort xhigh fails on a 4.6 verifier)."
         ),
     )
     temperature: float = Field(

@@ -136,7 +136,7 @@ effective values when neither env var nor YAML provides one.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `CCE_VERIFIER_MODEL` | unset | Separate model for the verifier (YAML `verifier.model`), so writer and verifier blind spots aren't correlated. Credentials and the other `llm` settings are inherited; unset = the verifier uses `CCE_LLM_MODEL` |
+| `CCE_VERIFIER_MODEL` | unset | Separate model for the verifier (YAML `verifier.model`), so writer and verifier blind spots aren't correlated. Credentials and the other `llm` settings are inherited, including `CCE_LLM_THINKING` / `CCE_LLM_EFFORT`, so those must also be valid for the verifier's model (e.g. effort `xhigh` fails on a 4.6 verifier); unset = the verifier uses `CCE_LLM_MODEL` |
 | `CCE_VERIFIER_MAX_TOKENS` | `21000` | Per-call output cap for the verifier's claim-by-claim report (YAML `verifier.max_tokens`) |
 
 ### Evidence store

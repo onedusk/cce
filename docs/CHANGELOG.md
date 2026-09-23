@@ -65,7 +65,8 @@ current Claude models. One commit per item (B1–B4) on
   an optional verifier-specific model so the writer's and verifier's blind
   spots aren't correlated. `build_components` builds a second
   `AnthropicProvider` from `llm` with only the model replaced (credentials
-  and settings inherited) and exposes it as `ComponentSet.verifier_llm`;
+  and settings, including thinking/effort, inherited — they must also suit
+  the verifier's model) and exposes it as `ComponentSet.verifier_llm`;
   `build_pipeline` passes it to the new `Pipeline(verifier_llm=...)`
   argument. The Writer, Editor and implied-claim checker stay on the main
   provider. Unset (default), the verifier shares the main provider, so
