@@ -52,6 +52,17 @@ current Claude models. One commit per item (B1–B4) on
   adaptive+effort, effort-only, disabled and disabled+effort settings, all
   without a 400.
 
+### Added — separate verifier model (B3)
+- **`VerifierConfig.model`** (`CCE_VERIFIER_MODEL`, YAML `verifier.model`):
+  an optional verifier-specific model so the writer's and verifier's blind
+  spots aren't correlated. `build_components` builds a second
+  `AnthropicProvider` from `llm` with only the model replaced (credentials
+  and settings inherited) and exposes it as `ComponentSet.verifier_llm`;
+  `build_pipeline` passes it to the new `Pipeline(verifier_llm=...)`
+  argument. The Writer, Editor and implied-claim checker stay on the main
+  provider. Unset (default), the verifier shares the main provider, so
+  behaviour is unchanged.
+
 ## [Unreleased] — content-revision (client editorial feedback)
 
 Engine remediation of the thnkLabs client editorial feedback

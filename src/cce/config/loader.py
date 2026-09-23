@@ -94,6 +94,7 @@ def load_config(config_path: str | Path | None = None) -> EngineConfig:
         CCE_LLM_MAX_TOKENS      -> llm.max_tokens
         CCE_LLM_THINKING        -> llm.thinking
         CCE_LLM_EFFORT          -> llm.effort
+        CCE_VERIFIER_MODEL      -> verifier.model
         CCE_VERIFIER_MAX_TOKENS -> verifier.max_tokens
         CCE_EVIDENCE_BACKEND    -> evidence_store.backend
         CCE_EVIDENCE_SQLITE_PATH -> evidence_store.sqlite_path
@@ -159,6 +160,7 @@ def _load_llm_config(file: dict) -> LLMConfig:
 def _load_verifier_config(file: dict) -> VerifierConfig:
     return VerifierConfig(
         **_explicit(
+            model=os.getenv("CCE_VERIFIER_MODEL", file.get("model")),
             temperature=_opt(float, file.get("temperature")),
             max_tokens=_opt(
                 int, os.getenv("CCE_VERIFIER_MAX_TOKENS", file.get("max_tokens"))

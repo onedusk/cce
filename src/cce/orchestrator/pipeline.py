@@ -227,6 +227,7 @@ class Pipeline:
         scorer: Scorer | None = None,
         editor: Editor | None = None,
         implied_claim_checker: ImpliedClaimChecker | None = None,
+        verifier_llm: LLMProvider | None = None,
     ) -> None:
         self._config = config
         self._taxonomy_plugin = taxonomy_plugin
@@ -241,7 +242,8 @@ class Pipeline:
             evidence_store=evidence_store,
         )
         self._writer = Writer(llm=llm, config=config.writer)
-        self._verifier = Verifier(llm=llm, config=config.verifier)
+        # Optional separate provider for the verifier (B3); None = share `llm`.
+        self._verifier = Verifier(llm=verifier_llm or llm, config=config.verifier)
         # Humanization components (M02+). All optional — None = disabled.
         self._scorer = scorer
         self._editor = editor

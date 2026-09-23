@@ -83,6 +83,15 @@ class WriterConfig(BaseModel):
 class VerifierConfig(BaseModel):
     """Verifier agent call settings."""
 
+    model: str | None = Field(
+        default=None,
+        description=(
+            "Optional verifier-specific model so the writer and verifier "
+            "don't share blind spots (B3). None = the verifier uses "
+            "LLMConfig.model. Credentials and the other LLMConfig settings "
+            "are inherited."
+        ),
+    )
     temperature: float = Field(
         default=0.1,
         ge=0.0,

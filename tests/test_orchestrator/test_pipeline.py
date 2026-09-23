@@ -89,6 +89,29 @@ async def test_pipeline_truncated_writer_reply_fails_job_with_reason(sqlite_stor
 
 
 @pytest.mark.integration
+async def test_pipeline_routes_verifier_calls_to_verifier_llm(sqlite_store):
+    """B3: with a separate verifier provider, every verifier call goes to it
+    and every writer call stays on the main provider."""
+    main = _llm(_writer_json())
+    verifier = _llm(_verifier_json(supported=10, total=10, gaps=0))
+    pipeline = Pipeline(
+        config=make_engine_config(),
+        crawl_adapter=_make_adapter(),
+        evidence_store=sqlite_store,
+        llm=main,
+        verifier_llm=verifier,
+    )
+
+    result = await pipeline.run(make_curation_request(), make_source_policy())
+
+    assert result.job.status == JobStatus.COMPLETED
+    assert len(main.calls) == 1
+    assert "DRAFT CONTENT TO VERIFY" not in main.calls[0]["messages"][0].content
+    assert len(verifier.calls) == 1
+    assert "DRAFT CONTENT TO VERIFY" in verifier.calls[0]["messages"][0].content
+
+
+@pytest.mark.integration
 async def test_pipeline_no_evidence(sqlite_store):
     config = make_engine_config()
     # Empty search results → no evidence discovered
