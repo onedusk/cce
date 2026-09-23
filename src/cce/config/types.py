@@ -35,15 +35,16 @@ class LLMConfig(BaseModel):
         ),
     )
     max_tokens: int = Field(
-        default=16384,
+        default=21000,
         ge=1,
         description=(
-            "Max tokens per LLM call, thinking included. 16384 (was 8192, "
+            "Max tokens per LLM call, thinking included. 21000 (was 8192, "
             "was 4096): the writer's long learn/explore essays wrapped in "
             "JSON exceed 4096, and on current models thinking counts against "
-            "this cap, so 8192 could crowd out the JSON (B2). A reply that "
-            "hits the cap raises IncompleteResponseError. The SDK refuses "
-            "non-streaming values above ~21,333."
+            "this cap — a Sonnet 5 editor call used 15.8k of 16.4k in the "
+            "2026-09-23 smoke run (B2). 21000 sits just under the SDK's "
+            "non-streaming ceiling (~21,333); going higher needs streaming. "
+            "A reply that hits the cap raises IncompleteResponseError."
         ),
     )
     thinking: Literal["adaptive", "disabled"] | None = Field(
@@ -52,16 +53,20 @@ class LLMConfig(BaseModel):
             "Thinking mode sent as `thinking: {type: ...}` (B2). None = omit "
             "the param and take the model default (Sonnet 5 / Opus 5 think "
             "adaptively; 4.6 models do not think). Never sent to models "
-            "without adaptive thinking (Haiku 4.5 and older)."
+            "without adaptive thinking (Opus 4.5, Haiku 4.5 and older). "
+            "Otherwise passed through as set: the API rejects `disabled` on "
+            "Fable 5 / Opus 5.5, and on Opus 5 at effort xhigh/max."
         ),
     )
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = Field(
         default=None,
         description=(
             "Sent as `output_config.effort` (B2). None = omit (model "
-            "default, `high` on most models). Never sent to models without "
-            "effort support (Haiku 4.5 and older). `xhigh` needs Opus 4.7+ / "
-            "Sonnet 5; the API rejects it on the 4.6 models."
+            "default, `high` on most models). Sent only to models with "
+            "adaptive thinking (4.6 and later) — so also omitted on Opus 4.5, "
+            "which does accept effort. `xhigh` needs Opus 4.7+ / Sonnet 5; "
+            "the API rejects it on the 4.6 models. Lowering effort is the "
+            "lever when thinking crowds out the reply."
         ),
     )
 
@@ -102,12 +107,13 @@ class VerifierConfig(BaseModel):
         ),
     )
     max_tokens: int = Field(
-        default=16384,
+        default=21000,
         ge=1,
         description=(
             "Per-call output cap for the claim-by-claim report (thinking "
-            "included). Replaces the VERIFIER_MAX_TOKENS literal (B2). The "
-            "SDK refuses non-streaming values above ~21,333."
+            "included). Replaces the VERIFIER_MAX_TOKENS=16384 literal, "
+            "raised because thinking now shares the cap on current models "
+            "(B2). Just under the SDK's non-streaming ceiling (~21,333)."
         ),
     )
 

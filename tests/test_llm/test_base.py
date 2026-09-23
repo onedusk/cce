@@ -31,6 +31,9 @@ def test_max_tokens_error_names_role_model_and_spend() -> None:
     assert "claude-sonnet-5" in message
     assert "max_tokens" in message
     assert "16384" in message
+    assert (
+        "CCE_LLM_EFFORT" in message
+    )  # the lever left once max_tokens is at the ceiling
     assert exc.value.role == "writer"
     assert exc.value.stop_reason == "max_tokens"
     assert exc.value.model == "claude-sonnet-5"

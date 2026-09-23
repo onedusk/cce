@@ -114,8 +114,8 @@ def test_load_thinking_effort_and_verifier_budget(monkeypatch, tmp_path):
     defaults = load_config()
     assert defaults.llm.thinking is None
     assert defaults.llm.effort is None
-    assert defaults.llm.max_tokens == 16384
-    assert defaults.verifier.max_tokens == 16384
+    assert defaults.llm.max_tokens == 21000
+    assert defaults.verifier.max_tokens == 21000
 
     config_file = tmp_path / "config.yaml"
     config_file.write_text(

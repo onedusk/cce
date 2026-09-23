@@ -36,15 +36,23 @@ current Claude models. One commit per item (B1–B4) on
   REVIEW with no rewrite. The error is deliberately not a `ValueError`, so
   `with_llm_retry` does not resend with the same budget; the pipeline records
   a FAILED job whose `error.message` names the role, model and output tokens.
-- **`VerifierConfig.max_tokens`** (default 16384, `CCE_VERIFIER_MAX_TOKENS`)
-  replaces the `VERIFIER_MAX_TOKENS` literal.
-- **`LLMConfig.max_tokens` default 8192 → 16384**, so thinking (which counts
-  against the cap on current models) can't crowd out the JSON.
+- **`VerifierConfig.max_tokens`** (default 21000, `CCE_VERIFIER_MAX_TOKENS`)
+  replaces the `VERIFIER_MAX_TOKENS=16384` literal.
+- **`LLMConfig.max_tokens` default 8192 → 21000.** On current models thinking
+  counts against the cap: in the 2026-09-23 Sonnet 5 smoke run an editor call
+  used 15,769 of 16,384 output tokens. 21000 is just under the SDK's
+  non-streaming ceiling (~21,333), so it gives headroom but no guarantee;
+  lowering `CCE_LLM_EFFORT` is the lever when thinking still crowds out a
+  reply, and going higher needs the provider to stream. The
+  `IncompleteResponseError` message says so.
 - **`LLMConfig.thinking` / `LLMConfig.effort`** (`CCE_LLM_THINKING`,
   `CCE_LLM_EFFORT`): explicit `thinking: {type: adaptive|disabled}` and
-  `output_config.effort`, sent only to models that support them (4.6 and
-  later; never Haiku 4.5 or older). Unset (default) omits both, so the 4.6
-  models keep today's no-thinking behaviour. With `thinking: adaptive` the
+  `output_config.effort`, sent only to models with adaptive thinking (4.6
+  and later; never Opus 4.5, Haiku 4.5 or older — effort is omitted on Opus
+  4.5 even though it accepts it). Unset (default) omits both, so the 4.6
+  models keep today's no-thinking behaviour. Explicit values are otherwise
+  passed through, so an unsupported combination fails loudly with a 400
+  (e.g. `disabled` on Fable 5 / Opus 5.5, or on Opus 5 at effort xhigh/max). With `thinking: adaptive` the
   provider also drops `temperature` on the 4.6 models, which reject any value
   but 1 while thinking is on (found in the live check).
 - Live-checked 2026-09-23: `claude-sonnet-5`, `claude-opus-5`,

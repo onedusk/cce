@@ -128,16 +128,16 @@ effective values when neither env var nor YAML provides one.
 | `ANTHROPIC_MODEL` | — | Fallback alias for `CCE_LLM_MODEL` |
 | `CCE_LLM_API_KEY` | — | Overrides `ANTHROPIC_API_KEY` when set |
 | `CCE_LLM_TEMPERATURE` | `0.2` | Fallback sampling temperature; not sent to models that reject sampling params (Opus 4.7+, Sonnet 5, Fable 5) |
-| `CCE_LLM_MAX_TOKENS` | `16384` | Per-call output token cap, thinking included. A reply that hits it fails the job with an `IncompleteResponseError` naming the role and model instead of being parsed. The SDK refuses non-streaming values above ~21,333 |
-| `CCE_LLM_THINKING` | unset | `adaptive` or `disabled`, sent as `thinking: {type: ...}`. Unset = omit the param (model default: Sonnet 5 / Opus 5 think adaptively, the 4.6 models do not). Never sent to Haiku 4.5 or older. `adaptive` also drops `temperature` on the 4.6 models (the API rejects any value but 1 while thinking is on) |
-| `CCE_LLM_EFFORT` | unset | `low` / `medium` / `high` / `xhigh` / `max`, sent as `output_config.effort`. Unset = model default. Never sent to Haiku 4.5 or older; `xhigh` needs Opus 4.7+ / Sonnet 5 |
+| `CCE_LLM_MAX_TOKENS` | `21000` | Per-call output token cap, thinking included. A reply that hits it fails the job with an `IncompleteResponseError` naming the role and model instead of being parsed. The default sits just under the SDK's non-streaming ceiling (~21,333); if thinking crowds out replies, lower `CCE_LLM_EFFORT` |
+| `CCE_LLM_THINKING` | unset | `adaptive` or `disabled`, sent as `thinking: {type: ...}`. Unset = omit the param (model default: Sonnet 5 / Opus 5 think adaptively, the 4.6 models do not). Never sent to Opus 4.5, Haiku 4.5 or older. `adaptive` also drops `temperature` on the 4.6 models (the API rejects any value but 1 while thinking is on). Otherwise passed through as set: the API rejects `disabled` on Fable 5 / Opus 5.5, and on Opus 5 at effort `xhigh`/`max` |
+| `CCE_LLM_EFFORT` | unset | `low` / `medium` / `high` / `xhigh` / `max`, sent as `output_config.effort`. Unset = model default. Sent only to models with adaptive thinking (4.6 and later), so also omitted on Opus 4.5; `xhigh` needs Opus 4.7+ / Sonnet 5 |
 
 ### Verifier
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `CCE_VERIFIER_MODEL` | unset | Separate model for the verifier (YAML `verifier.model`), so writer and verifier blind spots aren't correlated. Credentials and the other `llm` settings are inherited; unset = the verifier uses `CCE_LLM_MODEL` |
-| `CCE_VERIFIER_MAX_TOKENS` | `16384` | Per-call output cap for the verifier's claim-by-claim report (YAML `verifier.max_tokens`) |
+| `CCE_VERIFIER_MAX_TOKENS` | `21000` | Per-call output cap for the verifier's claim-by-claim report (YAML `verifier.max_tokens`) |
 
 ### Evidence store
 

@@ -255,7 +255,7 @@ async def test_verify_sends_correct_prompt():
     call = llm.calls[0]
     assert call["system"] == _VERIFIER_FULL_PROMPT
     assert call["temperature"] == 0.1
-    assert call["max_tokens"] == 16384
+    assert call["max_tokens"] == 21000
     user_msg = call["messages"][0].content
     assert "AI models are powerful" in user_msg
     assert "[ev_001]" in user_msg
