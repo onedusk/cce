@@ -10,7 +10,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Phase 1 of `docs/internal/bubble-readiness-plan-2026-09-23.md` (local-only):
 what a consumer calling the Writer, Verifier and QualityGate directly needs on
 current Claude models. One commit per item (B1–B4) on
-`feature/bubble-readiness`.
+`feature/bubble-readiness`, plus follow-up commits from the live Sonnet 5 runs
+and two adversarial review passes (tagged with the item they amend).
 
 ### Fixed — sampling params on current models (B1)
 - **`AnthropicProvider`** no longer sends `temperature` to models that reject
