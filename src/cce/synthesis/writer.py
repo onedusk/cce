@@ -282,14 +282,16 @@ exists, and mark remaining gaps as [INSUFFICIENT EVIDENCE].
     ) -> WriterOutput:
         """Parse the LLM response into a ContentUnit.
 
-        Raises UnparseableResponseError when the reply is not a JSON object.
-        There is no raw-markdown fallback: it shipped drafts with no
-        citations.
+        Raises UnparseableResponseError when the reply is not a JSON object
+        of the expected shape. There is no raw-markdown fallback: it shipped
+        drafts with no citations. The shape is checked before any model is
+        built, so a wrongly typed field can't surface as a ValidationError
+        that quotes the reply into logs and the job record.
         """
         raw = response.content.strip()
 
         parsed = extract_json(raw)
-        if not isinstance(parsed, dict):
+        if not isinstance(parsed, dict) or not _writer_reply_shape_ok(parsed):
             raise UnparseableResponseError("writer", response)
 
         # Evidence ID lookup for URL resolution — use the caller's version
@@ -359,6 +361,31 @@ exists, and mark remaining gaps as [INSUFFICIENT EVIDENCE].
         )
 
         return WriterOutput(unit=unit, gaps=gaps, raw_response=raw)
+
+
+def _is_str_list(value: object) -> bool:
+    return isinstance(value, list) and all(isinstance(v, str) for v in value)
+
+
+def _writer_reply_shape_ok(parsed: dict) -> bool:
+    """True when the fields _parse_response reads have the right types.
+
+    ``content`` must be a string (an empty one is a legitimate "no draft");
+    the list fields may be absent, as before, but not wrongly typed.
+    """
+    evidence_map = parsed.get("evidence_map", [])
+    return (
+        isinstance(parsed.get("content"), str)
+        and _is_str_list(parsed.get("citations_used", []))
+        and _is_str_list(parsed.get("gaps", []))
+        and isinstance(evidence_map, list)
+        and all(
+            isinstance(item, dict)
+            and isinstance(item.get("claim", ""), str)
+            and _is_str_list(item.get("evidence_ids", []))
+            for item in evidence_map
+        )
+    )
 
 
 class WriterOutput:

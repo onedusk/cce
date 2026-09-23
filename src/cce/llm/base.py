@@ -74,9 +74,10 @@ class UnparseableResponseError(ValueError):
     the pipeline fails the job.
 
     The reply text is kept on ``raw_response`` for the caller to persist
-    where it sees fit. It is never put in the message, which is logged and
-    stored on the job record: a consumer's replies can hold confidential
-    content.
+    where it sees fit: direct Writer/Verifier callers catch the error, and
+    ``Pipeline.run`` hands it back in memory on ``PipelineResult.error``. It
+    is never put in the message, which is logged and stored on the job
+    record: a consumer's replies can hold confidential content.
     """
 
     def __init__(self, role: str, response: LLMResponse) -> None:
@@ -87,8 +88,8 @@ class UnparseableResponseError(ValueError):
         super().__init__(
             f"{role} reply from {response.model or 'unknown model'} could not "
             f"be parsed as a JSON object (stop_reason={response.stop_reason!r}, "
-            f"{len(response.content)} chars); reply text on .raw_response, "
-            "not logged"
+            f"{len(response.content)} chars); reply text is not logged or "
+            "stored (in memory on the exception's raw_response)"
         )
 
 

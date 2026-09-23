@@ -360,6 +360,7 @@ class Pipeline:
                 package=None,
                 job=self._update_job(job, JobStatus.FAILED, error_msg=str(e)),
                 gate_results=[],
+                error=e,
             )
 
     # --- run() phase helpers (M07 — extracted from run(), bodies lifted
@@ -1152,10 +1153,15 @@ class PipelineResult:
         package: PublishPackage | None,
         job: Job,
         gate_results: list[GateResult],
+        error: BaseException | None = None,
     ) -> None:
         self.package = package
         self.job = job
         self.gate_results = gate_results
+        # The exception that failed the run, in memory only (never copied
+        # onto the persisted Job): e.g. UnparseableResponseError.raw_response
+        # for the caller to persist where it sees fit.
+        self.error = error
 
     @property
     def succeeded(self) -> bool:

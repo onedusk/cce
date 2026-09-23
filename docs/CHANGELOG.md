@@ -79,9 +79,20 @@ current Claude models. One commit per item (B1–B4) on
   `UnparseableResponseError` (`llm/base.py`) instead of becoming raw
   markdown or a zero-score verdict. Both callers resend once
   (`with_llm_retry(max_attempts=2)`), then the job fails like B2. The reply
-  text is on `.raw_response` for the caller to persist; cce never writes or
-  logs it, and the message (which the job record stores) holds only the
-  role, model, stop reason and length.
+  text is on `.raw_response` for the caller to persist — direct
+  Writer/Verifier callers catch the error, and `Pipeline.run` returns it in
+  memory on the new `PipelineResult.error` (never copied onto the persisted
+  `Job`; the engine/CLI/API don't surface it yet). cce never writes or logs
+  it; the message, which the job record stores, holds only the role, model,
+  stop reason and length.
+- **Shape checks** (adversarial review): a reply that parses but can't be
+  used is unparseable too — a writer reply whose `content` is missing or not
+  a string, or whose list fields are wrongly typed (checked before any model
+  is built, so no pydantic `ValidationError` quotes the reply into logs or
+  the job record), and a verifier report without a `claims` list or integer
+  `summary` counts (missing counts used to default to 0: the silent
+  zero-score verdict). An empty `content` string stays a legitimate "no
+  draft" outcome.
 - **Fallback parser:** `extract_json` parses with `strict=False`, so the
   raw-newline replies parse on models or injected providers without
   structured outputs, and its failure warning logs the length only, no reply

@@ -248,6 +248,34 @@ class VerificationReport:
         return min(1.0, ratio)
 
 
+_SUMMARY_COUNTS = (
+    "total_claims",
+    "supported",
+    "unsupported",
+    "uncited",
+    "leakage",
+    "conflicts",
+    "gaps_acknowledged",
+)
+
+
+def _report_shape_ok(parsed: dict) -> bool:
+    """True when the report can be scored: claims are objects and every
+    summary count is an int (missing counts used to default to 0, which is
+    the silent zero-score verdict)."""
+    claims = parsed.get("claims")
+    summary = parsed.get("summary")
+    contradictions = parsed.get("contradictions", [])
+    return (
+        isinstance(claims, list)
+        and all(isinstance(c, dict) for c in claims)
+        and isinstance(summary, dict)
+        and all(isinstance(summary.get(k), int) for k in _SUMMARY_COUNTS)
+        and isinstance(contradictions, list)
+        and all(isinstance(c, dict) for c in contradictions)
+    )
+
+
 class Verifier:
     """Fact-checking verifier agent."""
 
@@ -331,13 +359,13 @@ traced to the evidence above should be flagged.
     def _parse_response(self, response: LLMResponse) -> VerificationReport:
         """Parse verifier LLM response into a structured report.
 
-        Raises UnparseableResponseError when the reply is not a JSON object,
-        instead of returning a zero-score report that routed straight to
-        REVIEW with no rewrite.
+        Raises UnparseableResponseError when the reply is not a JSON object
+        with a claims list and integer summary counts, instead of returning
+        a zero-score report that routed straight to REVIEW with no rewrite.
         """
         raw = response.content
         parsed = extract_json(raw)
-        if not isinstance(parsed, dict):
+        if not isinstance(parsed, dict) or not _report_shape_ok(parsed):
             raise UnparseableResponseError("verifier", response)
 
         # Parse individual claims

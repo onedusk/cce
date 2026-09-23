@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import dataclasses
 import inspect
+import json
 import logging
 import re
 from pathlib import Path
@@ -301,9 +302,21 @@ async def test_verifier_requests_use_the_verifier_model(tmp_path: Path):
     try:
         with patch("cce.llm.anthropic.anthropic.AsyncAnthropic") as mock_cls:
             client = MagicMock()
-            client.messages.create = AsyncMock(
-                return_value=_sdk_response('{"content": "x", "claims": []}')
+            # One reply that satisfies both the writer and verifier shapes.
+            counts = dict.fromkeys(
+                (
+                    "total_claims",
+                    "supported",
+                    "unsupported",
+                    "uncited",
+                    "leakage",
+                    "conflicts",
+                    "gaps_acknowledged",
+                ),
+                0,
             )
+            reply = json.dumps({"content": "x", "claims": [], "summary": counts})
+            client.messages.create = AsyncMock(return_value=_sdk_response(reply))
             mock_cls.return_value = client
             pipeline = build_pipeline(config, registry, store)
 

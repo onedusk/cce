@@ -140,10 +140,8 @@ def test_extract_json_accepts_raw_newline_inside_string():
     2026-09-23): a raw newline inside a long string value instead of the \\n
     escape. Strict parsing rejected it as an invalid control character."""
     raw = '{\n  "content": "Para one [ev_1].\n\nPara two [ev_2].",\n  "gaps": []\n}'
-    raw = raw.replace(
-        "[ev_1].\\n\\nPara", "[ev_1].\n\nPara"
-    )  # raw newlines in the string
-    assert "\n\nPara two" in raw
+    # The newlines inside the "content" value are real control characters.
+    assert "[ev_1].\n\nPara two" in raw
 
     parsed = extract_json(raw)
 

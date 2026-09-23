@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from cce.llm.base import LLMMessage, LLMResponse
+from cce.llm.base import LLMMessage, LLMResponse, UnparseableResponseError
 from cce.models.job import Job, JobStage, JobStatus
 from cce.orchestrator.pipeline import Pipeline, _per_path_iteration_counts
 from cce.output.mdx.citations import build_citation_index
@@ -512,3 +512,33 @@ async def test_pipeline_unparseable_writer_reply_fails_job_without_leaking_it(
     assert sentinel not in result.job.error.message
     assert sentinel not in caplog.text
     assert len(llm.calls) == 2
+    # The reply is still reachable, in memory only, for the caller to persist.
+    assert isinstance(result.error, UnparseableResponseError)
+    assert sentinel in result.error.raw_response
+    assert sentinel not in result.job.model_dump_json()
+
+
+@pytest.mark.integration
+async def test_pipeline_wrongly_typed_writer_reply_does_not_leak(
+    sqlite_store, caplog, monkeypatch
+):
+    """A reply that parses but has the wrong field types must not surface a
+    ValidationError quoting the reply (review finding F1)."""
+    monkeypatch.setattr("cce.llm.retry.asyncio.sleep", AsyncMock())
+    sentinel = "SENTINEL-CONFIDENTIAL client statement"
+    bad = json.dumps({"content": {"text": sentinel}})
+    llm = _llm(bad, bad)
+    pipeline = Pipeline(
+        config=make_engine_config(),
+        crawl_adapter=_make_adapter(),
+        evidence_store=sqlite_store,
+        llm=llm,
+    )
+
+    with caplog.at_level("DEBUG"):
+        result = await pipeline.run(make_curation_request(), make_source_policy())
+
+    assert result.job.status == JobStatus.FAILED
+    assert isinstance(result.error, UnparseableResponseError)
+    assert sentinel not in result.job.model_dump_json()
+    assert sentinel not in caplog.text

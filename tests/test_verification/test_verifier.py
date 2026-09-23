@@ -142,20 +142,29 @@ class TestParseResponse:
         assert exc.value.stop_reason == "end_turn"
         assert "not JSON at all" not in str(exc.value)
 
-    def test_parse_response_missing_summary(self):
-        raw = json.dumps(
-            {
-                "claims": [
-                    {"claim": "A", "assessment": "supported"},
-                    {"claim": "B", "assessment": "unsupported"},
-                ],
-                "overall_feedback": "Some issues.",
-                "contradictions": [],
-            }
-        )
-        report = self._verifier()._parse_response(LLMResponse(content=raw))
-        # No summary → total_claims defaults to len(claims)
-        assert report.total_claims == 2
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            # No summary: counts used to default to 0 -> silent zero score.
+            json.dumps(
+                {
+                    "claims": [{"claim": "A", "assessment": "supported"}],
+                    "overall_feedback": "Some issues.",
+                    "contradictions": [],
+                }
+            ),
+            "{}",
+            'Sorry. {"error": "cannot verify"}',
+            json.dumps({"claims": [], "summary": {"total_claims": "3"}}),
+            json.dumps({"claims": ["not an object"], "summary": {}}),
+        ],
+        ids=["no-summary", "empty", "error-object", "string-count", "bad-claim"],
+    )
+    def test_parse_response_unscorable_report_raises(self, raw):
+        """A report that can't be scored raises instead of becoming a
+        zero-score verdict that routes to REVIEW with no rewrite."""
+        with pytest.raises(UnparseableResponseError):
+            self._verifier()._parse_response(LLMResponse(content=raw))
 
 
 # ---------------------------------------------------------------------------

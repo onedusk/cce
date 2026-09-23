@@ -176,6 +176,43 @@ class TestParseResponse:
         assert exc.value.role == "writer"
         assert "plain markdown" not in str(exc.value)
 
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            {"content": {"text": "SENTINEL-CONFIDENTIAL"}},
+            {"draft": "SENTINEL-CONFIDENTIAL"},
+            {"content": "ok", "citations_used": "SENTINEL-CONFIDENTIAL"},
+            {"content": "ok", "evidence_map": [{"claim": ["SENTINEL"]}]},
+            {"content": "ok", "gaps": [1, 2]},
+        ],
+        ids=[
+            "content-object",
+            "no-content",
+            "citations-str",
+            "claim-list",
+            "gaps-ints",
+        ],
+    )
+    def test_parse_response_wrong_shape_raises_without_quoting_reply(self, reply):
+        """Wrongly typed fields raise UnparseableResponseError before any model
+        is built, so no ValidationError quotes the reply into logs or the job
+        record."""
+        ev = make_evidence(id="ev_001")
+        response = LLMResponse(content=json.dumps(reply), model="m")
+        with pytest.raises(UnparseableResponseError) as exc:
+            self._writer()._parse_response(response, [ev], "blog", self._lineage())
+
+        assert "SENTINEL" not in str(exc.value)
+
+    def test_parse_response_empty_content_is_not_an_error(self):
+        """An empty draft is a legitimate "no content" outcome (routes to
+        review), not an unreadable reply."""
+        ev = make_evidence(id="ev_001")
+        response = LLMResponse(content=_make_writer_json(content=""), model="m")
+        output = self._writer()._parse_response(response, [ev], "blog", self._lineage())
+
+        assert output.has_content is False
+
     def test_parse_response_unknown_citation_ids_filtered(self):
         ev = make_evidence(id="ev_001")
         raw = _make_writer_json(citations_used=["ev_001", "ev_unknown"])
