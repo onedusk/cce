@@ -63,6 +63,27 @@ current Claude models. One commit per item (B1–B4) on
   provider. Unset (default), the verifier shares the main provider, so
   behaviour is unchanged.
 
+### Fixed — phantom citation markers (B4)
+- **The gate now checks every inline marker resolves** before scoring
+  (`QualityGate._unresolved_markers`). The citation-density regex counted any
+  `[ev:...]` marker, so a draft could meet its threshold citing IDs that don't
+  exist. An unresolved marker blocks PASS and counts as fixable: FAIL (rewrite)
+  while iterations remain, REVIEW at the last one, with the unresolved IDs
+  listed in the feedback either way.
+- The marker grammar and `ev_` prefix fallback moved from
+  `output/mdx/citations.py` into `cce/parsing.py` (`EV_MARKER_RE`,
+  `resolve_evidence_id`) and are shared by the gate and emit, so every marker
+  the gate accepts is one emit resolves. Emit output is unchanged.
+- **`QualityGate.evaluate(..., evidence)` is now required** — an omitted set
+  would silently skip the check. The pipeline already passed it.
+- Stricter, as intended: drafts that passed only because of phantom markers
+  now fail. That included the pipeline test fixtures, whose scripted drafts
+  cited `ev_001` while discovery assigns random `ev_<uuid>` IDs.
+  `MockLLMProvider` now resolves placeholder IDs (`ev_001`, `ev_002`, ...) to
+  the discovered IDs in the prompt (`tests/conftest.py:cite_prompt_evidence`),
+  and the trio citation test resolves against the package evidence instead of
+  a hand-built lookup.
+
 ## [Unreleased] — content-revision (client editorial feedback)
 
 Engine remediation of the thnkLabs client editorial feedback

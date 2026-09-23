@@ -13,11 +13,7 @@ import re
 from dataclasses import dataclass
 
 from cce.models.evidence import Evidence
-
-# Matches both citation formats produced by the writer:
-#   [ev:ev_abc123]  — colon-separated (per writer prompt spec)
-#   [ev_abc123]     — bare ID in brackets (common LLM output)
-_EV_MARKER_RE = re.compile(r"\[ev:([^\]]+)\]|\[(ev_[^\]]+)\]")
+from cce.parsing import EV_MARKER_RE, resolve_evidence_id
 
 
 @dataclass(frozen=True)
@@ -50,26 +46,6 @@ def _canonical_url(url: str) -> str:
     return url.strip().split("#", 1)[0].rstrip("/")
 
 
-def _resolve(
-    ev_id_raw: str, evidence_by_id: dict[str, Evidence]
-) -> tuple[str, Evidence | None]:
-    """Resolve a marker id to (canonical_ev_id, Evidence|None), retrying with the `ev_` prefix.
-
-    The writer's prompt says "use [ev:EVIDENCE_ID]" while the evidence block displays IDs as
-    [ev_HASH] — the LLM frequently interprets "EVIDENCE_ID" as just the HASH part (without the
-    `ev_` prefix) and emits [ev:HASH]. Try the literal lookup first, then re-try with the `ev_`
-    prefix added so downstream consumers see one canonical form.
-    """
-    ev_id = ev_id_raw
-    evidence = evidence_by_id.get(ev_id)
-    if evidence is None and not ev_id.startswith("ev_"):
-        prefixed = f"ev_{ev_id}"
-        evidence = evidence_by_id.get(prefixed)
-        if evidence is not None:
-            ev_id = prefixed
-    return ev_id, evidence
-
-
 def build_citation_index(
     content: str,
     evidence_by_id: dict[str, Evidence],
@@ -94,7 +70,7 @@ def build_citation_index(
     def _replace(match: re.Match[str]) -> str:
         # group(1) = colon format [ev:ID], group(2) = bare format [ev_ID]
         ev_id_raw = match.group(1) or match.group(2)
-        ev_id, evidence = _resolve(ev_id_raw, evidence_by_id)
+        ev_id, evidence = resolve_evidence_id(ev_id_raw, evidence_by_id)
         if evidence is None:
             return "[^?]"
         key = _canonical_url(evidence.url)
@@ -116,5 +92,5 @@ def build_citation_index(
         )
         return f"[^{index}]"
 
-    transformed = _EV_MARKER_RE.sub(_replace, content)
+    transformed = EV_MARKER_RE.sub(_replace, content)
     return CitationResult(content=transformed, citations=tuple(citations))

@@ -20,6 +20,7 @@ from cce.llm.base import LLMMessage, LLMResponse
 from cce.models.job import JobStage
 from cce.orchestrator.pipeline import Pipeline
 from tests.conftest import (
+    cite_prompt_evidence,
     make_curation_request,
     make_engine_config,
     make_source_policy,
@@ -75,7 +76,7 @@ class _RecordingLLM:
         self.calls.append("writer")
         self.writer_calls.append((path, _SIBLING_MARKER in text, text))
         return LLMResponse(
-            content=writer_json(),
+            content=cite_prompt_evidence(writer_json(), messages),
             model="mock",
             stop_reason="end_turn",
             usage={

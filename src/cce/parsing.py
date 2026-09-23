@@ -6,7 +6,36 @@ import json
 import logging
 import re
 
+from cce.models.evidence import Evidence
+
 logger = logging.getLogger(__name__)
+
+# Citation-marker grammar shared by the quality gate and MDX emit (B4), so
+# every marker the gate accepts is one emit can resolve. Matches both
+# citation formats produced by the writer:
+#   [ev:ev_abc123]  — colon-separated (per writer prompt spec)
+#   [ev_abc123]     — bare ID in brackets (common LLM output)
+EV_MARKER_RE = re.compile(r"\[ev:([^\]]+)\]|\[(ev_[^\]]+)\]")
+
+
+def resolve_evidence_id(
+    ev_id_raw: str, evidence_by_id: dict[str, Evidence]
+) -> tuple[str, Evidence | None]:
+    """Resolve a marker id to (canonical_ev_id, Evidence|None), retrying with the `ev_` prefix.
+
+    The writer's prompt says "use [ev:EVIDENCE_ID]" while the evidence block displays IDs as
+    [ev_HASH] — the LLM frequently interprets "EVIDENCE_ID" as just the HASH part (without the
+    `ev_` prefix) and emits [ev:HASH]. Try the literal lookup first, then re-try with the `ev_`
+    prefix added so downstream consumers see one canonical form.
+    """
+    ev_id = ev_id_raw
+    evidence = evidence_by_id.get(ev_id)
+    if evidence is None and not ev_id.startswith("ev_"):
+        prefixed = f"ev_{ev_id}"
+        evidence = evidence_by_id.get(prefixed)
+        if evidence is not None:
+            ev_id = prefixed
+    return ev_id, evidence
 
 
 def extract_json(text: str) -> dict | None:

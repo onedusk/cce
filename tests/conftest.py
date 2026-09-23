@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
+import re
 import uuid
 from collections.abc import AsyncGenerator, Callable
 from datetime import UTC, datetime
@@ -61,8 +63,35 @@ def pytest_collection_modifyitems(config, items):  # type: ignore[no-untyped-def
 # ---------------------------------------------------------------------------
 
 
+# Discovery assigns random ``ev_<12 hex>`` IDs (discoverer.py), so a scripted
+# reply can't know them in advance. Placeholders ev_001, ev_002, ... in a
+# reply stand for the 1st, 2nd, ... such ID in the prompt, so pipeline drafts
+# cite the evidence they were shown and pass the gate's marker check (B4).
+# Hand-picked IDs (ev_001, test_001, ...) never match the 12-hex form, so
+# unit tests that build their own evidence are unaffected.
+_DISCOVERED_ID_RE = re.compile(r"\bev_[0-9a-f]{12}\b")
+_PLACEHOLDER_ID_RE = re.compile(r"\bev_(\d{3})\b")
+
+
+def cite_prompt_evidence(reply: str, messages: list[LLMMessage]) -> str:
+    """Rewrite placeholder IDs in ``reply`` to the discovered IDs in the prompt."""
+    prompt = "\n".join(m.content for m in messages)
+    discovered = list(dict.fromkeys(_DISCOVERED_ID_RE.findall(prompt)))
+    if not discovered:
+        return reply
+
+    def _sub(match: re.Match[str]) -> str:
+        n = int(match.group(1))
+        return discovered[n - 1] if 1 <= n <= len(discovered) else match.group(0)
+
+    return _PLACEHOLDER_ID_RE.sub(_sub, reply)
+
+
 class MockLLMProvider:
     """Protocol-compliant LLM mock with scripted responses and call recording.
+
+    Placeholder evidence IDs in scripted replies are resolved against the
+    prompt (see ``cite_prompt_evidence``).
 
     Satisfies: cce.llm.base.LLMProvider
     """
@@ -95,7 +124,10 @@ class MockLLMProvider:
         if not self._responses:
             raise RuntimeError("MockLLMProvider: no more scripted responses")
         resp = self._responses.pop(0)
-        return resp() if callable(resp) else resp
+        resp = resp() if callable(resp) else resp
+        return dataclasses.replace(
+            resp, content=cite_prompt_evidence(resp.content, messages)
+        )
 
 
 # ---------------------------------------------------------------------------

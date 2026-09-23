@@ -31,9 +31,16 @@ def _evaluate(
     autopublish_threshold: float = 0.85,
     max_writer_iterations: int = 3,
     min_citations_per_paragraph: int = 1,
+    evidence: list | None = None,
     **report_overrides,
 ) -> GateResult:
-    """Helper to run gate.evaluate with minimal boilerplate."""
+    """Helper to run gate.evaluate with minimal boilerplate.
+
+    ``evidence`` defaults to the two IDs the default content cites, so every
+    marker resolves unless a test says otherwise (B4).
+    """
+    if evidence is None:
+        evidence = [make_evidence(id="test_001"), make_evidence(id="test_002")]
     config = make_gate_config(
         autopublish_threshold=autopublish_threshold,
         max_writer_iterations=max_writer_iterations,
@@ -49,7 +56,7 @@ def _evaluate(
         conflicts=conflicts,
         **report_overrides,
     )
-    return gate.evaluate(unit, report, iteration)
+    return gate.evaluate(unit, report, iteration, evidence=evidence)
 
 
 # ---------------------------------------------------------------------------
@@ -323,3 +330,129 @@ def test_gate_result_properties():
     assert review_result.needs_human is True
     assert review_result.should_publish is False
     assert review_result.should_rewrite is False
+
+
+# ---------------------------------------------------------------------------
+# Inline marker resolution (B4)
+# ---------------------------------------------------------------------------
+
+# Two substantive paragraphs, three markers: one real, two invented. Dense
+# enough that the density check passes on marker count alone.
+_PHANTOM_DRAFT = (
+    "Sleep hygiene covers the habits that shape a night of rest, and the "
+    "evidence here is consistent across sources [ev:ev_real].\n\n"
+    "A second paragraph long enough to count as substantive for the density "
+    "check cites two sources that were never provided [ev:ev_ghost1] and "
+    "[ev:ev_ghost2]."
+)
+
+
+def test_gate_fails_draft_with_invented_markers_and_names_them():
+    """B4 acceptance: one real and two invented markers -> FAIL, both named.
+
+    Confidence 1.0, zero leakage and dense markers, so without the marker
+    check this draft would PASS — the check is what fails it.
+    """
+    result = _evaluate(
+        content=_PHANTOM_DRAFT,
+        confidence_score=1.0,
+        evidence=[make_evidence(id="ev_real")],
+    )
+
+    assert result.decision == GateDecision.FAIL
+    assert "ev_ghost1" in result.feedback
+    assert "ev_ghost2" in result.feedback
+    assert "ev_real" not in result.feedback
+
+
+def test_gate_passes_same_draft_when_every_marker_resolves():
+    """Control for the acceptance test: same draft, all markers real -> PASS."""
+    result = _evaluate(
+        content=_PHANTOM_DRAFT,
+        confidence_score=1.0,
+        evidence=[
+            make_evidence(id="ev_real"),
+            make_evidence(id="ev_ghost1"),
+            make_evidence(id="ev_ghost2"),
+        ],
+    )
+
+    assert result.decision == GateDecision.PASS
+
+
+def test_gate_invented_markers_route_to_review_at_max_iterations():
+    """At the last iteration an unresolved marker still blocks PASS; it goes to
+    human review with the IDs in the feedback."""
+    result = _evaluate(
+        content=_PHANTOM_DRAFT,
+        confidence_score=1.0,
+        iteration=3,
+        max_writer_iterations=3,
+        evidence=[make_evidence(id="ev_real")],
+    )
+
+    assert result.decision == GateDecision.REVIEW
+    assert "ev_ghost1" in result.feedback
+    assert "ev_ghost2" in result.feedback
+
+
+def test_gate_empty_evidence_leaves_every_marker_unresolved():
+    """An empty evidence list is checked, not skipped (no truthiness shortcut)."""
+    result = _evaluate(content=_PHANTOM_DRAFT, confidence_score=1.0, evidence=[])
+
+    assert result.decision == GateDecision.FAIL
+    for ev_id in ("ev_real", "ev_ghost1", "ev_ghost2"):
+        assert ev_id in result.feedback
+
+
+def test_gate_requires_evidence():
+    """Evidence is required: an omitted set would silently skip the check."""
+    gate = QualityGate(make_gate_config())
+    with pytest.raises(TypeError):
+        gate.evaluate(  # type: ignore[call-arg]
+            make_content_unit(content=_PHANTOM_DRAFT),
+            make_verification_report(confidence_score=1.0),
+            1,
+        )
+
+
+@pytest.mark.parametrize(
+    "marker",
+    ["[ev:ev_abc123]", "[ev_abc123]", "[ev:abc123]"],
+    ids=["colon", "bare", "colon-without-prefix"],
+)
+def test_gate_accepts_every_marker_form_emit_resolves(marker):
+    """The gate uses emit's grammar and `ev_` prefix fallback, so the forms
+    build_citation_index resolves are accepted here too."""
+    content = (
+        "This is a long enough paragraph with more than fifteen words so the "
+        f"density check applies to it {marker}."
+    )
+    result = _evaluate(
+        content=content,
+        confidence_score=1.0,
+        evidence=[make_evidence(id="ev_abc123")],
+    )
+
+    assert result.decision == GateDecision.PASS
+
+
+def test_gate_and_emit_agree_on_unresolved_markers():
+    """Every marker the gate reports is one emit renders as [^?], and vice
+    versa (B4: 'the same set emit will use')."""
+    from cce.output.mdx.citations import build_citation_index
+
+    content = (
+        "Real [ev:ev_real], unprefixed [ev:real2], bare [ev_real], phantom "
+        "[ev:ev_nope], multi [ev:ev_real, ev_nope], and bare phantom [ev_zzz]."
+    )
+    evidence = [make_evidence(id="ev_real"), make_evidence(id="ev_real2")]
+    by_id = {ev.id: ev for ev in evidence}
+
+    unresolved = QualityGate._unresolved_markers(
+        make_content_unit(content=content), evidence
+    )
+    rendered = build_citation_index(content, by_id).content
+
+    assert unresolved == ["ev_nope", "ev_real, ev_nope", "ev_zzz"]
+    assert rendered.count("[^?]") == len(unresolved)

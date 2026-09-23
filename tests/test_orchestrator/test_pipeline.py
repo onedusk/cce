@@ -13,9 +13,9 @@ from cce.verification.gate import GateDecision
 from tests.conftest import (
     MockCrawlAdapter,
     MockLLMProvider,
+    cite_prompt_evidence,
     make_curation_request,
     make_engine_config,
-    make_evidence,
     make_source_policy,
 )
 from tests.test_orchestrator.conftest import (
@@ -109,6 +109,37 @@ async def test_pipeline_routes_verifier_calls_to_verifier_llm(sqlite_store):
     assert "DRAFT CONTENT TO VERIFY" not in main.calls[0]["messages"][0].content
     assert len(verifier.calls) == 1
     assert "DRAFT CONTENT TO VERIFY" in verifier.calls[0]["messages"][0].content
+
+
+@pytest.mark.integration
+async def test_pipeline_phantom_marker_triggers_rewrite_naming_it(sqlite_store):
+    """B4: a draft citing an ID that isn't in the evidence FAILs the gate even
+    at full verifier confidence; the rewrite prompt names the phantom ID, and
+    the corrected draft passes."""
+    llm = _llm(
+        _writer_json(content="Draft [ev:ev_001] plus an invented [ev:ev_ghost]."),
+        _verifier_json(supported=10, total=10, gaps=0),
+        _writer_json(content="Draft [ev:ev_001]."),
+        _verifier_json(supported=10, total=10, gaps=0),
+    )
+    pipeline = Pipeline(
+        config=make_engine_config(),
+        crawl_adapter=_make_adapter(),
+        evidence_store=sqlite_store,
+        llm=llm,
+    )
+
+    result = await pipeline.run(make_curation_request(), make_source_policy())
+
+    assert [gr.decision for gr in result.gate_results] == [
+        GateDecision.FAIL,
+        GateDecision.PASS,
+    ]
+    assert "ev_ghost" in result.gate_results[0].feedback
+    rewrite_prompt = llm.calls[2]["messages"][0].content
+    assert "VERIFIER FEEDBACK" in rewrite_prompt
+    assert "ev_ghost" in rewrite_prompt
+    assert result.job.status == JobStatus.COMPLETED
 
 
 @pytest.mark.integration
@@ -323,7 +354,7 @@ class _PathDispatchLLM:
         path = match.group(1).strip()
         self.calls.append(("writer", path))
         return LLMResponse(
-            content=self._writer_by_path[path],
+            content=cite_prompt_evidence(self._writer_by_path[path], messages),
             model="mock",
             stop_reason="end_turn",
             usage=usage,
@@ -357,8 +388,8 @@ async def test_trio_gate_attribution_completes_and_citations_resolve(sqlite_stor
     assert _per_path_iteration_counts(result.job, _TRIO) == [1, 1, 1]
 
     # Citation invariant: each unit's [ev:ID] markers resolve to a footnote —
-    # no orphaned [^?] — when scanned against the cited evidence id.
-    ev_lookup = {"ev_001": make_evidence(id="ev_001")}
+    # no orphaned [^?] — against the package evidence emit actually uses (B4).
+    ev_lookup = {ev.id: ev for ev in result.package.evidence}
     for unit in result.package.units:
         cited = build_citation_index(unit.content, ev_lookup)
         assert "[^?]" not in cited.content

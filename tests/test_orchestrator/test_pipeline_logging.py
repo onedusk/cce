@@ -19,7 +19,7 @@ from tests.conftest import (
 pytestmark = pytest.mark.integration
 
 
-def _writer_response(citations: str = "ev_test_001") -> str:
+def _writer_response(citations: str = "ev_001") -> str:
     """Build a valid writer JSON response."""
     import json
 
