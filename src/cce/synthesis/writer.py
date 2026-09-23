@@ -16,7 +16,7 @@ import uuid
 
 from cce.config.types import WriterConfig
 from cce.evidence.formatting import format_evidence_for_prompt
-from cce.llm.base import LLMMessage, LLMProvider, LLMResponse
+from cce.llm.base import LLMMessage, LLMProvider, LLMResponse, ensure_complete
 from cce.llm.retry import with_llm_retry
 from cce.models.content import (
     Citation,
@@ -199,6 +199,7 @@ exists, and mark remaining gaps as [INSUFFICIENT EVIDENCE].
                 system=system_prompt,
                 temperature=self._config.temperature,
             )
+            ensure_complete(response, role="writer")
             output = self._parse_response(
                 response, evidence, path, lineage, ev_lookup=ev_lookup
             )

@@ -6,7 +6,7 @@ import pytest
 
 from cce.config.types import WriterConfig
 from cce.evidence.formatting import format_evidence_for_prompt
-from cce.llm.base import LLMResponse
+from cce.llm.base import IncompleteResponseError, LLMResponse
 from cce.models.content import ContentLineage
 from cce.models.evidence import SourceQuality
 from cce.models.request import CurationConstraints
@@ -386,3 +386,28 @@ async def test_write_without_path_config_uses_base_prompt():
     await writer.write(make_curation_request(), [ev], "blog")
 
     assert llm.calls[0]["system"] == WRITER_SYSTEM_PROMPT
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("stop_reason", ["max_tokens", "refusal"])
+async def test_write_raises_on_incomplete_reply(stop_reason):
+    """B2: a truncated/refused reply raises instead of degrading into the
+    uncited raw-markdown fallback, and is not resent (one call only)."""
+    llm = MockLLMProvider(
+        [
+            LLMResponse(
+                content='{"content": "Partial draft [ev:ev_001] and then',
+                model="claude-sonnet-5",
+                usage={"output_tokens": 16384},
+                stop_reason=stop_reason,
+            )
+        ]
+    )
+    writer = Writer(llm)
+
+    with pytest.raises(IncompleteResponseError, match="writer"):
+        await writer.write(
+            make_curation_request(), [make_evidence(id="ev_001")], "blog"
+        )
+
+    assert len(llm.calls) == 1

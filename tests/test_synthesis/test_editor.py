@@ -7,7 +7,7 @@ import logging
 import pytest
 
 from cce.config.types import EditorConfig
-from cce.llm.base import LLMResponse
+from cce.llm.base import IncompleteResponseError, LLMResponse
 from cce.models.content import (
     ContentLineage,
     ContentScores,
@@ -230,3 +230,25 @@ async def test_editor_does_not_count_underscore_citation_variant():
     # Input had 1 colon-form citation; output has 0 colon-form citations
     # (only the underscore variant, which the regex ignores). Drift detected.
     assert out.citations_preserved is False
+
+
+async def test_editor_raises_on_truncated_reply():
+    """B2: a truncated edit raises instead of being parsed. The fallback
+    parser takes everything after the start sentinel, so a cut-off edit that
+    kept every marker would otherwise replace the writer's full draft."""
+    llm = MockLLMProvider(
+        [
+            LLMResponse(
+                content="=== EDITED START ===\nSleep matters [ev:ev_001]. And then",
+                model="claude-sonnet-5",
+                usage={"output_tokens": 16384},
+                stop_reason="max_tokens",
+            )
+        ]
+    )
+    editor = Editor(llm=llm, config=EditorConfig(enabled=True))
+
+    with pytest.raises(IncompleteResponseError, match="editor"):
+        await editor.edit(_make_unit("Sleep matters [ev:ev_001]."))
+
+    assert len(llm.calls) == 1

@@ -27,12 +27,13 @@ _EVIDENCE_END_MARKERS = [
     "=== END EVIDENCE ===",
 ]
 
-# Model-ID prefixes of the models that still accept sampling parameters
-# (B1). Every model from Opus 4.7 on (Opus 4.7/4.8/5, Sonnet 5, Fable 5)
-# rejects `temperature` with a 400, so the rule lists the finite legacy set:
-# any model not matched here is treated as current and gets no sampling
-# params, and a new release needs no code change.
-_SAMPLING_MODEL_PREFIXES: tuple[str, ...] = (
+# Model capability rules, keyed by model-ID prefix. Both list the finite
+# legacy set, so any model not matched is treated as current and a new
+# release needs no code change.
+#
+# Models without adaptive thinking or effort (Haiku 4.5 and older): the
+# `thinking` / `output_config.effort` settings are never sent to them (B2).
+_PRE_ADAPTIVE_MODEL_PREFIXES: tuple[str, ...] = (
     "claude-3",
     "claude-opus-4-0",
     "claude-opus-4-1",
@@ -42,6 +43,11 @@ _SAMPLING_MODEL_PREFIXES: tuple[str, ...] = (
     "claude-opus-4-5",
     "claude-sonnet-4-5",
     "claude-haiku-4-5",
+)
+# Models that still accept sampling parameters (B1): the pre-adaptive set
+# plus the 4.6 family. Every model from Opus 4.7 on (Opus 4.7/4.8/5,
+# Sonnet 5, Fable 5) rejects `temperature` with a 400.
+_SAMPLING_MODEL_PREFIXES: tuple[str, ...] = _PRE_ADAPTIVE_MODEL_PREFIXES + (
     "claude-opus-4-6",
     "claude-sonnet-4-6",
 )
@@ -53,7 +59,14 @@ class AnthropicProvider:
     def __init__(self, config: LLMConfig) -> None:
         self._config = config
         self._client = anthropic.AsyncAnthropic(api_key=config.api_key, max_retries=2)
-        self._accepts_sampling = config.model.startswith(_SAMPLING_MODEL_PREFIXES)
+        self._accepts_adaptive = not config.model.startswith(
+            _PRE_ADAPTIVE_MODEL_PREFIXES
+        )
+        # With thinking on, even the 4.6 models reject any temperature but 1.
+        thinking_on = self._accepts_adaptive and config.thinking == "adaptive"
+        self._accepts_sampling = (
+            config.model.startswith(_SAMPLING_MODEL_PREFIXES) and not thinking_on
+        )
 
     async def complete(
         self,
@@ -85,6 +98,11 @@ class AnthropicProvider:
             kwargs["temperature"] = (
                 temperature if temperature is not None else self._config.temperature
             )
+        if self._accepts_adaptive:
+            if self._config.thinking is not None:
+                kwargs["thinking"] = {"type": self._config.thinking}
+            if self._config.effort is not None:
+                kwargs["output_config"] = {"effort": self._config.effort}
 
         # System prompt: prefer explicit arg, fall back to any system message in the list
         sys_prompt = system

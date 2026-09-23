@@ -6,12 +6,13 @@ import re
 import pytest
 
 from cce.llm.base import LLMMessage, LLMResponse
-from cce.models.job import Job, JobStatus
+from cce.models.job import Job, JobStage, JobStatus
 from cce.orchestrator.pipeline import Pipeline, _per_path_iteration_counts
 from cce.output.mdx.citations import build_citation_index
 from cce.verification.gate import GateDecision
 from tests.conftest import (
     MockCrawlAdapter,
+    MockLLMProvider,
     make_curation_request,
     make_engine_config,
     make_evidence,
@@ -50,6 +51,41 @@ async def test_pipeline_happy_path(sqlite_store):
     assert result.package is not None
     assert len(result.package.units) == 1
     assert result.job.status == JobStatus.COMPLETED
+
+
+@pytest.mark.integration
+async def test_pipeline_truncated_writer_reply_fails_job_with_reason(sqlite_store):
+    """B2: a writer reply cut off at max_tokens fails the job loudly; the job
+    record names the role, the model and the stop reason instead of carrying
+    an uncited raw-markdown draft forward."""
+    llm = MockLLMProvider(
+        [
+            LLMResponse(
+                content='{"content": "Draft cut off [ev:',
+                model="claude-sonnet-5",
+                usage={"output_tokens": 16384},
+                stop_reason="max_tokens",
+            )
+        ]
+    )
+    pipeline = Pipeline(
+        config=make_engine_config(),
+        crawl_adapter=_make_adapter(),
+        evidence_store=sqlite_store,
+        llm=llm,
+    )
+
+    result = await pipeline.run(make_curation_request(), make_source_policy())
+
+    assert result.job.status == JobStatus.FAILED
+    assert result.package is None
+    assert result.job.error is not None
+    message = result.job.error.message
+    assert "writer" in message
+    assert "claude-sonnet-5" in message
+    assert "max_tokens" in message
+    assert result.job.error.stage == JobStage.WRITE
+    assert len(llm.calls) == 1
 
 
 @pytest.mark.integration

@@ -20,15 +20,13 @@ from dataclasses import dataclass, field
 
 from cce.config.types import VerifierConfig
 from cce.evidence.formatting import format_evidence_for_prompt
-from cce.llm.base import LLMMessage, LLMProvider
+from cce.llm.base import LLMMessage, LLMProvider, ensure_complete
 from cce.llm.retry import with_llm_retry
 from cce.models.content import ContentUnit
 from cce.models.evidence import Evidence
 from cce.parsing import extract_json
 
 logger = logging.getLogger(__name__)
-
-VERIFIER_MAX_TOKENS = 16384  # large output for detailed claim-by-claim analysis
 
 VERIFIER_SYSTEM_PROMPT = """\
 You are a rigorous fact-checking verifier. Your job is to verify that every \
@@ -231,8 +229,9 @@ traced to the evidence above should be flagged.
                 messages,
                 system=_VERIFIER_FULL_PROMPT,
                 temperature=self._config.temperature,
-                max_tokens=VERIFIER_MAX_TOKENS,
+                max_tokens=self._config.max_tokens,
             )
+            ensure_complete(response, role="verifier")
             report = self._parse_response(response.content)
             report.token_usage = response.usage
             return report

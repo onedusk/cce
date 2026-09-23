@@ -27,6 +27,31 @@ current Claude models. One commit per item (B1–B4) on
   `verifier:`), also accepted by `Writer(llm, config)` / `Verifier(llm, config)`
   for direct callers.
 
+### Fixed — silent truncation (B2)
+- **`stop_reason` is now checked.** The Writer, Verifier, Editor and
+  implied-claim checker raise `IncompleteResponseError` (`llm/base.py`) on
+  `stop_reason == "max_tokens"` (and `"refusal"`) instead of parsing the
+  reply. Before, a truncated writer reply became uncited raw markdown and a
+  truncated verifier reply became a zero-score verdict that routed straight to
+  REVIEW with no rewrite. The error is deliberately not a `ValueError`, so
+  `with_llm_retry` does not resend with the same budget; the pipeline records
+  a FAILED job whose `error.message` names the role, model and output tokens.
+- **`VerifierConfig.max_tokens`** (default 16384, `CCE_VERIFIER_MAX_TOKENS`)
+  replaces the `VERIFIER_MAX_TOKENS` literal.
+- **`LLMConfig.max_tokens` default 8192 → 16384**, so thinking (which counts
+  against the cap on current models) can't crowd out the JSON.
+- **`LLMConfig.thinking` / `LLMConfig.effort`** (`CCE_LLM_THINKING`,
+  `CCE_LLM_EFFORT`): explicit `thinking: {type: adaptive|disabled}` and
+  `output_config.effort`, sent only to models that support them (4.6 and
+  later; never Haiku 4.5 or older). Unset (default) omits both, so the 4.6
+  models keep today's no-thinking behaviour. With `thinking: adaptive` the
+  provider also drops `temperature` on the 4.6 models, which reject any value
+  but 1 while thinking is on (found in the live check).
+- Live-checked 2026-09-23: `claude-sonnet-5`, `claude-opus-5`,
+  `claude-sonnet-4-6` and `claude-haiku-4-5`, each with default, adaptive,
+  adaptive+effort, effort-only, disabled and disabled+effort settings, all
+  without a 400.
+
 ## [Unreleased] — content-revision (client editorial feedback)
 
 Engine remediation of the thnkLabs client editorial feedback

@@ -6,7 +6,7 @@ import logging
 import pytest
 
 from cce.config.types import VerifierConfig
-from cce.llm.base import LLMResponse
+from cce.llm.base import IncompleteResponseError, LLMResponse
 from cce.models.evidence import SourceQuality
 from cce.verification.verifier import (
     _VERIFIER_FULL_PROMPT,
@@ -279,3 +279,46 @@ async def test_verify_temperature_from_config():
     await verifier.verify(unit, [make_evidence(id="ev_001")])
 
     assert llm.calls[0]["temperature"] == 0.3
+
+
+@pytest.mark.integration
+async def test_verify_max_tokens_from_config():
+    """B2: the verifier's max_tokens is a VerifierConfig default, not a literal."""
+    llm = MockLLMProvider(
+        [
+            LLMResponse(
+                content=_make_valid_verifier_json(),
+                model="mock",
+                stop_reason="end_turn",
+            )
+        ]
+    )
+    verifier = Verifier(llm, VerifierConfig(max_tokens=20000))
+
+    unit = make_content_unit(content="AI models are powerful [ev:ev_001].")
+    await verifier.verify(unit, [make_evidence(id="ev_001")])
+
+    assert llm.calls[0]["max_tokens"] == 20000
+
+
+@pytest.mark.integration
+async def test_verify_raises_on_truncated_reply():
+    """B2: a truncated report raises instead of becoming a zero-score verdict
+    (which routed straight to REVIEW with no rewrite), and is not resent."""
+    llm = MockLLMProvider(
+        [
+            LLMResponse(
+                content='{"claims": [{"claim": "AI models are',
+                model="claude-sonnet-5",
+                usage={"output_tokens": 16384},
+                stop_reason="max_tokens",
+            )
+        ]
+    )
+    verifier = Verifier(llm)
+    unit = make_content_unit(content="AI models are powerful [ev:ev_001].")
+
+    with pytest.raises(IncompleteResponseError, match="verifier"):
+        await verifier.verify(unit, [make_evidence(id="ev_001")])
+
+    assert len(llm.calls) == 1

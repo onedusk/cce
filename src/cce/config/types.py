@@ -35,11 +35,33 @@ class LLMConfig(BaseModel):
         ),
     )
     max_tokens: int = Field(
-        default=8192,
+        default=16384,
+        ge=1,
         description=(
-            "Max tokens per LLM call. 8192 (was 4096) — the writer's long "
-            "learn/explore essays wrapped in JSON exceed 4096 and truncate "
-            "mid-object, forcing the raw-markdown fallback."
+            "Max tokens per LLM call, thinking included. 16384 (was 8192, "
+            "was 4096): the writer's long learn/explore essays wrapped in "
+            "JSON exceed 4096, and on current models thinking counts against "
+            "this cap, so 8192 could crowd out the JSON (B2). A reply that "
+            "hits the cap raises IncompleteResponseError. The SDK refuses "
+            "non-streaming values above ~21,333."
+        ),
+    )
+    thinking: Literal["adaptive", "disabled"] | None = Field(
+        default=None,
+        description=(
+            "Thinking mode sent as `thinking: {type: ...}` (B2). None = omit "
+            "the param and take the model default (Sonnet 5 / Opus 5 think "
+            "adaptively; 4.6 models do not think). Never sent to models "
+            "without adaptive thinking (Haiku 4.5 and older)."
+        ),
+    )
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = Field(
+        default=None,
+        description=(
+            "Sent as `output_config.effort` (B2). None = omit (model "
+            "default, `high` on most models). Never sent to models without "
+            "effort support (Haiku 4.5 and older). `xhigh` needs Opus 4.7+ / "
+            "Sonnet 5; the API rejects it on the 4.6 models."
         ),
     )
 
@@ -68,6 +90,15 @@ class VerifierConfig(BaseModel):
         description=(
             "Very low for consistent judgment; do not increase. Ignored on "
             "models that reject sampling params (B1)."
+        ),
+    )
+    max_tokens: int = Field(
+        default=16384,
+        ge=1,
+        description=(
+            "Per-call output cap for the claim-by-claim report (thinking "
+            "included). Replaces the VERIFIER_MAX_TOKENS literal (B2). The "
+            "SDK refuses non-streaming values above ~21,333."
         ),
     )
 

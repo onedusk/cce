@@ -201,6 +201,101 @@ async def test_sampling_params_follow_model_capability(
         assert "top_p" not in call_kwargs
 
 
+@pytest.mark.parametrize(
+    ("model", "accepts_adaptive"),
+    [
+        ("claude-sonnet-5", True),
+        ("claude-opus-5", True),
+        ("claude-opus-4-7", True),
+        ("claude-sonnet-4-6", True),
+        ("claude-opus-4-6", True),
+        ("claude-haiku-4-5", False),
+        ("claude-sonnet-4-5", False),
+    ],
+)
+@patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
+async def test_thinking_and_effort_follow_model_capability(
+    mock_cls: MagicMock, model: str, accepts_adaptive: bool
+) -> None:
+    """B2: explicit thinking/effort are sent only to models that support
+    adaptive thinking and effort; Haiku 4.5 and older get neither."""
+    mock_client = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=_mock_response())
+    mock_cls.return_value = mock_client
+
+    config = _config().model_copy(
+        update={"model": model, "thinking": "adaptive", "effort": "medium"}
+    )
+    await AnthropicProvider(config).complete([LLMMessage(role="user", content="Hi")])
+
+    call_kwargs = mock_client.messages.create.call_args[1]
+    if accepts_adaptive:
+        assert call_kwargs["thinking"] == {"type": "adaptive"}
+        assert call_kwargs["output_config"] == {"effort": "medium"}
+    else:
+        assert "thinking" not in call_kwargs
+        assert "output_config" not in call_kwargs
+
+
+@pytest.mark.parametrize("model", ["claude-sonnet-5", "claude-sonnet-4-6"])
+@patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
+async def test_thinking_and_effort_omitted_by_default(
+    mock_cls: MagicMock, model: str
+) -> None:
+    """B2: unset thinking/effort leave the params out (model default), so
+    the 4.6 models keep today's no-thinking behaviour."""
+    mock_client = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=_mock_response())
+    mock_cls.return_value = mock_client
+
+    config = _config().model_copy(update={"model": model})
+    await AnthropicProvider(config).complete([LLMMessage(role="user", content="Hi")])
+
+    call_kwargs = mock_client.messages.create.call_args[1]
+    assert "thinking" not in call_kwargs
+    assert "output_config" not in call_kwargs
+
+
+@pytest.mark.parametrize(
+    ("thinking", "sends_temperature"),
+    [("adaptive", False), ("disabled", True), (None, True)],
+)
+@patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
+async def test_adaptive_thinking_drops_temperature_on_4_6(
+    mock_cls: MagicMock, thinking: str | None, sends_temperature: bool
+) -> None:
+    """With thinking on, the API rejects any temperature but 1 even on the
+    4.6 models (live 400, 2026-09-23), so the provider omits it there too."""
+    mock_client = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=_mock_response())
+    mock_cls.return_value = mock_client
+
+    config = _config().model_copy(
+        update={"model": "claude-sonnet-4-6", "thinking": thinking}
+    )
+    await AnthropicProvider(config).complete(
+        [LLMMessage(role="user", content="Hi")], temperature=0.2
+    )
+
+    assert ("temperature" in mock_client.messages.create.call_args[1]) is (
+        sends_temperature
+    )
+
+
+@patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
+async def test_disabled_thinking_passes_through(mock_cls: MagicMock) -> None:
+    mock_client = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=_mock_response())
+    mock_cls.return_value = mock_client
+
+    config = _config().model_copy(
+        update={"model": "claude-sonnet-5", "thinking": "disabled"}
+    )
+    await AnthropicProvider(config).complete([LLMMessage(role="user", content="Hi")])
+
+    assert mock_client.messages.create.call_args[1]["thinking"] == {"type": "disabled"}
+
+
 @patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
 async def test_sdk_exception_propagates(mock_cls: MagicMock) -> None:
     """RuntimeError raised by the SDK propagates to the caller."""

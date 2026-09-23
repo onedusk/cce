@@ -21,7 +21,7 @@ import re
 from dataclasses import dataclass
 
 from cce.config.types import EditorConfig
-from cce.llm.base import LLMMessage, LLMProvider
+from cce.llm.base import LLMMessage, LLMProvider, ensure_complete
 from cce.llm.retry import with_llm_retry
 from cce.models.content import ContentUnit
 from cce.models.paths import PathConfig
@@ -168,6 +168,7 @@ class Editor:
                 system=EDITOR_SYSTEM_PROMPT,
                 temperature=self._config.temperature,
             )
+            ensure_complete(response, role="editor")
             return self._parse_response(
                 raw=response.content,
                 original_citations=original_citations,
