@@ -89,9 +89,21 @@ current Claude models. One commit per item (B1–B4) on
   now fail. That included the pipeline test fixtures, whose scripted drafts
   cited `ev_001` while discovery assigns random `ev_<uuid>` IDs.
   `MockLLMProvider` now resolves placeholder IDs (`ev_001`, `ev_002`, ...) to
-  the discovered IDs in the prompt (`tests/conftest.py:cite_prompt_evidence`),
-  and the trio citation test resolves against the package evidence instead of
-  a hand-built lookup.
+  the discovered IDs in the prompt (`tests/conftest.py:cite_prompt_evidence`,
+  opt-in via `MockLLMProvider(cite_placeholders=True)` for pipeline-level
+  tests only), and the trio citation test resolves against the package
+  evidence instead of a hand-built lookup.
+- **Editor drift check sees bare markers** (adversarial review). The Editor's
+  citation-preservation check matched only `[ev:ID]`, so an editor-added bare
+  `[ev_ID]` (e.g. from an implied-claims hint citing store-wide evidence)
+  passed as "preserved", then failed the stricter gate on every rewrite with
+  an ID the writer had never seen. `_extract_citation_ids` now compares the
+  full text of every marker in the shared grammar: added or dropped bare
+  markers are drift (writer's draft kept), and a `[ev:ID]` → `[ev_ID]`
+  rewrite still is.
+- **Multi-ID brackets** (`[ev_a, ev_b]`) still block PASS — emit renders them
+  as `[^?]` — but get their own feedback line ("use one marker per source")
+  instead of listing valid IDs as unresolved.
 
 ## [Unreleased] — content-revision (client editorial feedback)
 

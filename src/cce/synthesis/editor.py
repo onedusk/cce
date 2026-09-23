@@ -26,14 +26,16 @@ from cce.llm.retry import with_llm_retry
 from cce.models.content import ContentUnit
 from cce.models.paths import PathConfig
 from cce.models.style import StyleScores
+from cce.parsing import EV_MARKER_RE
 
 logger = logging.getLogger(__name__)
 
 
-# Canonical citation format is [ev:ID] (colon). The writer prompt, the
-# verifier prompt, and the gate all emit/accept this form. Strict matching
-# here means a malformed [ev_ID] variant in the writer's output won't be
-# silently treated as "preserved" by the citation drift check.
+# Canonical citation format is [ev:ID] (colon); _CITATION_RE strips it for
+# word counts. The drift check (_extract_citation_ids) instead compares the
+# full text of every marker the gate and emit recognise (cce.parsing), so an
+# added or dropped bare [ev_ID] is drift too (B4), and a [ev:ID] -> [ev_ID]
+# rewrite still is.
 _CITATION_RE = re.compile(r"\[ev:[^\]]+\]")
 _WORD_RE = re.compile(r"\b[\w'-]+\b")
 
@@ -283,8 +285,8 @@ class Editor:
 
 
 def _extract_citation_ids(content: str) -> set[str]:
-    """Extract the set of [ev:ID] markers referenced in a body."""
-    return set(_CITATION_RE.findall(content))
+    """Extract the set of citation markers (full marker text) in a body."""
+    return {m.group(0) for m in EV_MARKER_RE.finditer(content)}
 
 
 def _word_count(content: str) -> int:

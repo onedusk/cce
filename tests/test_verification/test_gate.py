@@ -456,3 +456,23 @@ def test_gate_and_emit_agree_on_unresolved_markers():
 
     assert unresolved == ["ev_nope", "ev_real, ev_nope", "ev_zzz"]
     assert rendered.count("[^?]") == len(unresolved)
+
+
+def test_gate_multi_id_bracket_gets_its_own_feedback():
+    """A bracket holding several valid IDs still blocks PASS (emit renders it
+    as [^?]), but the feedback tells the writer to split it rather than
+    calling valid IDs unresolved."""
+    content = (
+        "This paragraph is long enough to be substantive for the density check "
+        "and cites two real sources in one bracket [ev_a, ev_b]."
+    )
+    result = _evaluate(
+        content=content,
+        confidence_score=1.0,
+        evidence=[make_evidence(id="ev_a"), make_evidence(id="ev_b")],
+    )
+
+    assert result.decision == GateDecision.FAIL
+    assert "[ev_a, ev_b]" in result.feedback
+    assert "one marker per source" in result.feedback
+    assert "do not resolve" not in result.feedback

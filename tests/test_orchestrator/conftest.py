@@ -73,9 +73,11 @@ def make_adapter():
 
 
 def llm(*json_strings: str) -> MockLLMProvider:
+    # Pipeline-level: scripted ev_001-style IDs stand for discovered evidence.
     return MockLLMProvider(
         [
             LLMResponse(content=s, model="mock", stop_reason="end_turn")
             for s in json_strings
-        ]
+        ],
+        cite_placeholders=True,
     )

@@ -98,11 +98,21 @@ class QualityGate:
         # Build feedback for the writer
         feedback_parts: list[str] = []
 
-        if unresolved:
+        # A bracket holding several IDs never resolves (emit renders [^?])
+        # even when each ID is real, so it gets its own actionable line.
+        multi_id = [m for m in unresolved if "," in m]
+        unknown = [m for m in unresolved if "," not in m]
+        if unknown:
             feedback_parts.append(
-                f"{len(unresolved)} citation marker(s) do not resolve to any "
-                f"provided evidence: {', '.join(unresolved)}. Cite only evidence "
+                f"{len(unknown)} citation marker(s) do not resolve to any "
+                f"provided evidence: {', '.join(unknown)}. Cite only evidence "
                 f"IDs listed in the evidence block."
+            )
+        if multi_id:
+            feedback_parts.append(
+                f"{len(multi_id)} citation marker(s) put several IDs in one "
+                f"bracket: {' '.join(f'[{m}]' for m in multi_id)}. Use one marker "
+                f"per source, e.g. [ev:ID1][ev:ID2]."
             )
 
         if report.unsupported > 0:

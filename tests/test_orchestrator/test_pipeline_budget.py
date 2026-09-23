@@ -46,7 +46,8 @@ def _llm_with_usage(*scripted: tuple[str, dict]) -> MockLLMProvider:
                 content=content, model="mock", usage=usage, stop_reason="end_turn"
             )
             for content, usage in scripted
-        ]
+        ],
+        cite_placeholders=True,
     )
 
 
