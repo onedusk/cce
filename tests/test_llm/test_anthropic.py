@@ -414,3 +414,76 @@ async def test_cache_tokens_reported(mock_cls: MagicMock) -> None:
 
     assert result.usage["cache_creation_input_tokens"] == 500
     assert result.usage["cache_read_input_tokens"] == 1200
+
+
+_SCHEMA = {
+    "type": "object",
+    "properties": {"ok": {"type": "boolean"}},
+    "required": ["ok"],
+    "additionalProperties": False,
+}
+
+
+@pytest.mark.parametrize(
+    ("model", "sends_format"),
+    [
+        ("claude-sonnet-5", True),
+        ("claude-opus-5", True),
+        ("claude-sonnet-4-6", True),
+        ("claude-haiku-4-5", True),
+        ("claude-sonnet-4-5-20250929", True),
+        ("claude-3-5-sonnet-latest", False),
+        ("claude-sonnet-4-20250514", False),
+    ],
+)
+@patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
+async def test_output_schema_sent_as_structured_output(
+    mock_cls: MagicMock, model: str, sends_format: bool
+) -> None:
+    """output_schema becomes output_config.format on models with structured
+    outputs (every model the Models API lists); retired ones get none."""
+    mock_client = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=_mock_response())
+    mock_cls.return_value = mock_client
+
+    config = _config().model_copy(update={"model": model})
+    await AnthropicProvider(config).complete(
+        [LLMMessage(role="user", content="Hi")], output_schema=_SCHEMA
+    )
+
+    call_kwargs = mock_client.messages.create.call_args[1]
+    if sends_format:
+        assert call_kwargs["output_config"] == {
+            "format": {"type": "json_schema", "schema": _SCHEMA}
+        }
+    else:
+        assert "output_config" not in call_kwargs
+
+
+@patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
+async def test_output_schema_merges_with_effort(mock_cls: MagicMock) -> None:
+    mock_client = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=_mock_response())
+    mock_cls.return_value = mock_client
+
+    config = _config().model_copy(update={"model": "claude-sonnet-5", "effort": "low"})
+    await AnthropicProvider(config).complete(
+        [LLMMessage(role="user", content="Hi")], output_schema=_SCHEMA
+    )
+
+    assert mock_client.messages.create.call_args[1]["output_config"] == {
+        "effort": "low",
+        "format": {"type": "json_schema", "schema": _SCHEMA},
+    }
+
+
+@patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
+async def test_no_output_config_without_schema_or_effort(mock_cls: MagicMock) -> None:
+    mock_client = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=_mock_response())
+    mock_cls.return_value = mock_client
+
+    config = _config().model_copy(update={"model": "claude-sonnet-5"})
+    await AnthropicProvider(config).complete([LLMMessage(role="user", content="Hi")])
+
+    assert "output_config" not in mock_client.messages.create.call_args[1]

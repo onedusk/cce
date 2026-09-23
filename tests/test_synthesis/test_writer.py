@@ -1,16 +1,26 @@
 """Tests for cce.synthesis.writer — evidence block formatting, response parsing, and prompt construction."""
 
 import json
+from unittest.mock import AsyncMock
 
 import pytest
 
 from cce.config.types import WriterConfig
 from cce.evidence.formatting import format_evidence_for_prompt
-from cce.llm.base import IncompleteResponseError, LLMResponse
+from cce.llm.base import (
+    IncompleteResponseError,
+    LLMResponse,
+    UnparseableResponseError,
+)
 from cce.models.content import ContentLineage
 from cce.models.evidence import SourceQuality
 from cce.models.request import CurationConstraints
-from cce.synthesis.writer import WRITER_SYSTEM_PROMPT, Writer, WriterOutput
+from cce.synthesis.writer import (
+    WRITER_OUTPUT_SCHEMA,
+    WRITER_SYSTEM_PROMPT,
+    Writer,
+    WriterOutput,
+)
 from tests.conftest import MockLLMProvider, make_curation_request, make_evidence
 
 # ---------------------------------------------------------------------------
@@ -152,16 +162,19 @@ class TestParseResponse:
         assert len(output.unit.evidence_map) == 1
         assert output.unit.evidence_map[0].claim == "Draft content"
 
-    def test_parse_response_non_json_fallback(self):
+    def test_parse_response_non_json_raises(self):
+        """No raw-markdown fallback: an unreadable reply raises, with the reply
+        on the error for the caller and not in the message."""
         ev = make_evidence(id="ev_001")
-        response = LLMResponse(content="Just plain markdown text", model="mock")
-        output = self._writer()._parse_response(response, [ev], "blog", self._lineage())
+        response = LLMResponse(
+            content="Just plain markdown text", model="mock", stop_reason="end_turn"
+        )
+        with pytest.raises(UnparseableResponseError) as exc:
+            self._writer()._parse_response(response, [ev], "blog", self._lineage())
 
-        assert output.unit is not None
-        assert output.unit.content == "Just plain markdown text"
-        assert output.unit.citations == []
-        assert output.unit.evidence_map == []
-        assert output.unit.scores.confidence == 0.0
+        assert exc.value.raw_response == "Just plain markdown text"
+        assert exc.value.role == "writer"
+        assert "plain markdown" not in str(exc.value)
 
     def test_parse_response_unknown_citation_ids_filtered(self):
         ev = make_evidence(id="ev_001")
@@ -411,3 +424,56 @@ async def test_write_raises_on_incomplete_reply(stop_reason):
         )
 
     assert len(llm.calls) == 1
+
+
+@pytest.mark.integration
+async def test_write_passes_structured_output_schema():
+    llm = MockLLMProvider(
+        [LLMResponse(content=_make_writer_json(), model="mock", stop_reason="end_turn")]
+    )
+
+    await Writer(llm).write(
+        make_curation_request(), [make_evidence(id="ev_001")], "blog"
+    )
+
+    assert llm.calls[0]["output_schema"] == WRITER_OUTPUT_SCHEMA
+
+
+@pytest.mark.integration
+async def test_write_resends_once_on_unparseable_reply(monkeypatch):
+    monkeypatch.setattr("cce.llm.retry.asyncio.sleep", AsyncMock())
+    llm = MockLLMProvider(
+        [
+            LLMResponse(content="not json", model="mock", stop_reason="end_turn"),
+            LLMResponse(
+                content=_make_writer_json(), model="mock", stop_reason="end_turn"
+            ),
+        ]
+    )
+
+    output = await Writer(llm).write(
+        make_curation_request(), [make_evidence(id="ev_001")], "blog"
+    )
+
+    assert len(llm.calls) == 2
+    assert output.has_content
+
+
+@pytest.mark.integration
+async def test_write_raises_after_second_unparseable_reply(monkeypatch):
+    """Retry once, then fail: no raw-markdown fallback, no third call."""
+    monkeypatch.setattr("cce.llm.retry.asyncio.sleep", AsyncMock())
+    llm = MockLLMProvider(
+        [
+            LLMResponse(content="first bad", model="m", stop_reason="end_turn"),
+            LLMResponse(content="second bad", model="m", stop_reason="end_turn"),
+        ]
+    )
+
+    with pytest.raises(UnparseableResponseError) as exc:
+        await Writer(llm).write(
+            make_curation_request(), [make_evidence(id="ev_001")], "blog"
+        )
+
+    assert len(llm.calls) == 2
+    assert exc.value.raw_response == "second bad"

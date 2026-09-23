@@ -132,3 +132,31 @@ def test_resolve_evidence_id_literal_then_prefixed():
     assert resolve_evidence_id("ev_abc", by_id) == ("ev_abc", ev)
     assert resolve_evidence_id("abc", by_id) == ("ev_abc", ev)
     assert resolve_evidence_id("missing", by_id) == ("missing", None)
+
+
+@pytest.mark.unit
+def test_extract_json_accepts_raw_newline_inside_string():
+    """Root cause of the Sonnet 5 writer parse failures (3 of 6 replies,
+    2026-09-23): a raw newline inside a long string value instead of the \\n
+    escape. Strict parsing rejected it as an invalid control character."""
+    raw = '{\n  "content": "Para one [ev_1].\n\nPara two [ev_2].",\n  "gaps": []\n}'
+    raw = raw.replace(
+        "[ev_1].\\n\\nPara", "[ev_1].\n\nPara"
+    )  # raw newlines in the string
+    assert "\n\nPara two" in raw
+
+    parsed = extract_json(raw)
+
+    assert parsed is not None
+    assert parsed["content"] == "Para one [ev_1].\n\nPara two [ev_2]."
+
+
+@pytest.mark.unit
+def test_extract_json_failure_log_holds_no_reply_text(caplog):
+    """Replies can hold confidential content: the failure warning logs the
+    length only."""
+    with caplog.at_level("WARNING"):
+        assert extract_json("SENTINEL-CONFIDENTIAL not json at all") is None
+
+    assert "extract_json failed" in caplog.text
+    assert "SENTINEL-CONFIDENTIAL" not in caplog.text

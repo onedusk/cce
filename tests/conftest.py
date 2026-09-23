@@ -117,6 +117,7 @@ class MockLLMProvider:
         temperature: float | None = None,
         max_tokens: int | None = None,
         system: str | None = None,
+        output_schema: dict | None = None,
     ) -> LLMResponse:
         self.calls.append(
             {
@@ -124,6 +125,7 @@ class MockLLMProvider:
                 "temperature": temperature,
                 "max_tokens": max_tokens,
                 "system": system,
+                "output_schema": output_schema,
             }
         )
         if not self._responses:

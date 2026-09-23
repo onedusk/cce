@@ -132,6 +132,10 @@ effective values when neither env var nor YAML provides one.
 | `CCE_LLM_THINKING` | unset | `adaptive` or `disabled`, sent as `thinking: {type: ...}`. Unset = omit the param (model default: Sonnet 5 / Opus 5 think adaptively, the 4.6 models do not). Never sent to Opus 4.5, Haiku 4.5 or older. `adaptive` also drops `temperature` on the 4.6 models (the API rejects any value but 1 while thinking is on). Otherwise passed through as set: the API rejects `disabled` on Fable 5 / Opus 5.5, and on Opus 5 at effort `xhigh`/`max` |
 | `CCE_LLM_EFFORT` | unset | `low` / `medium` / `high` / `xhigh` / `max`, sent as `output_config.effort`. Unset = model default. Sent only to models with adaptive thinking (4.6 and later), so also omitted on Opus 4.5; `xhigh` needs Opus 4.7+ / Sonnet 5 |
 
+The writer's and verifier's replies are constrained to their JSON schemas
+with structured outputs on every current model; there is no setting for it.
+An unreadable reply is resent once, then fails the job.
+
 ### Verifier
 
 | Variable | Default | Purpose |

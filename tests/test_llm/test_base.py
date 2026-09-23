@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from cce.llm.base import IncompleteResponseError, LLMResponse, ensure_complete
+from cce.llm.base import (
+    IncompleteResponseError,
+    LLMResponse,
+    UnparseableResponseError,
+    ensure_complete,
+)
 from cce.llm.retry import RETRYABLE_EXCEPTIONS
 
 pytestmark = pytest.mark.unit
@@ -50,3 +55,26 @@ def test_incomplete_error_is_not_retryable() -> None:
     """with_llm_retry resends on RETRYABLE_EXCEPTIONS; a truncated reply must
     not be resent with the same budget."""
     assert not issubclass(IncompleteResponseError, RETRYABLE_EXCEPTIONS)
+
+
+def test_unparseable_error_keeps_reply_off_the_message() -> None:
+    response = LLMResponse(
+        content="SENTINEL-CONFIDENTIAL garbage",
+        model="claude-sonnet-5",
+        stop_reason="end_turn",
+    )
+
+    error = UnparseableResponseError("writer", response)
+
+    assert error.raw_response == "SENTINEL-CONFIDENTIAL garbage"
+    assert error.role == "writer"
+    assert error.stop_reason == "end_turn"
+    assert error.model == "claude-sonnet-5"
+    message = str(error)
+    assert "writer" in message and "claude-sonnet-5" in message
+    assert "SENTINEL-CONFIDENTIAL" not in message
+
+
+def test_unparseable_error_is_retryable() -> None:
+    """Unlike a truncated reply, an unparseable one is worth one resend."""
+    assert issubclass(UnparseableResponseError, RETRYABLE_EXCEPTIONS)

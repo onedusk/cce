@@ -16,7 +16,13 @@ import uuid
 
 from cce.config.types import WriterConfig
 from cce.evidence.formatting import format_evidence_for_prompt
-from cce.llm.base import LLMMessage, LLMProvider, LLMResponse, ensure_complete
+from cce.llm.base import (
+    LLMMessage,
+    LLMProvider,
+    LLMResponse,
+    UnparseableResponseError,
+    ensure_complete,
+)
 from cce.llm.retry import with_llm_retry
 from cce.models.content import (
     Citation,
@@ -73,6 +79,32 @@ Return a JSON object with exactly these fields:
 Write in clear, accessible prose appropriate for the target audience. \
 Structure the content with markdown headings and paragraphs.\
 """
+
+# JSON schema of the OUTPUT FORMAT above, sent as structured outputs so the
+# reply is always valid JSON. Generic by design: evidence IDs are plain
+# strings, never an enum (the gate checks they resolve — B4).
+WRITER_OUTPUT_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "content": {"type": "string"},
+        "citations_used": {"type": "array", "items": {"type": "string"}},
+        "evidence_map": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "claim": {"type": "string"},
+                    "evidence_ids": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["claim", "evidence_ids"],
+                "additionalProperties": False,
+            },
+        },
+        "gaps": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["content", "citations_used", "evidence_map", "gaps"],
+    "additionalProperties": False,
+}
 
 
 class Writer:
@@ -198,6 +230,7 @@ exists, and mark remaining gaps as [INSUFFICIENT EVIDENCE].
                 messages,
                 system=system_prompt,
                 temperature=self._config.temperature,
+                output_schema=WRITER_OUTPUT_SCHEMA,
             )
             ensure_complete(response, role="writer")
             output = self._parse_response(
@@ -206,7 +239,8 @@ exists, and mark remaining gaps as [INSUFFICIENT EVIDENCE].
             output.token_usage = response.usage
             return output
 
-        return await with_llm_retry(_attempt)
+        # One resend on an unparseable reply, then the error propagates.
+        return await with_llm_retry(_attempt, max_attempts=2)
 
     @staticmethod
     def _build_path_addendum(path_config: PathConfig) -> str:
@@ -246,35 +280,17 @@ exists, and mark remaining gaps as [INSUFFICIENT EVIDENCE].
         *,
         ev_lookup: dict[str, Evidence] | None = None,
     ) -> WriterOutput:
-        """Parse the LLM response into a ContentUnit."""
+        """Parse the LLM response into a ContentUnit.
+
+        Raises UnparseableResponseError when the reply is not a JSON object.
+        There is no raw-markdown fallback: it shipped drafts with no
+        citations.
+        """
         raw = response.content.strip()
 
-        # Try to extract JSON from the response
         parsed = extract_json(raw)
-
-        if parsed is None:
-            logger.warning(
-                "Writer response was not valid JSON, treating as raw markdown"
-            )
-            # Fallback: treat the whole response as content with no structured metadata
-            return WriterOutput(
-                unit=ContentUnit(
-                    id=f"cu_{uuid.uuid4().hex[:12]}",
-                    path=path,
-                    content=raw,
-                    citations=[],
-                    evidence_map=[],
-                    scores=ContentScores(
-                        confidence=0.0, coverage=0.0, source_diversity=0.0
-                    ),
-                    lineage=lineage
-                    or ContentLineage(policy_id="", run_id="", engine_version=""),
-                ),
-                gaps=[
-                    "Writer response was not structured JSON -- verification required"
-                ],
-                raw_response=raw,
-            )
+        if not isinstance(parsed, dict):
+            raise UnparseableResponseError("writer", response)
 
         # Evidence ID lookup for URL resolution — use the caller's version
         # when provided (audit P8), else build locally. The caller's dict is

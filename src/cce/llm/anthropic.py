@@ -27,7 +27,7 @@ _EVIDENCE_END_MARKERS = [
     "=== END EVIDENCE ===",
 ]
 
-# Model capability rules, keyed by model-ID prefix. Both list the finite
+# Model capability rules, keyed by model-ID prefix. Each lists the finite
 # legacy set, so any model not matched is treated as current and a new
 # release needs no code change.
 #
@@ -51,6 +51,16 @@ _SAMPLING_MODEL_PREFIXES: tuple[str, ...] = _PRE_ADAPTIVE_MODEL_PREFIXES + (
     "claude-opus-4-6",
     "claude-sonnet-4-6",
 )
+# Models without structured outputs (`output_config.format`): only retired
+# ones. Every model the Models API listed on 2026-09-23 supports it, from
+# Haiku 4.5 / Sonnet 4.5 / Opus 4.5 up.
+_NO_STRUCTURED_OUTPUT_MODEL_PREFIXES: tuple[str, ...] = (
+    "claude-3",
+    "claude-opus-4-0",
+    "claude-opus-4-2025",
+    "claude-sonnet-4-0",
+    "claude-sonnet-4-2025",
+)
 
 
 class AnthropicProvider:
@@ -67,6 +77,9 @@ class AnthropicProvider:
         self._accepts_sampling = (
             config.model.startswith(_SAMPLING_MODEL_PREFIXES) and not thinking_on
         )
+        self._accepts_output_schema = not config.model.startswith(
+            _NO_STRUCTURED_OUTPUT_MODEL_PREFIXES
+        )
 
     async def complete(
         self,
@@ -75,6 +88,7 @@ class AnthropicProvider:
         temperature: float | None = None,
         max_tokens: int | None = None,
         system: str | None = None,
+        output_schema: dict | None = None,
     ) -> LLMResponse:
         """Call the Anthropic messages API with automatic prompt caching.
 
@@ -98,11 +112,18 @@ class AnthropicProvider:
             kwargs["temperature"] = (
                 temperature if temperature is not None else self._config.temperature
             )
+        output_config: dict = {}
         if self._accepts_adaptive:
             if self._config.thinking is not None:
                 kwargs["thinking"] = {"type": self._config.thinking}
             if self._config.effort is not None:
-                kwargs["output_config"] = {"effort": self._config.effort}
+                output_config["effort"] = self._config.effort
+        if output_schema is not None and self._accepts_output_schema:
+            # Structured outputs: the reply is constrained to valid JSON
+            # matching the schema, so it always parses.
+            output_config["format"] = {"type": "json_schema", "schema": output_schema}
+        if output_config:
+            kwargs["output_config"] = output_config
 
         # System prompt: prefer explicit arg, fall back to any system message in the list
         sys_prompt = system

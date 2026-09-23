@@ -2,14 +2,20 @@
 
 import json
 import logging
+from unittest.mock import AsyncMock
 
 import pytest
 
 from cce.config.types import VerifierConfig
-from cce.llm.base import IncompleteResponseError, LLMResponse
+from cce.llm.base import (
+    IncompleteResponseError,
+    LLMResponse,
+    UnparseableResponseError,
+)
 from cce.models.evidence import SourceQuality
 from cce.verification.verifier import (
     _VERIFIER_FULL_PROMPT,
+    VERIFIER_OUTPUT_SCHEMA,
     VerificationReport,
     Verifier,
 )
@@ -114,7 +120,7 @@ class TestParseResponse:
 
     def test_parse_response_valid_json(self):
         raw = _make_valid_verifier_json()
-        report = self._verifier()._parse_response(raw)
+        report = self._verifier()._parse_response(LLMResponse(content=raw))
         assert len(report.claims) == 8
         assert report.total_claims == 10
         assert report.supported == 8
@@ -123,9 +129,18 @@ class TestParseResponse:
         assert report.contradictions == []
         assert report.confidence_score > 0
 
-    def test_parse_response_non_json(self):
-        report = self._verifier()._parse_response("This is not JSON at all")
-        assert report.confidence_score == 0.0
+    def test_parse_response_non_json_raises(self):
+        """No zero-score verdict for an unreadable report: it raises, with the
+        reply on the error for the caller and not in the message."""
+        response = LLMResponse(
+            content="This is not JSON at all", model="m", stop_reason="end_turn"
+        )
+        with pytest.raises(UnparseableResponseError) as exc:
+            self._verifier()._parse_response(response)
+
+        assert exc.value.raw_response == "This is not JSON at all"
+        assert exc.value.stop_reason == "end_turn"
+        assert "not JSON at all" not in str(exc.value)
 
     def test_parse_response_missing_summary(self):
         raw = json.dumps(
@@ -138,7 +153,7 @@ class TestParseResponse:
                 "contradictions": [],
             }
         )
-        report = self._verifier()._parse_response(raw)
+        report = self._verifier()._parse_response(LLMResponse(content=raw))
         # No summary → total_claims defaults to len(claims)
         assert report.total_claims == 2
 
@@ -153,7 +168,11 @@ class TestConfidence:
 
     def _confidence(self, **kwargs) -> float:
         raw = _make_valid_verifier_json(**kwargs)
-        return Verifier(MockLLMProvider([]))._parse_response(raw).confidence_score
+        return (
+            Verifier(MockLLMProvider([]))
+            ._parse_response(LLMResponse(content=raw))
+            .confidence_score
+        )
 
     def test_confidence_no_penalties(self):
         c = self._confidence(total=10, supported=8, gaps=2, leakage=0, conflicts=0)
@@ -322,3 +341,40 @@ async def test_verify_raises_on_truncated_reply():
         await verifier.verify(unit, [make_evidence(id="ev_001")])
 
     assert len(llm.calls) == 1
+
+
+@pytest.mark.integration
+async def test_verify_passes_structured_output_schema():
+    llm = MockLLMProvider(
+        [
+            LLMResponse(
+                content=_make_valid_verifier_json(), model="m", stop_reason="end_turn"
+            )
+        ]
+    )
+
+    await Verifier(llm).verify(
+        make_content_unit(content="Claim [ev:ev_001]."), [make_evidence(id="ev_001")]
+    )
+
+    assert llm.calls[0]["output_schema"] == VERIFIER_OUTPUT_SCHEMA
+
+
+@pytest.mark.integration
+async def test_verify_resends_once_then_raises_on_unparseable(monkeypatch):
+    """No zero-score verdict: one resend, then UnparseableResponseError."""
+    monkeypatch.setattr("cce.llm.retry.asyncio.sleep", AsyncMock())
+    llm = MockLLMProvider(
+        [
+            LLMResponse(content="bad one", model="m", stop_reason="end_turn"),
+            LLMResponse(content="bad two", model="m", stop_reason="end_turn"),
+        ]
+    )
+
+    with pytest.raises(UnparseableResponseError):
+        await Verifier(llm).verify(
+            make_content_unit(content="Claim [ev:ev_001]."),
+            [make_evidence(id="ev_001")],
+        )
+
+    assert len(llm.calls) == 2

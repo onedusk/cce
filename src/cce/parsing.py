@@ -43,9 +43,14 @@ def extract_json(text: str) -> dict | None:
     # Normalize line endings and strip whitespace
     text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
 
+    # strict=False throughout: models sometimes emit a raw newline inside a
+    # long string value instead of the \n escape, which strict parsing
+    # rejects as an invalid control character (3 of 6 Sonnet 5 writer
+    # replies, 2026-09-23). The parsed string then holds the intended newline.
+
     # Try direct parse
     try:
-        return json.loads(text)
+        return json.loads(text, strict=False)
     except json.JSONDecodeError:
         pass
 
@@ -60,7 +65,7 @@ def extract_json(text: str) -> dict | None:
         if match:
             candidate = match.group(1).strip()
             try:
-                return json.loads(candidate)
+                return json.loads(candidate, strict=False)
             except json.JSONDecodeError:
                 continue
 
@@ -71,7 +76,7 @@ def extract_json(text: str) -> dict | None:
         if first != -1 and last > first:
             candidate = text[first : last + 1]
             try:
-                return json.loads(candidate)
+                return json.loads(candidate, strict=False)
             except json.JSONDecodeError:
                 pass
 
@@ -81,11 +86,9 @@ def extract_json(text: str) -> dict | None:
         if repaired is not None:
             return repaired
 
-    logger.warning(
-        "extract_json failed: length=%d, starts=%r",
-        len(text),
-        text[:100],
-    )
+    # Length only: the reply can hold confidential content, so none of it
+    # is logged.
+    logger.warning("extract_json failed: length=%d", len(text))
     return None
 
 
@@ -98,7 +101,7 @@ def _repair_json(text: str, max_repairs: int = 50) -> dict | None:
     """
     for _ in range(max_repairs):
         try:
-            return json.loads(text)
+            return json.loads(text, strict=False)
         except json.JSONDecodeError as e:
             pos = e.pos
             if pos is None or pos >= len(text):

@@ -55,6 +55,7 @@ class _RecordingLLM:
         temperature: float | None = None,
         max_tokens: int | None = None,
         system: str | None = None,
+        output_schema: dict | None = None,
     ) -> LLMResponse:
         text = messages[0].content
         if system and "fact-checking" in system:
@@ -239,6 +240,7 @@ class _RaisingLLM:
         temperature: float | None = None,
         max_tokens: int | None = None,
         system: str | None = None,
+        output_schema: dict | None = None,
     ) -> LLMResponse:
         text = messages[0].content
         if system and "fact-checking" in system:

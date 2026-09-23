@@ -60,6 +60,33 @@ current Claude models. One commit per item (B1–B4) on
   adaptive+effort, effort-only, disabled and disabled+effort settings, all
   without a 400.
 
+### Fixed — unparseable writer/verifier replies (B2 follow-up)
+- **Root cause, from captured Sonnet 5 writer replies:** 3 of 6 complete
+  (`end_turn`) replies failed `extract_json` because the model wrote a raw
+  newline inside the long `content` string instead of the `\n` escape, which
+  strict JSON parsing rejects. The writer then fell back to raw markdown with
+  no citations (the 2026-09-23 smoke run shipped a 0-citation unit that way).
+- **Structured outputs:** the Writer and Verifier now pass generic JSON
+  schemas (`WRITER_OUTPUT_SCHEMA`, `VERIFIER_OUTPUT_SCHEMA`: evidence IDs are
+  plain strings; the only enum is the verifier's fixed assessment
+  vocabulary), and `AnthropicProvider` sends them as `output_config.format`
+  on every model with structured outputs (all current models, including the
+  default `claude-sonnet-4-6`; only retired Claude 3 / Opus-Sonnet 4.0 IDs
+  are excluded), merged with `effort`. **Protocol change:**
+  `LLMProvider.complete` gains an optional `output_schema` argument that
+  injected providers must accept (they may ignore it).
+- **No silent fallback:** an unreadable Writer or Verifier reply raises
+  `UnparseableResponseError` (`llm/base.py`) instead of becoming raw
+  markdown or a zero-score verdict. Both callers resend once
+  (`with_llm_retry(max_attempts=2)`), then the job fails like B2. The reply
+  text is on `.raw_response` for the caller to persist; cce never writes or
+  logs it, and the message (which the job record stores) holds only the
+  role, model, stop reason and length.
+- **Fallback parser:** `extract_json` parses with `strict=False`, so the
+  raw-newline replies parse on models or injected providers without
+  structured outputs, and its failure warning logs the length only, no reply
+  text.
+
 ### Added — separate verifier model (B3)
 - **`VerifierConfig.model`** (`CCE_VERIFIER_MODEL`, YAML `verifier.model`):
   an optional verifier-specific model so the writer's and verifier's blind

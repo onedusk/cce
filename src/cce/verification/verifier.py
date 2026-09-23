@@ -20,7 +20,13 @@ from dataclasses import dataclass, field
 
 from cce.config.types import VerifierConfig
 from cce.evidence.formatting import format_evidence_for_prompt
-from cce.llm.base import LLMMessage, LLMProvider, ensure_complete
+from cce.llm.base import (
+    LLMMessage,
+    LLMProvider,
+    LLMResponse,
+    UnparseableResponseError,
+    ensure_complete,
+)
 from cce.llm.retry import with_llm_retry
 from cce.models.content import ContentUnit
 from cce.models.evidence import Evidence
@@ -95,6 +101,88 @@ assess it as "unsupported" regardless of apparent match.\
 
 # Pre-computed full system prompt (base + trust weighting)
 _VERIFIER_FULL_PROMPT = VERIFIER_SYSTEM_PROMPT + TRUST_WEIGHTING_ADDENDUM
+
+
+def _id_list() -> dict:
+    return {"type": "array", "items": {"type": "string"}}
+
+
+# JSON schema of the OUTPUT FORMAT above, sent as structured outputs so the
+# report is always valid JSON. Generic: the only enum is the fixed assessment
+# vocabulary; evidence IDs are plain strings.
+VERIFIER_OUTPUT_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "claims": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "claim": {"type": "string"},
+                    "citation_ids": _id_list(),
+                    "assessment": {
+                        "type": "string",
+                        "enum": [
+                            "supported",
+                            "unsupported",
+                            "uncited",
+                            "leakage",
+                            "conflict",
+                            "gap_acknowledged",
+                        ],
+                    },
+                    "explanation": {"type": "string"},
+                    "suggestion": {"type": "string"},
+                },
+                "required": [
+                    "claim",
+                    "citation_ids",
+                    "assessment",
+                    "explanation",
+                    "suggestion",
+                ],
+                "additionalProperties": False,
+            },
+        },
+        "summary": {
+            "type": "object",
+            "properties": {
+                key: {"type": "integer"}
+                for key in (
+                    "total_claims",
+                    "supported",
+                    "unsupported",
+                    "uncited",
+                    "leakage",
+                    "conflicts",
+                    "gaps_acknowledged",
+                )
+            },
+            "required": [
+                "total_claims",
+                "supported",
+                "unsupported",
+                "uncited",
+                "leakage",
+                "conflicts",
+                "gaps_acknowledged",
+            ],
+            "additionalProperties": False,
+        },
+        "overall_feedback": {"type": "string"},
+        "contradictions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"topic": {"type": "string"}, "evidence_ids": _id_list()},
+                "required": ["topic", "evidence_ids"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["claims", "summary", "overall_feedback", "contradictions"],
+    "additionalProperties": False,
+}
 
 
 @dataclass
@@ -230,25 +318,27 @@ traced to the evidence above should be flagged.
                 system=_VERIFIER_FULL_PROMPT,
                 temperature=self._config.temperature,
                 max_tokens=self._config.max_tokens,
+                output_schema=VERIFIER_OUTPUT_SCHEMA,
             )
             ensure_complete(response, role="verifier")
-            report = self._parse_response(response.content)
+            report = self._parse_response(response)
             report.token_usage = response.usage
             return report
 
-        return await with_llm_retry(_attempt)
+        # One resend on an unparseable reply, then the error propagates.
+        return await with_llm_retry(_attempt, max_attempts=2)
 
-    def _parse_response(self, raw: str) -> VerificationReport:
-        """Parse verifier LLM response into a structured report."""
+    def _parse_response(self, response: LLMResponse) -> VerificationReport:
+        """Parse verifier LLM response into a structured report.
+
+        Raises UnparseableResponseError when the reply is not a JSON object,
+        instead of returning a zero-score report that routed straight to
+        REVIEW with no rewrite.
+        """
+        raw = response.content
         parsed = extract_json(raw)
-
-        if parsed is None:
-            logger.warning("Verifier response was not valid JSON")
-            return VerificationReport(
-                overall_feedback="Verifier produced unstructured output -- manual review needed",
-                confidence_score=0.0,
-                raw_response=raw,
-            )
+        if not isinstance(parsed, dict):
+            raise UnparseableResponseError("verifier", response)
 
         # Parse individual claims
         claims: list[ClaimVerification] = []

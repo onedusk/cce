@@ -2,6 +2,7 @@
 
 import json
 import re
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -339,6 +340,7 @@ class _PathDispatchLLM:
         temperature: float | None = None,
         max_tokens: int | None = None,
         system: str | None = None,
+        output_schema: dict | None = None,
     ) -> LLMResponse:
         text = messages[0].content
         usage = {"input_tokens": 1, "output_tokens": 1}
@@ -481,3 +483,32 @@ def test_update_job_status_transitions():
     assert job2.status == JobStatus.FAILED
     assert job2.error is not None
     assert job2.error.message == "oops"
+
+
+@pytest.mark.integration
+async def test_pipeline_unparseable_writer_reply_fails_job_without_leaking_it(
+    sqlite_store, caplog, monkeypatch
+):
+    """Unreadable writer replies (twice) fail the job; the reply text appears
+    neither in the job record nor in the logs (confidential content)."""
+    monkeypatch.setattr("cce.llm.retry.asyncio.sleep", AsyncMock())
+    sentinel = "SENTINEL-CONFIDENTIAL client statement"
+    llm = _llm(f"{sentinel} not json", f"{sentinel} still not json")
+    pipeline = Pipeline(
+        config=make_engine_config(),
+        crawl_adapter=_make_adapter(),
+        evidence_store=sqlite_store,
+        llm=llm,
+    )
+
+    with caplog.at_level("DEBUG"):
+        result = await pipeline.run(make_curation_request(), make_source_policy())
+
+    assert result.job.status == JobStatus.FAILED
+    assert result.package is None
+    assert result.job.error is not None
+    assert "writer" in result.job.error.message
+    assert "could not be parsed" in result.job.error.message
+    assert sentinel not in result.job.error.message
+    assert sentinel not in caplog.text
+    assert len(llm.calls) == 2

@@ -65,6 +65,33 @@ class IncompleteResponseError(RuntimeError):
         )
 
 
+class UnparseableResponseError(ValueError):
+    """A complete LLM reply could not be parsed into the expected JSON.
+
+    Raised by the writer and verifier instead of falling back to raw
+    markdown or a zero-score verdict. A ValueError, so ``with_llm_retry``
+    resends; both callers allow one resend, then the error propagates and
+    the pipeline fails the job.
+
+    The reply text is kept on ``raw_response`` for the caller to persist
+    where it sees fit. It is never put in the message, which is logged and
+    stored on the job record: a consumer's replies can hold confidential
+    content.
+    """
+
+    def __init__(self, role: str, response: LLMResponse) -> None:
+        self.role = role
+        self.stop_reason = response.stop_reason
+        self.model = response.model
+        self.raw_response = response.content
+        super().__init__(
+            f"{role} reply from {response.model or 'unknown model'} could not "
+            f"be parsed as a JSON object (stop_reason={response.stop_reason!r}, "
+            f"{len(response.content)} chars); reply text on .raw_response, "
+            "not logged"
+        )
+
+
 def ensure_complete(response: LLMResponse, *, role: str) -> None:
     """Raise IncompleteResponseError if ``response`` stopped early (B2)."""
     if response.stop_reason in _INCOMPLETE_STOP_REASONS:
@@ -82,6 +109,7 @@ class LLMProvider(Protocol):
         temperature: float | None = None,
         max_tokens: int | None = None,
         system: str | None = None,
+        output_schema: dict | None = None,
     ) -> LLMResponse:
         """Send a conversation to the LLM and get a response.
 
@@ -93,5 +121,8 @@ class LLMProvider(Protocol):
             max_tokens: Override the default max_tokens for this call.
             system: System prompt. Passed separately because some providers
                     handle it differently from user messages.
+            output_schema: JSON schema the reply must follow. Providers that
+                    can constrain output to it (structured outputs) do so;
+                    others ignore it, and the caller parses as before.
         """
         ...
