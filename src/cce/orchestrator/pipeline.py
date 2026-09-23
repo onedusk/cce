@@ -240,8 +240,8 @@ class Pipeline:
             embedding_concurrency=config.embedding.concurrency,
             evidence_store=evidence_store,
         )
-        self._writer = Writer(llm=llm)
-        self._verifier = Verifier(llm=llm)
+        self._writer = Writer(llm=llm, config=config.writer)
+        self._verifier = Verifier(llm=llm, config=config.verifier)
         # Humanization components (M02+). All optional — None = disabled.
         self._scorer = scorer
         self._editor = editor

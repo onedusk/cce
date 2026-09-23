@@ -148,6 +148,59 @@ async def test_config_defaults_used(mock_cls: MagicMock) -> None:
     assert call_kwargs["model"] == config.model
 
 
+@pytest.mark.parametrize(
+    ("model", "sends_temperature"),
+    [
+        ("claude-sonnet-4-6", True),
+        ("claude-opus-4-6", True),
+        ("claude-haiku-4-5", True),
+        ("claude-sonnet-4-5", True),
+        ("claude-sonnet-5", False),
+        ("claude-opus-5", False),
+        ("claude-opus-5-5", False),
+        ("claude-opus-4-7", False),
+        ("claude-opus-4-8", False),
+        ("claude-fable-5-1", False),
+    ],
+)
+@pytest.mark.parametrize("explicit_temperature", [0.3, None])
+@patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
+async def test_sampling_params_follow_model_capability(
+    mock_cls: MagicMock,
+    explicit_temperature: float | None,
+    model: str,
+    sends_temperature: bool,
+) -> None:
+    """B1: temperature is sent only to models that accept sampling params.
+
+    Covers both the caller-supplied value and the LLMConfig fallback (None),
+    so the rule applies to the final kwarg, not just the caller's value.
+    """
+    mock_client = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=_mock_response())
+    mock_cls.return_value = mock_client
+
+    config = _config().model_copy(update={"model": model})
+    provider = AnthropicProvider(config)
+    await provider.complete(
+        [LLMMessage(role="user", content="Hi")],
+        temperature=explicit_temperature,
+    )
+
+    call_kwargs = mock_client.messages.create.call_args[1]
+    assert call_kwargs["model"] == model
+    if sends_temperature:
+        expected = (
+            explicit_temperature
+            if explicit_temperature is not None
+            else config.temperature
+        )
+        assert call_kwargs["temperature"] == expected
+    else:
+        assert "temperature" not in call_kwargs
+        assert "top_p" not in call_kwargs
+
+
 @patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
 async def test_sdk_exception_propagates(mock_cls: MagicMock) -> None:
     """RuntimeError raised by the SDK propagates to the caller."""

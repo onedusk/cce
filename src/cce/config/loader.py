@@ -29,6 +29,8 @@ from cce.config.types import (
     ImpliedClaimsConfig,
     LLMConfig,
     QualityGateConfig,
+    VerifierConfig,
+    WriterConfig,
     default_quality_gate_profiles,
 )
 
@@ -114,6 +116,8 @@ def load_config(config_path: str | Path | None = None) -> EngineConfig:
     )
     return EngineConfig(
         llm=_load_llm_config(file_data.get("llm", {})),
+        writer=WriterConfig(**(file_data.get("writer") or {})),
+        verifier=VerifierConfig(**(file_data.get("verifier") or {})),
         evidence_store=_load_evidence_config(file_data.get("evidence_store", {})),
         crawl=_load_crawl_config(file_data.get("crawl", {})),
         embedding=_load_embedding_config(file_data.get("embedding", {})),

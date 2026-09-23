@@ -27,6 +27,25 @@ _EVIDENCE_END_MARKERS = [
     "=== END EVIDENCE ===",
 ]
 
+# Model-ID prefixes of the models that still accept sampling parameters
+# (B1). Every model from Opus 4.7 on (Opus 4.7/4.8/5, Sonnet 5, Fable 5)
+# rejects `temperature` with a 400, so the rule lists the finite legacy set:
+# any model not matched here is treated as current and gets no sampling
+# params, and a new release needs no code change.
+_SAMPLING_MODEL_PREFIXES: tuple[str, ...] = (
+    "claude-3",
+    "claude-opus-4-0",
+    "claude-opus-4-1",
+    "claude-opus-4-2025",
+    "claude-sonnet-4-0",
+    "claude-sonnet-4-2025",
+    "claude-opus-4-5",
+    "claude-sonnet-4-5",
+    "claude-haiku-4-5",
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",
+)
+
 
 class AnthropicProvider:
     """Async Anthropic API client with automatic prompt caching."""
@@ -34,6 +53,7 @@ class AnthropicProvider:
     def __init__(self, config: LLMConfig) -> None:
         self._config = config
         self._client = anthropic.AsyncAnthropic(api_key=config.api_key, max_retries=2)
+        self._accepts_sampling = config.model.startswith(_SAMPLING_MODEL_PREFIXES)
 
     async def complete(
         self,
@@ -59,11 +79,12 @@ class AnthropicProvider:
         kwargs: dict = {
             "model": self._config.model,
             "messages": api_messages,
-            "temperature": temperature
-            if temperature is not None
-            else self._config.temperature,
             "max_tokens": max_tokens or self._config.max_tokens,
         }
+        if self._accepts_sampling:
+            kwargs["temperature"] = (
+                temperature if temperature is not None else self._config.temperature
+            )
 
         # System prompt: prefer explicit arg, fall back to any system message in the list
         sys_prompt = system

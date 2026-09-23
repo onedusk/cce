@@ -30,8 +30,12 @@ The engine config file is *opt-in* — nothing is loaded implicitly. Pass it:
 - `CurationEngine.embedded(config_path="path/to/config.yaml")` from code
 - `load_config("path/to/config.yaml")` directly
 
-Top-level YAML sections mirror `EngineConfig`: `llm`, `evidence_store`,
-`crawl`, `embedding`, `quality_gate`, `api`, `humanization`, `engine_version`.
+Top-level YAML sections mirror `EngineConfig`: `llm`, `writer`, `verifier`,
+`evidence_store`, `crawl`, `embedding`, `quality_gate`, `api`, `humanization`,
+`engine_version`. `writer.temperature` (default `0.2`) and
+`verifier.temperature` (default `0.1`) are the per-agent sampling
+temperatures; like `llm.temperature` they are not sent to models that reject
+sampling parameters (Opus 4.7 and later, Sonnet 5, Fable 5).
 `config/humanization_live.yaml` is a working example (the humanization live
 harness uses it). Environment variables override whatever the file says.
 
@@ -123,7 +127,7 @@ effective values when neither env var nor YAML provides one.
 | `CCE_LLM_MODEL` | `claude-sonnet-4-6` | Model id |
 | `ANTHROPIC_MODEL` | — | Fallback alias for `CCE_LLM_MODEL` |
 | `CCE_LLM_API_KEY` | — | Overrides `ANTHROPIC_API_KEY` when set |
-| `CCE_LLM_TEMPERATURE` | `0.2` | Sampling temperature |
+| `CCE_LLM_TEMPERATURE` | `0.2` | Fallback sampling temperature; not sent to models that reject sampling params (Opus 4.7+, Sonnet 5, Fable 5) |
 | `CCE_LLM_MAX_TOKENS` | `4096` | Per-call output token cap |
 
 ### Evidence store

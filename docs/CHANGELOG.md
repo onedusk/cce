@@ -5,6 +5,28 @@ All notable changes to the Content Curation Engine (CCE).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — bubble-readiness Phase 1 (current models, citation integrity)
+
+Phase 1 of `docs/internal/bubble-readiness-plan-2026-09-23.md` (local-only):
+what a consumer calling the Writer, Verifier and QualityGate directly needs on
+current Claude models. One commit per item (B1–B4) on
+`feature/bubble-readiness`.
+
+### Fixed — sampling params on current models (B1)
+- **`AnthropicProvider`** no longer sends `temperature` to models that reject
+  sampling parameters with a 400 (Opus 4.7/4.8/5, Sonnet 5, Fable 5). The rule
+  lists the finite legacy set that still accepts them (4.6 family, Haiku 4.5,
+  older) so a new model release needs no code change. No change on
+  `claude-sonnet-4-6` (the default). Open decision 1 resolved as the
+  capability rule rather than an end-to-end optional `temperature`: callers
+  stay unchanged and model knowledge stays in the one component that knows
+  the model ID.
+- The Writer's 0.2 and Verifier's 0.1 literals are now config defaults:
+  `WriterConfig.temperature` / `VerifierConfig.temperature`
+  (`EngineConfig.writer` / `EngineConfig.verifier`, YAML `writer:` /
+  `verifier:`), also accepted by `Writer(llm, config)` / `Verifier(llm, config)`
+  for direct callers.
+
 ## [Unreleased] — content-revision (client editorial feedback)
 
 Engine remediation of the thnkLabs client editorial feedback

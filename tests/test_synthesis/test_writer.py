@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from cce.config.types import WriterConfig
 from cce.evidence.formatting import format_evidence_for_prompt
 from cce.llm.base import LLMResponse
 from cce.models.content import ContentLineage
@@ -338,6 +339,20 @@ async def test_write_temperature():
     await writer.write(make_curation_request(), [ev], "blog")
 
     assert llm.calls[0]["temperature"] == 0.2
+
+
+@pytest.mark.integration
+async def test_write_temperature_from_config():
+    """B1: the writer's temperature is a WriterConfig default, not a literal."""
+    ev = make_evidence(id="ev_001")
+    llm = MockLLMProvider(
+        [LLMResponse(content=_make_writer_json(), model="mock", stop_reason="end_turn")]
+    )
+    writer = Writer(llm, WriterConfig(temperature=0.5))
+
+    await writer.write(make_curation_request(), [ev], "blog")
+
+    assert llm.calls[0]["temperature"] == 0.5
 
 
 @pytest.mark.integration

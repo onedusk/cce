@@ -28,7 +28,11 @@ class LLMConfig(BaseModel):
         default=0.2,
         ge=0.0,
         le=2.0,
-        description="Lower = more deterministic. Writer and verifier may override.",
+        description=(
+            "Lower = more deterministic. Writer and verifier may override. "
+            "Not sent to models that reject sampling params (Opus 4.7+, "
+            "Sonnet 5) — B1."
+        ),
     )
     max_tokens: int = Field(
         default=8192,
@@ -36,6 +40,34 @@ class LLMConfig(BaseModel):
             "Max tokens per LLM call. 8192 (was 4096) — the writer's long "
             "learn/explore essays wrapped in JSON exceed 4096 and truncate "
             "mid-object, forcing the raw-markdown fallback."
+        ),
+    )
+
+
+class WriterConfig(BaseModel):
+    """Writer agent call settings."""
+
+    temperature: float = Field(
+        default=0.2,
+        ge=0.0,
+        le=2.0,
+        description=(
+            "Low for factual consistency; do not increase without testing. "
+            "Ignored on models that reject sampling params (B1)."
+        ),
+    )
+
+
+class VerifierConfig(BaseModel):
+    """Verifier agent call settings."""
+
+    temperature: float = Field(
+        default=0.1,
+        ge=0.0,
+        le=2.0,
+        description=(
+            "Very low for consistent judgment; do not increase. Ignored on "
+            "models that reject sampling params (B1)."
         ),
     )
 
@@ -343,6 +375,8 @@ class EngineConfig(BaseModel):
     """Top-level engine configuration. Constructed by config/loader.py."""
 
     llm: LLMConfig
+    writer: WriterConfig = Field(default_factory=WriterConfig)
+    verifier: VerifierConfig = Field(default_factory=VerifierConfig)
     evidence_store: EvidenceStoreConfig = Field(default_factory=EvidenceStoreConfig)
     crawl: CrawlConfig = Field(default_factory=CrawlConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)

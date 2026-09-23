@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
+from cce.config.types import VerifierConfig
 from cce.evidence.formatting import format_evidence_for_prompt
 from cce.llm.base import LLMMessage, LLMProvider
 from cce.llm.retry import with_llm_retry
@@ -164,8 +165,9 @@ class VerificationReport:
 class Verifier:
     """Fact-checking verifier agent."""
 
-    def __init__(self, llm: LLMProvider) -> None:
+    def __init__(self, llm: LLMProvider, config: VerifierConfig | None = None) -> None:
         self._llm = llm
+        self._config = config or VerifierConfig()
 
     async def verify(
         self,
@@ -228,7 +230,7 @@ traced to the evidence above should be flagged.
             response = await self._llm.complete(
                 messages,
                 system=_VERIFIER_FULL_PROMPT,
-                temperature=0.1,  # very low for consistent judgment; do not increase
+                temperature=self._config.temperature,
                 max_tokens=VERIFIER_MAX_TOKENS,
             )
             report = self._parse_response(response.content)

@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import uuid
 
+from cce.config.types import WriterConfig
 from cce.evidence.formatting import format_evidence_for_prompt
 from cce.llm.base import LLMMessage, LLMProvider, LLMResponse
 from cce.llm.retry import with_llm_retry
@@ -77,8 +78,9 @@ Structure the content with markdown headings and paragraphs.\
 class Writer:
     """Evidence-constrained content writer."""
 
-    def __init__(self, llm: LLMProvider) -> None:
+    def __init__(self, llm: LLMProvider, config: WriterConfig | None = None) -> None:
         self._llm = llm
+        self._config = config or WriterConfig()
 
     async def write(
         self,
@@ -195,7 +197,7 @@ exists, and mark remaining gaps as [INSUFFICIENT EVIDENCE].
             response = await self._llm.complete(
                 messages,
                 system=system_prompt,
-                temperature=0.2,  # low temp for factual consistency; do not increase without testing
+                temperature=self._config.temperature,
             )
             output = self._parse_response(
                 response, evidence, path, lineage, ev_lookup=ev_lookup

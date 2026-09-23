@@ -87,6 +87,22 @@ def test_load_config_from_yaml(monkeypatch, tmp_path):
     assert config.llm.api_key == "yaml-key"
 
 
+def test_load_writer_verifier_temperature_from_yaml(monkeypatch, tmp_path):
+    """B1: writer/verifier temperatures are config defaults, YAML-overridable."""
+    _clear_env(monkeypatch)
+    assert load_config().writer.temperature == 0.2
+    assert load_config().verifier.temperature == 0.1
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        yaml.dump({"writer": {"temperature": 0.3}, "verifier": {"temperature": 0.05}})
+    )
+    config = load_config(config_file)
+
+    assert config.writer.temperature == 0.3
+    assert config.verifier.temperature == 0.05
+
+
 def test_load_config_env_overrides_yaml(monkeypatch, tmp_path):
     _clear_env(monkeypatch)
     config_file = tmp_path / "config.yaml"

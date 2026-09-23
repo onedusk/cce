@@ -5,6 +5,7 @@ import logging
 
 import pytest
 
+from cce.config.types import VerifierConfig
 from cce.llm.base import LLMResponse
 from cce.models.evidence import SourceQuality
 from cce.verification.verifier import (
@@ -258,3 +259,23 @@ async def test_verify_sends_correct_prompt():
     user_msg = call["messages"][0].content
     assert "AI models are powerful" in user_msg
     assert "[ev_001]" in user_msg
+
+
+@pytest.mark.integration
+async def test_verify_temperature_from_config():
+    """B1: the verifier's temperature is a VerifierConfig default, not a literal."""
+    llm = MockLLMProvider(
+        [
+            LLMResponse(
+                content=_make_valid_verifier_json(),
+                model="mock",
+                stop_reason="end_turn",
+            )
+        ]
+    )
+    verifier = Verifier(llm, VerifierConfig(temperature=0.3))
+
+    unit = make_content_unit(content="AI models are powerful [ev:ev_001].")
+    await verifier.verify(unit, [make_evidence(id="ev_001")])
+
+    assert llm.calls[0]["temperature"] == 0.3

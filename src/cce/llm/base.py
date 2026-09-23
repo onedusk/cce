@@ -45,6 +45,8 @@ class LLMProvider(Protocol):
         Args:
             messages: Conversation history (user/assistant turns).
             temperature: Override the default temperature for this call.
+                    Providers omit it for models that reject sampling
+                    parameters.
             max_tokens: Override the default max_tokens for this call.
             system: System prompt. Passed separately because some providers
                     handle it differently from user messages.
