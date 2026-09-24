@@ -2,13 +2,20 @@
 
 import json
 import logging
+from unittest.mock import AsyncMock
 
 import pytest
 
-from cce.llm.base import LLMResponse
+from cce.config.types import VerifierConfig
+from cce.llm.base import (
+    IncompleteResponseError,
+    LLMResponse,
+    UnparseableResponseError,
+)
 from cce.models.evidence import SourceQuality
 from cce.verification.verifier import (
     _VERIFIER_FULL_PROMPT,
+    VERIFIER_OUTPUT_SCHEMA,
     VerificationReport,
     Verifier,
 )
@@ -113,7 +120,7 @@ class TestParseResponse:
 
     def test_parse_response_valid_json(self):
         raw = _make_valid_verifier_json()
-        report = self._verifier()._parse_response(raw)
+        report = self._verifier()._parse_response(LLMResponse(content=raw))
         assert len(report.claims) == 8
         assert report.total_claims == 10
         assert report.supported == 8
@@ -122,24 +129,42 @@ class TestParseResponse:
         assert report.contradictions == []
         assert report.confidence_score > 0
 
-    def test_parse_response_non_json(self):
-        report = self._verifier()._parse_response("This is not JSON at all")
-        assert report.confidence_score == 0.0
-
-    def test_parse_response_missing_summary(self):
-        raw = json.dumps(
-            {
-                "claims": [
-                    {"claim": "A", "assessment": "supported"},
-                    {"claim": "B", "assessment": "unsupported"},
-                ],
-                "overall_feedback": "Some issues.",
-                "contradictions": [],
-            }
+    def test_parse_response_non_json_raises(self):
+        """No zero-score verdict for an unreadable report: it raises, with the
+        reply on the error for the caller and not in the message."""
+        response = LLMResponse(
+            content="This is not JSON at all", model="m", stop_reason="end_turn"
         )
-        report = self._verifier()._parse_response(raw)
-        # No summary → total_claims defaults to len(claims)
-        assert report.total_claims == 2
+        with pytest.raises(UnparseableResponseError) as exc:
+            self._verifier()._parse_response(response)
+
+        assert exc.value.raw_response == "This is not JSON at all"
+        assert exc.value.stop_reason == "end_turn"
+        assert "not JSON at all" not in str(exc.value)
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            # No summary: counts used to default to 0 -> silent zero score.
+            json.dumps(
+                {
+                    "claims": [{"claim": "A", "assessment": "supported"}],
+                    "overall_feedback": "Some issues.",
+                    "contradictions": [],
+                }
+            ),
+            "{}",
+            'Sorry. {"error": "cannot verify"}',
+            json.dumps({"claims": [], "summary": {"total_claims": "3"}}),
+            json.dumps({"claims": ["not an object"], "summary": {}}),
+        ],
+        ids=["no-summary", "empty", "error-object", "string-count", "bad-claim"],
+    )
+    def test_parse_response_unscorable_report_raises(self, raw):
+        """A report that can't be scored raises instead of becoming a
+        zero-score verdict that routes to REVIEW with no rewrite."""
+        with pytest.raises(UnparseableResponseError):
+            self._verifier()._parse_response(LLMResponse(content=raw))
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +177,11 @@ class TestConfidence:
 
     def _confidence(self, **kwargs) -> float:
         raw = _make_valid_verifier_json(**kwargs)
-        return Verifier(MockLLMProvider([]))._parse_response(raw).confidence_score
+        return (
+            Verifier(MockLLMProvider([]))
+            ._parse_response(LLMResponse(content=raw))
+            .confidence_score
+        )
 
     def test_confidence_no_penalties(self):
         c = self._confidence(total=10, supported=8, gaps=2, leakage=0, conflicts=0)
@@ -254,7 +283,107 @@ async def test_verify_sends_correct_prompt():
     call = llm.calls[0]
     assert call["system"] == _VERIFIER_FULL_PROMPT
     assert call["temperature"] == 0.1
-    assert call["max_tokens"] == 16384
+    assert call["max_tokens"] == 21000
     user_msg = call["messages"][0].content
     assert "AI models are powerful" in user_msg
     assert "[ev_001]" in user_msg
+
+
+@pytest.mark.integration
+async def test_verify_temperature_from_config():
+    """B1: the verifier's temperature is a VerifierConfig default, not a literal."""
+    llm = MockLLMProvider(
+        [
+            LLMResponse(
+                content=_make_valid_verifier_json(),
+                model="mock",
+                stop_reason="end_turn",
+            )
+        ]
+    )
+    verifier = Verifier(llm, VerifierConfig(temperature=0.3))
+
+    unit = make_content_unit(content="AI models are powerful [ev:ev_001].")
+    await verifier.verify(unit, [make_evidence(id="ev_001")])
+
+    assert llm.calls[0]["temperature"] == 0.3
+
+
+@pytest.mark.integration
+async def test_verify_max_tokens_from_config():
+    """B2: the verifier's max_tokens is a VerifierConfig default, not a literal."""
+    llm = MockLLMProvider(
+        [
+            LLMResponse(
+                content=_make_valid_verifier_json(),
+                model="mock",
+                stop_reason="end_turn",
+            )
+        ]
+    )
+    verifier = Verifier(llm, VerifierConfig(max_tokens=20000))
+
+    unit = make_content_unit(content="AI models are powerful [ev:ev_001].")
+    await verifier.verify(unit, [make_evidence(id="ev_001")])
+
+    assert llm.calls[0]["max_tokens"] == 20000
+
+
+@pytest.mark.integration
+async def test_verify_raises_on_truncated_reply():
+    """B2: a truncated report raises instead of becoming a zero-score verdict
+    (which routed straight to REVIEW with no rewrite), and is not resent."""
+    llm = MockLLMProvider(
+        [
+            LLMResponse(
+                content='{"claims": [{"claim": "AI models are',
+                model="claude-sonnet-5",
+                usage={"output_tokens": 16384},
+                stop_reason="max_tokens",
+            )
+        ]
+    )
+    verifier = Verifier(llm)
+    unit = make_content_unit(content="AI models are powerful [ev:ev_001].")
+
+    with pytest.raises(IncompleteResponseError, match="verifier"):
+        await verifier.verify(unit, [make_evidence(id="ev_001")])
+
+    assert len(llm.calls) == 1
+
+
+@pytest.mark.integration
+async def test_verify_passes_structured_output_schema():
+    llm = MockLLMProvider(
+        [
+            LLMResponse(
+                content=_make_valid_verifier_json(), model="m", stop_reason="end_turn"
+            )
+        ]
+    )
+
+    await Verifier(llm).verify(
+        make_content_unit(content="Claim [ev:ev_001]."), [make_evidence(id="ev_001")]
+    )
+
+    assert llm.calls[0]["output_schema"] == VERIFIER_OUTPUT_SCHEMA
+
+
+@pytest.mark.integration
+async def test_verify_resends_once_then_raises_on_unparseable(monkeypatch):
+    """No zero-score verdict: one resend, then UnparseableResponseError."""
+    monkeypatch.setattr("cce.llm.retry.asyncio.sleep", AsyncMock())
+    llm = MockLLMProvider(
+        [
+            LLMResponse(content="bad one", model="m", stop_reason="end_turn"),
+            LLMResponse(content="bad two", model="m", stop_reason="end_turn"),
+        ]
+    )
+
+    with pytest.raises(UnparseableResponseError):
+        await Verifier(llm).verify(
+            make_content_unit(content="Claim [ev:ev_001]."),
+            [make_evidence(id="ev_001")],
+        )
+
+    assert len(llm.calls) == 2

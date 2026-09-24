@@ -148,6 +148,154 @@ async def test_config_defaults_used(mock_cls: MagicMock) -> None:
     assert call_kwargs["model"] == config.model
 
 
+@pytest.mark.parametrize(
+    ("model", "sends_temperature"),
+    [
+        ("claude-sonnet-4-6", True),
+        ("claude-opus-4-6", True),
+        ("claude-haiku-4-5", True),
+        ("claude-sonnet-4-5", True),
+        ("claude-sonnet-5", False),
+        ("claude-opus-5", False),
+        ("claude-opus-5-5", False),
+        ("claude-opus-4-7", False),
+        ("claude-opus-4-8", False),
+        ("claude-fable-5-1", False),
+    ],
+)
+@pytest.mark.parametrize("explicit_temperature", [0.3, None])
+@patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
+async def test_sampling_params_follow_model_capability(
+    mock_cls: MagicMock,
+    explicit_temperature: float | None,
+    model: str,
+    sends_temperature: bool,
+) -> None:
+    """B1: temperature is sent only to models that accept sampling params.
+
+    Covers both the caller-supplied value and the LLMConfig fallback (None),
+    so the rule applies to the final kwarg, not just the caller's value.
+    """
+    mock_client = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=_mock_response())
+    mock_cls.return_value = mock_client
+
+    config = _config().model_copy(update={"model": model})
+    provider = AnthropicProvider(config)
+    await provider.complete(
+        [LLMMessage(role="user", content="Hi")],
+        temperature=explicit_temperature,
+    )
+
+    call_kwargs = mock_client.messages.create.call_args[1]
+    assert call_kwargs["model"] == model
+    if sends_temperature:
+        expected = (
+            explicit_temperature
+            if explicit_temperature is not None
+            else config.temperature
+        )
+        assert call_kwargs["temperature"] == expected
+    else:
+        assert "temperature" not in call_kwargs
+        assert "top_p" not in call_kwargs
+
+
+@pytest.mark.parametrize(
+    ("model", "accepts_adaptive"),
+    [
+        ("claude-sonnet-5", True),
+        ("claude-opus-5", True),
+        ("claude-opus-4-7", True),
+        ("claude-sonnet-4-6", True),
+        ("claude-opus-4-6", True),
+        ("claude-haiku-4-5", False),
+        ("claude-sonnet-4-5", False),
+    ],
+)
+@patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
+async def test_thinking_and_effort_follow_model_capability(
+    mock_cls: MagicMock, model: str, accepts_adaptive: bool
+) -> None:
+    """B2: explicit thinking/effort are sent only to models that support
+    adaptive thinking and effort; Haiku 4.5 and older get neither."""
+    mock_client = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=_mock_response())
+    mock_cls.return_value = mock_client
+
+    config = _config().model_copy(
+        update={"model": model, "thinking": "adaptive", "effort": "medium"}
+    )
+    await AnthropicProvider(config).complete([LLMMessage(role="user", content="Hi")])
+
+    call_kwargs = mock_client.messages.create.call_args[1]
+    if accepts_adaptive:
+        assert call_kwargs["thinking"] == {"type": "adaptive"}
+        assert call_kwargs["output_config"] == {"effort": "medium"}
+    else:
+        assert "thinking" not in call_kwargs
+        assert "output_config" not in call_kwargs
+
+
+@pytest.mark.parametrize("model", ["claude-sonnet-5", "claude-sonnet-4-6"])
+@patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
+async def test_thinking_and_effort_omitted_by_default(
+    mock_cls: MagicMock, model: str
+) -> None:
+    """B2: unset thinking/effort leave the params out (model default), so
+    the 4.6 models keep today's no-thinking behaviour."""
+    mock_client = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=_mock_response())
+    mock_cls.return_value = mock_client
+
+    config = _config().model_copy(update={"model": model})
+    await AnthropicProvider(config).complete([LLMMessage(role="user", content="Hi")])
+
+    call_kwargs = mock_client.messages.create.call_args[1]
+    assert "thinking" not in call_kwargs
+    assert "output_config" not in call_kwargs
+
+
+@pytest.mark.parametrize(
+    ("thinking", "sends_temperature"),
+    [("adaptive", False), ("disabled", True), (None, True)],
+)
+@patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
+async def test_adaptive_thinking_drops_temperature_on_4_6(
+    mock_cls: MagicMock, thinking: str | None, sends_temperature: bool
+) -> None:
+    """With thinking on, the API rejects any temperature but 1 even on the
+    4.6 models (live 400, 2026-09-23), so the provider omits it there too."""
+    mock_client = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=_mock_response())
+    mock_cls.return_value = mock_client
+
+    config = _config().model_copy(
+        update={"model": "claude-sonnet-4-6", "thinking": thinking}
+    )
+    await AnthropicProvider(config).complete(
+        [LLMMessage(role="user", content="Hi")], temperature=0.2
+    )
+
+    assert ("temperature" in mock_client.messages.create.call_args[1]) is (
+        sends_temperature
+    )
+
+
+@patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
+async def test_disabled_thinking_passes_through(mock_cls: MagicMock) -> None:
+    mock_client = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=_mock_response())
+    mock_cls.return_value = mock_client
+
+    config = _config().model_copy(
+        update={"model": "claude-sonnet-5", "thinking": "disabled"}
+    )
+    await AnthropicProvider(config).complete([LLMMessage(role="user", content="Hi")])
+
+    assert mock_client.messages.create.call_args[1]["thinking"] == {"type": "disabled"}
+
+
 @patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
 async def test_sdk_exception_propagates(mock_cls: MagicMock) -> None:
     """RuntimeError raised by the SDK propagates to the caller."""
@@ -266,3 +414,76 @@ async def test_cache_tokens_reported(mock_cls: MagicMock) -> None:
 
     assert result.usage["cache_creation_input_tokens"] == 500
     assert result.usage["cache_read_input_tokens"] == 1200
+
+
+_SCHEMA = {
+    "type": "object",
+    "properties": {"ok": {"type": "boolean"}},
+    "required": ["ok"],
+    "additionalProperties": False,
+}
+
+
+@pytest.mark.parametrize(
+    ("model", "sends_format"),
+    [
+        ("claude-sonnet-5", True),
+        ("claude-opus-5", True),
+        ("claude-sonnet-4-6", True),
+        ("claude-haiku-4-5", True),
+        ("claude-sonnet-4-5-20250929", True),
+        ("claude-3-5-sonnet-latest", False),
+        ("claude-sonnet-4-20250514", False),
+    ],
+)
+@patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
+async def test_output_schema_sent_as_structured_output(
+    mock_cls: MagicMock, model: str, sends_format: bool
+) -> None:
+    """output_schema becomes output_config.format on models with structured
+    outputs (every model the Models API lists); retired ones get none."""
+    mock_client = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=_mock_response())
+    mock_cls.return_value = mock_client
+
+    config = _config().model_copy(update={"model": model})
+    await AnthropicProvider(config).complete(
+        [LLMMessage(role="user", content="Hi")], output_schema=_SCHEMA
+    )
+
+    call_kwargs = mock_client.messages.create.call_args[1]
+    if sends_format:
+        assert call_kwargs["output_config"] == {
+            "format": {"type": "json_schema", "schema": _SCHEMA}
+        }
+    else:
+        assert "output_config" not in call_kwargs
+
+
+@patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
+async def test_output_schema_merges_with_effort(mock_cls: MagicMock) -> None:
+    mock_client = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=_mock_response())
+    mock_cls.return_value = mock_client
+
+    config = _config().model_copy(update={"model": "claude-sonnet-5", "effort": "low"})
+    await AnthropicProvider(config).complete(
+        [LLMMessage(role="user", content="Hi")], output_schema=_SCHEMA
+    )
+
+    assert mock_client.messages.create.call_args[1]["output_config"] == {
+        "effort": "low",
+        "format": {"type": "json_schema", "schema": _SCHEMA},
+    }
+
+
+@patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
+async def test_no_output_config_without_schema_or_effort(mock_cls: MagicMock) -> None:
+    mock_client = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=_mock_response())
+    mock_cls.return_value = mock_client
+
+    config = _config().model_copy(update={"model": "claude-sonnet-5"})
+    await AnthropicProvider(config).complete([LLMMessage(role="user", content="Hi")])
+
+    assert "output_config" not in mock_client.messages.create.call_args[1]

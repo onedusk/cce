@@ -30,8 +30,12 @@ The engine config file is *opt-in* — nothing is loaded implicitly. Pass it:
 - `CurationEngine.embedded(config_path="path/to/config.yaml")` from code
 - `load_config("path/to/config.yaml")` directly
 
-Top-level YAML sections mirror `EngineConfig`: `llm`, `evidence_store`,
-`crawl`, `embedding`, `quality_gate`, `api`, `humanization`, `engine_version`.
+Top-level YAML sections mirror `EngineConfig`: `llm`, `writer`, `verifier`,
+`evidence_store`, `crawl`, `embedding`, `quality_gate`, `api`, `humanization`,
+`engine_version`. `writer.temperature` (default `0.2`) and
+`verifier.temperature` (default `0.1`) are the per-agent sampling
+temperatures; like `llm.temperature` they are not sent to models that reject
+sampling parameters (Opus 4.7 and later, Sonnet 5, Fable 5).
 `config/humanization_live.yaml` is a working example (the humanization live
 harness uses it). Environment variables override whatever the file says.
 
@@ -123,8 +127,21 @@ effective values when neither env var nor YAML provides one.
 | `CCE_LLM_MODEL` | `claude-sonnet-4-6` | Model id |
 | `ANTHROPIC_MODEL` | — | Fallback alias for `CCE_LLM_MODEL` |
 | `CCE_LLM_API_KEY` | — | Overrides `ANTHROPIC_API_KEY` when set |
-| `CCE_LLM_TEMPERATURE` | `0.2` | Sampling temperature |
-| `CCE_LLM_MAX_TOKENS` | `4096` | Per-call output token cap |
+| `CCE_LLM_TEMPERATURE` | `0.2` | Fallback sampling temperature; not sent to models that reject sampling params (Opus 4.7+, Sonnet 5, Fable 5) |
+| `CCE_LLM_MAX_TOKENS` | `21000` | Per-call output token cap, thinking included. A reply that hits it fails the job with an `IncompleteResponseError` naming the role and model instead of being parsed. The default sits just under the SDK's non-streaming ceiling (~21,333); if thinking crowds out replies, lower `CCE_LLM_EFFORT` |
+| `CCE_LLM_THINKING` | unset | `adaptive` or `disabled`, sent as `thinking: {type: ...}`. Unset = omit the param (model default: Sonnet 5 / Opus 5 think adaptively, the 4.6 models do not). Never sent to Opus 4.5, Haiku 4.5 or older. `adaptive` also drops `temperature` on the 4.6 models (the API rejects any value but 1 while thinking is on). Otherwise passed through as set: the API rejects `disabled` on Fable 5 / Opus 5.5, and on Opus 5 at effort `xhigh`/`max` |
+| `CCE_LLM_EFFORT` | unset | `low` / `medium` / `high` / `xhigh` / `max`, sent as `output_config.effort`. Unset = model default. Sent only to models with adaptive thinking (4.6 and later), so also omitted on Opus 4.5; `xhigh` needs Opus 4.7+ / Sonnet 5 |
+
+The writer's and verifier's replies are constrained to their JSON schemas
+with structured outputs on every current model; there is no setting for it.
+An unreadable reply is resent once, then fails the job.
+
+### Verifier
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `CCE_VERIFIER_MODEL` | unset | Separate model for the verifier (YAML `verifier.model`), so writer and verifier blind spots aren't correlated. Credentials and the other `llm` settings are inherited, including `CCE_LLM_THINKING` / `CCE_LLM_EFFORT`, so those must also be valid for the verifier's model (e.g. effort `xhigh` fails on a 4.6 verifier); unset = the verifier uses `CCE_LLM_MODEL` |
+| `CCE_VERIFIER_MAX_TOKENS` | `21000` | Per-call output cap for the verifier's claim-by-claim report (YAML `verifier.max_tokens`) |
 
 ### Evidence store
 

@@ -37,6 +37,7 @@ class ComponentSet:
     hence a dataclass at package root, not a frozen model in models/."""
 
     llm: LLMProvider
+    verifier_llm: LLMProvider
     crawl_adapter: CrawlAdapter
     embedding: EmbeddingProvider | None
     taxonomy: TaxonomyPlugin | None
@@ -72,6 +73,14 @@ def build_components(
 
     crawl_adapter = FirecrawlAdapter(config.crawl)
     llm = AnthropicProvider(config.llm)
+    # Verifier-specific model (B3): same credentials and settings, its own
+    # model ID. Unset -> the verifier shares the writer's provider.
+    verifier_llm: LLMProvider = llm
+    if config.verifier.model:
+        verifier_llm = AnthropicProvider(
+            config.llm.model_copy(update={"model": config.verifier.model})
+        )
+        logger.info("Verifier model: %s", config.verifier.model)
 
     # Embedding provider (optional)
     embedding_provider = None
@@ -154,6 +163,7 @@ def build_components(
 
     return ComponentSet(
         llm=llm,
+        verifier_llm=verifier_llm,
         crawl_adapter=crawl_adapter,
         embedding=embedding_provider,
         taxonomy=taxonomy_plugin,
@@ -183,6 +193,7 @@ def build_pipeline(
         crawl_adapter=components.crawl_adapter,
         evidence_store=evidence_store,
         llm=components.llm,
+        verifier_llm=components.verifier_llm,
         embedding_provider=components.embedding,
         taxonomy_plugin=components.taxonomy,
         path_configs=components.path_configs,

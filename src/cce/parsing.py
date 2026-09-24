@@ -6,7 +6,36 @@ import json
 import logging
 import re
 
+from cce.models.evidence import Evidence
+
 logger = logging.getLogger(__name__)
+
+# Citation-marker grammar shared by the quality gate and MDX emit (B4), so
+# every marker the gate accepts is one emit can resolve. Matches both
+# citation formats produced by the writer:
+#   [ev:ev_abc123]  — colon-separated (per writer prompt spec)
+#   [ev_abc123]     — bare ID in brackets (common LLM output)
+EV_MARKER_RE = re.compile(r"\[ev:([^\]]+)\]|\[(ev_[^\]]+)\]")
+
+
+def resolve_evidence_id(
+    ev_id_raw: str, evidence_by_id: dict[str, Evidence]
+) -> tuple[str, Evidence | None]:
+    """Resolve a marker id to (canonical_ev_id, Evidence|None), retrying with the `ev_` prefix.
+
+    The writer's prompt says "use [ev:EVIDENCE_ID]" while the evidence block displays IDs as
+    [ev_HASH] — the LLM frequently interprets "EVIDENCE_ID" as just the HASH part (without the
+    `ev_` prefix) and emits [ev:HASH]. Try the literal lookup first, then re-try with the `ev_`
+    prefix added so downstream consumers see one canonical form.
+    """
+    ev_id = ev_id_raw
+    evidence = evidence_by_id.get(ev_id)
+    if evidence is None and not ev_id.startswith("ev_"):
+        prefixed = f"ev_{ev_id}"
+        evidence = evidence_by_id.get(prefixed)
+        if evidence is not None:
+            ev_id = prefixed
+    return ev_id, evidence
 
 
 def extract_json(text: str) -> dict | None:
@@ -14,9 +43,14 @@ def extract_json(text: str) -> dict | None:
     # Normalize line endings and strip whitespace
     text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
 
+    # strict=False throughout: models sometimes emit a raw newline inside a
+    # long string value instead of the \n escape, which strict parsing
+    # rejects as an invalid control character (3 of 6 Sonnet 5 writer
+    # replies, 2026-09-23). The parsed string then holds the intended newline.
+
     # Try direct parse
     try:
-        return json.loads(text)
+        return json.loads(text, strict=False)
     except json.JSONDecodeError:
         pass
 
@@ -31,7 +65,7 @@ def extract_json(text: str) -> dict | None:
         if match:
             candidate = match.group(1).strip()
             try:
-                return json.loads(candidate)
+                return json.loads(candidate, strict=False)
             except json.JSONDecodeError:
                 continue
 
@@ -42,7 +76,7 @@ def extract_json(text: str) -> dict | None:
         if first != -1 and last > first:
             candidate = text[first : last + 1]
             try:
-                return json.loads(candidate)
+                return json.loads(candidate, strict=False)
             except json.JSONDecodeError:
                 pass
 
@@ -52,11 +86,9 @@ def extract_json(text: str) -> dict | None:
         if repaired is not None:
             return repaired
 
-    logger.warning(
-        "extract_json failed: length=%d, starts=%r",
-        len(text),
-        text[:100],
-    )
+    # Length only: the reply can hold confidential content, so none of it
+    # is logged.
+    logger.warning("extract_json failed: length=%d", len(text))
     return None
 
 
@@ -69,7 +101,7 @@ def _repair_json(text: str, max_repairs: int = 50) -> dict | None:
     """
     for _ in range(max_repairs):
         try:
-            return json.loads(text)
+            return json.loads(text, strict=False)
         except json.JSONDecodeError as e:
             pos = e.pos
             if pos is None or pos >= len(text):

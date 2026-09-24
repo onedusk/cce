@@ -17,6 +17,7 @@ from enum import Enum
 from cce.config.types import QualityGateConfig
 from cce.models.content import ContentUnit
 from cce.models.evidence import Evidence
+from cce.parsing import EV_MARKER_RE, resolve_evidence_id
 from cce.verification.verifier import VerificationReport
 
 MIN_SUBSTANTIVE_WORDS = 15  # min words for a paragraph to be checked for citations
@@ -67,23 +68,52 @@ class QualityGate:
         unit: ContentUnit,
         report: VerificationReport,
         iteration: int,
-        evidence: list[Evidence] | None = None,
+        evidence: list[Evidence],
     ) -> GateResult:
         """Decide whether to pass, fail, or route to review.
 
         Decision logic:
-        1. If confidence >= autopublish_threshold AND citation density is met -> PASS
-        2. If we haven't hit max iterations AND there are fixable issues -> FAIL (rewrite)
+        1. If every inline citation marker resolves to ``evidence`` AND
+           confidence >= autopublish_threshold AND citation density is met -> PASS
+        2. If we haven't hit max iterations AND there are fixable issues
+           (including unresolved markers) -> FAIL (rewrite)
         3. Otherwise -> REVIEW (needs human)
+
+        ``evidence`` is the set the draft was written and verified against
+        (the pipeline passes the path's evidence, a subset of what emit
+        resolves against). It is required: a marker is only checkable
+        against a known set (B4).
         """
         confidence = report.confidence_score
         coverage = report.pass_rate
+
+        # Every inline marker must resolve to provided evidence (B4) — the
+        # density check below counts markers, so phantom IDs could otherwise
+        # meet the threshold while citing nothing real.
+        unresolved = self._unresolved_markers(unit, evidence)
 
         # Check citation density per paragraph
         citation_ok, citation_ratio = self._check_citation_density(unit)
 
         # Build feedback for the writer
         feedback_parts: list[str] = []
+
+        # A bracket holding several IDs never resolves (emit renders [^?])
+        # even when each ID is real, so it gets its own actionable line.
+        multi_id = [m for m in unresolved if "," in m]
+        unknown = [m for m in unresolved if "," not in m]
+        if unknown:
+            feedback_parts.append(
+                f"{len(unknown)} citation marker(s) do not resolve to any "
+                f"provided evidence: {', '.join(unknown)}. Cite only evidence "
+                f"IDs listed in the evidence block."
+            )
+        if multi_id:
+            feedback_parts.append(
+                f"{len(multi_id)} citation marker(s) put several IDs in one "
+                f"bracket: {' '.join(f'[{m}]' for m in multi_id)}. Use one marker "
+                f"per source, e.g. [ev:ID1][ev:ID2]."
+            )
 
         if report.unsupported > 0:
             feedback_parts.append(
@@ -133,7 +163,8 @@ class QualityGate:
 
         # Decision logic
         if (
-            confidence >= self._config.autopublish_threshold
+            not unresolved
+            and confidence >= self._config.autopublish_threshold
             and citation_ok
             and report.leakage == 0
         ):
@@ -144,9 +175,8 @@ class QualityGate:
                 self._config.autopublish_threshold,
                 iteration,
             )
-        elif (
-            iteration < self._config.max_writer_iterations
-            and self._has_fixable_issues(report)
+        elif iteration < self._config.max_writer_iterations and (
+            bool(unresolved) or self._has_fixable_issues(report)
         ):
             decision = GateDecision.FAIL
             logger.info(
@@ -177,6 +207,20 @@ class QualityGate:
             report=report,
             iteration=iteration,
         )
+
+    @staticmethod
+    def _unresolved_markers(unit: ContentUnit, evidence: list[Evidence]) -> list[str]:
+        """Marker IDs in ``unit.content`` that match no evidence, in order of
+        first appearance. Uses emit's grammar and prefix fallback
+        (``cce.parsing``), so a marker the gate accepts is one emit resolves."""
+        by_id = {ev.id: ev for ev in evidence}
+        unresolved: list[str] = []
+        for match in EV_MARKER_RE.finditer(unit.content):
+            raw = match.group(1) or match.group(2)
+            _, resolved = resolve_evidence_id(raw, by_id)
+            if resolved is None and raw not in unresolved:
+                unresolved.append(raw)
+        return unresolved
 
     def _check_citation_density(self, unit: ContentUnit) -> tuple[bool, float]:
         """Check citation density. Returns (passes, ratio of paragraphs meeting threshold)."""

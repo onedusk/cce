@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from cce.config.types import VerifierConfig, WriterConfig
 from cce.models.content import Citation, ClaimMapping
 from cce.models.job import Job, JobStage, JobStatus, StageRecord
 from cce.models.style import StyleScores
@@ -459,3 +460,23 @@ class TestBuildSiblingDigest:
 
         assert "## From the 'learn' article:" in digest
         assert "## From the 'explore' article:" in digest
+
+
+# ---------------------------------------------------------------------------
+# Writer / verifier call config (B1)
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_passes_writer_and_verifier_config():
+    """B1: the Pipeline hands EngineConfig.writer/verifier to its agents."""
+    writer_cfg = WriterConfig(temperature=0.35)
+    verifier_cfg = VerifierConfig(temperature=0.05)
+    pipeline = Pipeline(
+        config=make_engine_config(writer=writer_cfg, verifier=verifier_cfg),
+        crawl_adapter=MockCrawlAdapter(),
+        evidence_store=None,  # type: ignore[arg-type] — unused here
+        llm=MockLLMProvider(),
+    )
+
+    assert pipeline._writer._config == writer_cfg
+    assert pipeline._verifier._config == verifier_cfg

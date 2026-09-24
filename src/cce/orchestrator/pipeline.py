@@ -227,6 +227,7 @@ class Pipeline:
         scorer: Scorer | None = None,
         editor: Editor | None = None,
         implied_claim_checker: ImpliedClaimChecker | None = None,
+        verifier_llm: LLMProvider | None = None,
     ) -> None:
         self._config = config
         self._taxonomy_plugin = taxonomy_plugin
@@ -240,8 +241,9 @@ class Pipeline:
             embedding_concurrency=config.embedding.concurrency,
             evidence_store=evidence_store,
         )
-        self._writer = Writer(llm=llm)
-        self._verifier = Verifier(llm=llm)
+        self._writer = Writer(llm=llm, config=config.writer)
+        # Optional separate provider for the verifier (B3); None = share `llm`.
+        self._verifier = Verifier(llm=verifier_llm or llm, config=config.verifier)
         # Humanization components (M02+). All optional — None = disabled.
         self._scorer = scorer
         self._editor = editor
@@ -358,6 +360,7 @@ class Pipeline:
                 package=None,
                 job=self._update_job(job, JobStatus.FAILED, error_msg=str(e)),
                 gate_results=[],
+                error=e,
             )
 
     # --- run() phase helpers (M07 — extracted from run(), bodies lifted
@@ -1150,10 +1153,15 @@ class PipelineResult:
         package: PublishPackage | None,
         job: Job,
         gate_results: list[GateResult],
+        error: BaseException | None = None,
     ) -> None:
         self.package = package
         self.job = job
         self.gate_results = gate_results
+        # The exception that failed the run, in memory only (never copied
+        # onto the persisted Job): e.g. UnparseableResponseError.raw_response
+        # for the caller to persist where it sees fit.
+        self.error = error
 
     @property
     def succeeded(self) -> bool:

@@ -29,6 +29,8 @@ from cce.config.types import (
     ImpliedClaimsConfig,
     LLMConfig,
     QualityGateConfig,
+    VerifierConfig,
+    WriterConfig,
     default_quality_gate_profiles,
 )
 
@@ -90,6 +92,10 @@ def load_config(config_path: str | Path | None = None) -> EngineConfig:
         CCE_LLM_API_KEY         -> llm.api_key
         CCE_LLM_TEMPERATURE     -> llm.temperature
         CCE_LLM_MAX_TOKENS      -> llm.max_tokens
+        CCE_LLM_THINKING        -> llm.thinking
+        CCE_LLM_EFFORT          -> llm.effort
+        CCE_VERIFIER_MODEL      -> verifier.model
+        CCE_VERIFIER_MAX_TOKENS -> verifier.max_tokens
         CCE_EVIDENCE_BACKEND    -> evidence_store.backend
         CCE_EVIDENCE_SQLITE_PATH -> evidence_store.sqlite_path
         CCE_CRAWL_ADAPTER       -> crawl.adapter
@@ -114,6 +120,8 @@ def load_config(config_path: str | Path | None = None) -> EngineConfig:
     )
     return EngineConfig(
         llm=_load_llm_config(file_data.get("llm", {})),
+        writer=WriterConfig(**(file_data.get("writer") or {})),
+        verifier=_load_verifier_config(file_data.get("verifier") or {}),
         evidence_store=_load_evidence_config(file_data.get("evidence_store", {})),
         crawl=_load_crawl_config(file_data.get("crawl", {})),
         embedding=_load_embedding_config(file_data.get("embedding", {})),
@@ -143,7 +151,21 @@ def _load_llm_config(file: dict) -> LLMConfig:
             max_tokens=_opt(
                 int, os.getenv("CCE_LLM_MAX_TOKENS", file.get("max_tokens"))
             ),
+            thinking=os.getenv("CCE_LLM_THINKING", file.get("thinking")),
+            effort=os.getenv("CCE_LLM_EFFORT", file.get("effort")),
         ),
+    )
+
+
+def _load_verifier_config(file: dict) -> VerifierConfig:
+    return VerifierConfig(
+        **_explicit(
+            model=os.getenv("CCE_VERIFIER_MODEL", file.get("model")),
+            temperature=_opt(float, file.get("temperature")),
+            max_tokens=_opt(
+                int, os.getenv("CCE_VERIFIER_MAX_TOKENS", file.get("max_tokens"))
+            ),
+        )
     )
 
 

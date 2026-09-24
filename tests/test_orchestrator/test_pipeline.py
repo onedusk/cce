@@ -2,19 +2,21 @@
 
 import json
 import re
+from unittest.mock import AsyncMock
 
 import pytest
 
-from cce.llm.base import LLMMessage, LLMResponse
-from cce.models.job import Job, JobStatus
+from cce.llm.base import LLMMessage, LLMResponse, UnparseableResponseError
+from cce.models.job import Job, JobStage, JobStatus
 from cce.orchestrator.pipeline import Pipeline, _per_path_iteration_counts
 from cce.output.mdx.citations import build_citation_index
 from cce.verification.gate import GateDecision
 from tests.conftest import (
     MockCrawlAdapter,
+    MockLLMProvider,
+    cite_prompt_evidence,
     make_curation_request,
     make_engine_config,
-    make_evidence,
     make_source_policy,
 )
 from tests.test_orchestrator.conftest import (
@@ -49,6 +51,95 @@ async def test_pipeline_happy_path(sqlite_store):
     assert result.succeeded is True
     assert result.package is not None
     assert len(result.package.units) == 1
+    assert result.job.status == JobStatus.COMPLETED
+
+
+@pytest.mark.integration
+async def test_pipeline_truncated_writer_reply_fails_job_with_reason(sqlite_store):
+    """B2: a writer reply cut off at max_tokens fails the job loudly; the job
+    record names the role, the model and the stop reason instead of carrying
+    an uncited raw-markdown draft forward."""
+    llm = MockLLMProvider(
+        [
+            LLMResponse(
+                content='{"content": "Draft cut off [ev:',
+                model="claude-sonnet-5",
+                usage={"output_tokens": 16384},
+                stop_reason="max_tokens",
+            )
+        ]
+    )
+    pipeline = Pipeline(
+        config=make_engine_config(),
+        crawl_adapter=_make_adapter(),
+        evidence_store=sqlite_store,
+        llm=llm,
+    )
+
+    result = await pipeline.run(make_curation_request(), make_source_policy())
+
+    assert result.job.status == JobStatus.FAILED
+    assert result.package is None
+    assert result.job.error is not None
+    message = result.job.error.message
+    assert "writer" in message
+    assert "claude-sonnet-5" in message
+    assert "max_tokens" in message
+    assert result.job.error.stage == JobStage.WRITE
+    assert len(llm.calls) == 1
+
+
+@pytest.mark.integration
+async def test_pipeline_routes_verifier_calls_to_verifier_llm(sqlite_store):
+    """B3: with a separate verifier provider, every verifier call goes to it
+    and every writer call stays on the main provider."""
+    main = _llm(_writer_json())
+    verifier = _llm(_verifier_json(supported=10, total=10, gaps=0))
+    pipeline = Pipeline(
+        config=make_engine_config(),
+        crawl_adapter=_make_adapter(),
+        evidence_store=sqlite_store,
+        llm=main,
+        verifier_llm=verifier,
+    )
+
+    result = await pipeline.run(make_curation_request(), make_source_policy())
+
+    assert result.job.status == JobStatus.COMPLETED
+    assert len(main.calls) == 1
+    assert "DRAFT CONTENT TO VERIFY" not in main.calls[0]["messages"][0].content
+    assert len(verifier.calls) == 1
+    assert "DRAFT CONTENT TO VERIFY" in verifier.calls[0]["messages"][0].content
+
+
+@pytest.mark.integration
+async def test_pipeline_phantom_marker_triggers_rewrite_naming_it(sqlite_store):
+    """B4: a draft citing an ID that isn't in the evidence FAILs the gate even
+    at full verifier confidence; the rewrite prompt names the phantom ID, and
+    the corrected draft passes."""
+    llm = _llm(
+        _writer_json(content="Draft [ev:ev_001] plus an invented [ev:ev_ghost]."),
+        _verifier_json(supported=10, total=10, gaps=0),
+        _writer_json(content="Draft [ev:ev_001]."),
+        _verifier_json(supported=10, total=10, gaps=0),
+    )
+    pipeline = Pipeline(
+        config=make_engine_config(),
+        crawl_adapter=_make_adapter(),
+        evidence_store=sqlite_store,
+        llm=llm,
+    )
+
+    result = await pipeline.run(make_curation_request(), make_source_policy())
+
+    assert [gr.decision for gr in result.gate_results] == [
+        GateDecision.FAIL,
+        GateDecision.PASS,
+    ]
+    assert "ev_ghost" in result.gate_results[0].feedback
+    rewrite_prompt = llm.calls[2]["messages"][0].content
+    assert "VERIFIER FEEDBACK" in rewrite_prompt
+    assert "ev_ghost" in rewrite_prompt
     assert result.job.status == JobStatus.COMPLETED
 
 
@@ -249,6 +340,7 @@ class _PathDispatchLLM:
         temperature: float | None = None,
         max_tokens: int | None = None,
         system: str | None = None,
+        output_schema: dict | None = None,
     ) -> LLMResponse:
         text = messages[0].content
         usage = {"input_tokens": 1, "output_tokens": 1}
@@ -264,7 +356,7 @@ class _PathDispatchLLM:
         path = match.group(1).strip()
         self.calls.append(("writer", path))
         return LLMResponse(
-            content=self._writer_by_path[path],
+            content=cite_prompt_evidence(self._writer_by_path[path], messages),
             model="mock",
             stop_reason="end_turn",
             usage=usage,
@@ -298,8 +390,8 @@ async def test_trio_gate_attribution_completes_and_citations_resolve(sqlite_stor
     assert _per_path_iteration_counts(result.job, _TRIO) == [1, 1, 1]
 
     # Citation invariant: each unit's [ev:ID] markers resolve to a footnote —
-    # no orphaned [^?] — when scanned against the cited evidence id.
-    ev_lookup = {"ev_001": make_evidence(id="ev_001")}
+    # no orphaned [^?] — against the package evidence emit actually uses (B4).
+    ev_lookup = {ev.id: ev for ev in result.package.evidence}
     for unit in result.package.units:
         cited = build_citation_index(unit.content, ev_lookup)
         assert "[^?]" not in cited.content
@@ -391,3 +483,62 @@ def test_update_job_status_transitions():
     assert job2.status == JobStatus.FAILED
     assert job2.error is not None
     assert job2.error.message == "oops"
+
+
+@pytest.mark.integration
+async def test_pipeline_unparseable_writer_reply_fails_job_without_leaking_it(
+    sqlite_store, caplog, monkeypatch
+):
+    """Unreadable writer replies (twice) fail the job; the reply text appears
+    neither in the job record nor in the logs (confidential content)."""
+    monkeypatch.setattr("cce.llm.retry.asyncio.sleep", AsyncMock())
+    sentinel = "SENTINEL-CONFIDENTIAL client statement"
+    llm = _llm(f"{sentinel} not json", f"{sentinel} still not json")
+    pipeline = Pipeline(
+        config=make_engine_config(),
+        crawl_adapter=_make_adapter(),
+        evidence_store=sqlite_store,
+        llm=llm,
+    )
+
+    with caplog.at_level("DEBUG"):
+        result = await pipeline.run(make_curation_request(), make_source_policy())
+
+    assert result.job.status == JobStatus.FAILED
+    assert result.package is None
+    assert result.job.error is not None
+    assert "writer" in result.job.error.message
+    assert "could not be parsed" in result.job.error.message
+    assert sentinel not in result.job.error.message
+    assert sentinel not in caplog.text
+    assert len(llm.calls) == 2
+    # The reply is still reachable, in memory only, for the caller to persist.
+    assert isinstance(result.error, UnparseableResponseError)
+    assert sentinel in result.error.raw_response
+    assert sentinel not in result.job.model_dump_json()
+
+
+@pytest.mark.integration
+async def test_pipeline_wrongly_typed_writer_reply_does_not_leak(
+    sqlite_store, caplog, monkeypatch
+):
+    """A reply that parses but has the wrong field types must not surface a
+    ValidationError quoting the reply (review finding F1)."""
+    monkeypatch.setattr("cce.llm.retry.asyncio.sleep", AsyncMock())
+    sentinel = "SENTINEL-CONFIDENTIAL client statement"
+    bad = json.dumps({"content": {"text": sentinel}})
+    llm = _llm(bad, bad)
+    pipeline = Pipeline(
+        config=make_engine_config(),
+        crawl_adapter=_make_adapter(),
+        evidence_store=sqlite_store,
+        llm=llm,
+    )
+
+    with caplog.at_level("DEBUG"):
+        result = await pipeline.run(make_curation_request(), make_source_policy())
+
+    assert result.job.status == JobStatus.FAILED
+    assert isinstance(result.error, UnparseableResponseError)
+    assert sentinel not in result.job.model_dump_json()
+    assert sentinel not in caplog.text

@@ -118,7 +118,11 @@ def _editor_response(content: str, _notes: str = "") -> str:
 
 def _llm(*scripted: str) -> MockLLMProvider:
     return MockLLMProvider(
-        [LLMResponse(content=s, model="mock", stop_reason="end_turn") for s in scripted]
+        [
+            LLMResponse(content=s, model="mock", stop_reason="end_turn")
+            for s in scripted
+        ],
+        cite_placeholders=True,
     )
 
 

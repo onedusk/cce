@@ -19,7 +19,7 @@ from tests.conftest import (
 pytestmark = pytest.mark.integration
 
 
-def _writer_response(citations: str = "ev_test_001") -> str:
+def _writer_response(citations: str = "ev_001") -> str:
     """Build a valid writer JSON response."""
     import json
 
@@ -86,7 +86,9 @@ def _mock_llm_with_usage(
         )
 
     # Writer call first, then verifier call
-    return MockLLMProvider(responses=[make_response, make_verify_response])
+    return MockLLMProvider(
+        responses=[make_response, make_verify_response], cite_placeholders=True
+    )
 
 
 @pytest.fixture
@@ -226,7 +228,8 @@ class TestJobScopedLogging:
                     usage={},
                     stop_reason="end_turn",
                 ),
-            ]
+            ],
+            cite_placeholders=True,
         )
 
         build = pipeline_deps

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
+import re
 import uuid
 from collections.abc import AsyncGenerator, Callable
 from datetime import UTC, datetime
@@ -61,8 +63,37 @@ def pytest_collection_modifyitems(config, items):  # type: ignore[no-untyped-def
 # ---------------------------------------------------------------------------
 
 
+# Discovery assigns random ``ev_<12 hex>`` IDs (discoverer.py), so a scripted
+# reply can't know them in advance. Placeholders ev_001, ev_002, ... in a
+# reply stand for the 1st, 2nd, ... such ID in the prompt, so pipeline drafts
+# cite the evidence they were shown and pass the gate's marker check (B4).
+# Opt-in (``MockLLMProvider(cite_placeholders=True)``) for pipeline-level
+# tests only: ``make_evidence()`` default IDs also have the 12-hex form, so an
+# always-on rewrite could turn a deliberately unknown ev_001 in a unit test
+# into a valid citation.
+_DISCOVERED_ID_RE = re.compile(r"\bev_[0-9a-f]{12}\b")
+_PLACEHOLDER_ID_RE = re.compile(r"\bev_(\d{3})\b")
+
+
+def cite_prompt_evidence(reply: str, messages: list[LLMMessage]) -> str:
+    """Rewrite placeholder IDs in ``reply`` to the discovered IDs in the prompt."""
+    prompt = "\n".join(m.content for m in messages)
+    discovered = list(dict.fromkeys(_DISCOVERED_ID_RE.findall(prompt)))
+    if not discovered:
+        return reply
+
+    def _sub(match: re.Match[str]) -> str:
+        n = int(match.group(1))
+        return discovered[n - 1] if 1 <= n <= len(discovered) else match.group(0)
+
+    return _PLACEHOLDER_ID_RE.sub(_sub, reply)
+
+
 class MockLLMProvider:
     """Protocol-compliant LLM mock with scripted responses and call recording.
+
+    With ``cite_placeholders=True``, placeholder evidence IDs in scripted
+    replies are resolved against the prompt (see ``cite_prompt_evidence``).
 
     Satisfies: cce.llm.base.LLMProvider
     """
@@ -70,10 +101,13 @@ class MockLLMProvider:
     def __init__(
         self,
         responses: list[LLMResponse | Callable[[], LLMResponse]] | None = None,
+        *,
+        cite_placeholders: bool = False,
     ) -> None:
         self._responses: list[LLMResponse | Callable[[], LLMResponse]] = list(
             responses or []
         )
+        self._cite_placeholders = cite_placeholders
         self.calls: list[dict[str, Any]] = []
 
     async def complete(
@@ -83,6 +117,7 @@ class MockLLMProvider:
         temperature: float | None = None,
         max_tokens: int | None = None,
         system: str | None = None,
+        output_schema: dict | None = None,
     ) -> LLMResponse:
         self.calls.append(
             {
@@ -90,12 +125,18 @@ class MockLLMProvider:
                 "temperature": temperature,
                 "max_tokens": max_tokens,
                 "system": system,
+                "output_schema": output_schema,
             }
         )
         if not self._responses:
             raise RuntimeError("MockLLMProvider: no more scripted responses")
         resp = self._responses.pop(0)
-        return resp() if callable(resp) else resp
+        resp = resp() if callable(resp) else resp
+        if not self._cite_placeholders:
+            return resp
+        return dataclasses.replace(
+            resp, content=cite_prompt_evidence(resp.content, messages)
+        )
 
 
 # ---------------------------------------------------------------------------

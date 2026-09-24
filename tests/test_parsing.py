@@ -2,7 +2,8 @@
 
 import pytest
 
-from cce.parsing import _repair_json, extract_json
+from cce.parsing import EV_MARKER_RE, _repair_json, extract_json, resolve_evidence_id
+from tests.conftest import make_evidence
 
 pytestmark = pytest.mark.unit
 
@@ -109,3 +110,51 @@ def test_extract_json_triggers_repair():
 def test_extract_json_crlf_normalization():
     text = '{\r\n"key": "val"\r\n}'
     assert extract_json(text) == {"key": "val"}
+
+
+# ---------------------------------------------------------------------------
+# Citation-marker grammar (B4 — shared by the gate and MDX emit)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_ev_marker_re_matches_both_writer_formats():
+    content = "a [ev:ev_1] b [ev_2] c [not_a_marker] d [ev:3]"
+    ids = [m.group(1) or m.group(2) for m in EV_MARKER_RE.finditer(content)]
+    assert ids == ["ev_1", "ev_2", "3"]
+
+
+@pytest.mark.unit
+def test_resolve_evidence_id_literal_then_prefixed():
+    ev = make_evidence(id="ev_abc")
+    by_id = {"ev_abc": ev}
+
+    assert resolve_evidence_id("ev_abc", by_id) == ("ev_abc", ev)
+    assert resolve_evidence_id("abc", by_id) == ("ev_abc", ev)
+    assert resolve_evidence_id("missing", by_id) == ("missing", None)
+
+
+@pytest.mark.unit
+def test_extract_json_accepts_raw_newline_inside_string():
+    """Root cause of the Sonnet 5 writer parse failures (3 of 6 replies,
+    2026-09-23): a raw newline inside a long string value instead of the \\n
+    escape. Strict parsing rejected it as an invalid control character."""
+    raw = '{\n  "content": "Para one [ev_1].\n\nPara two [ev_2].",\n  "gaps": []\n}'
+    # The newlines inside the "content" value are real control characters.
+    assert "[ev_1].\n\nPara two" in raw
+
+    parsed = extract_json(raw)
+
+    assert parsed is not None
+    assert parsed["content"] == "Para one [ev_1].\n\nPara two [ev_2]."
+
+
+@pytest.mark.unit
+def test_extract_json_failure_log_holds_no_reply_text(caplog):
+    """Replies can hold confidential content: the failure warning logs the
+    length only."""
+    with caplog.at_level("WARNING"):
+        assert extract_json("SENTINEL-CONFIDENTIAL not json at all") is None
+
+    assert "extract_json failed" in caplog.text
+    assert "SENTINEL-CONFIDENTIAL" not in caplog.text
