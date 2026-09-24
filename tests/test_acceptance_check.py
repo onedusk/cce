@@ -218,6 +218,8 @@ def _wrap_mdx(body: str) -> str:
 @pytest.mark.integration
 def test_dimensions_placement_on_client_exemplar(tmp_path: Path) -> None:
     """On the client's corrected loneliness trio: dimensions in EXPLORE, not LEARN."""
+    if not (_PAGES / "loneliness-learn.md").exists():
+        pytest.skip("pages-converted references not present")
     topic = tmp_path / "loneliness"
     for role in ("learn", "explore"):
         d = topic / role
