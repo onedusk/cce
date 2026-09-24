@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from cce.config.markers import ContrastiveSubtype, HumanizationMarkers
 from cce.config.types import ImpliedClaimsConfig
 from cce.evidence.store import EvidenceStore
-from cce.llm.base import LLMMessage, LLMProvider
+from cce.llm.base import LLMMessage, LLMProvider, ensure_complete
 from cce.llm.retry import with_llm_retry
 from cce.models.evidence import Evidence
 from cce.parsing import extract_json
@@ -172,6 +172,7 @@ class ImpliedClaimChecker:
                 system=_DISMISSED_TOPIC_PROMPT,
                 temperature=0.0,
             )
+            ensure_complete(response, role="implied-claim checker")
             parsed = extract_json(response.content) or {}
             return str(parsed.get("dismissed_topic", "")).strip()
 

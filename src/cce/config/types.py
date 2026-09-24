@@ -28,9 +28,95 @@ class LLMConfig(BaseModel):
         default=0.2,
         ge=0.0,
         le=2.0,
-        description="Lower = more deterministic. Writer and verifier may override.",
+        description=(
+            "Lower = more deterministic. Writer and verifier may override. "
+            "Not sent to models that reject sampling params (Opus 4.7+, "
+            "Sonnet 5) — B1."
+        ),
     )
-    max_tokens: int = Field(default=4096, description="Max tokens per LLM call")
+    max_tokens: int = Field(
+        default=21000,
+        ge=1,
+        description=(
+            "Max tokens per LLM call, thinking included. 21000 (was 8192, "
+            "was 4096): the writer's long learn/explore essays wrapped in "
+            "JSON exceed 4096, and on current models thinking counts against "
+            "this cap — a Sonnet 5 editor call used 15.8k of 16.4k in the "
+            "2026-09-23 smoke run (B2). 21000 sits just under the SDK's "
+            "non-streaming ceiling (~21,333); going higher needs streaming. "
+            "A reply that hits the cap raises IncompleteResponseError."
+        ),
+    )
+    thinking: Literal["adaptive", "disabled"] | None = Field(
+        default=None,
+        description=(
+            "Thinking mode sent as `thinking: {type: ...}` (B2). None = omit "
+            "the param and take the model default (Sonnet 5 / Opus 5 think "
+            "adaptively; 4.6 models do not think). Never sent to models "
+            "without adaptive thinking (Opus 4.5, Haiku 4.5 and older). "
+            "Otherwise passed through as set: the API rejects `disabled` on "
+            "Fable 5 / Opus 5.5, and on Opus 5 at effort xhigh/max."
+        ),
+    )
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = Field(
+        default=None,
+        description=(
+            "Sent as `output_config.effort` (B2). None = omit (model "
+            "default, `high` on most models). Sent only to models with "
+            "adaptive thinking (4.6 and later) — so also omitted on Opus 4.5, "
+            "which does accept effort. `xhigh` needs Opus 4.7+ / Sonnet 5; "
+            "the API rejects it on the 4.6 models. Lowering effort is the "
+            "lever when thinking crowds out the reply."
+        ),
+    )
+
+
+class WriterConfig(BaseModel):
+    """Writer agent call settings."""
+
+    temperature: float = Field(
+        default=0.2,
+        ge=0.0,
+        le=2.0,
+        description=(
+            "Low for factual consistency; do not increase without testing. "
+            "Ignored on models that reject sampling params (B1)."
+        ),
+    )
+
+
+class VerifierConfig(BaseModel):
+    """Verifier agent call settings."""
+
+    model: str | None = Field(
+        default=None,
+        description=(
+            "Optional verifier-specific model so the writer and verifier "
+            "don't share blind spots (B3). None = the verifier uses "
+            "LLMConfig.model. Credentials and the other LLMConfig settings "
+            "are inherited, including thinking/effort, so those must also be "
+            "valid for this model (e.g. effort xhigh fails on a 4.6 verifier)."
+        ),
+    )
+    temperature: float = Field(
+        default=0.1,
+        ge=0.0,
+        le=2.0,
+        description=(
+            "Very low for consistent judgment; do not increase. Ignored on "
+            "models that reject sampling params (B1)."
+        ),
+    )
+    max_tokens: int = Field(
+        default=21000,
+        ge=1,
+        description=(
+            "Per-call output cap for the claim-by-claim report (thinking "
+            "included). Replaces the VERIFIER_MAX_TOKENS=16384 literal, "
+            "raised because thinking now shares the cap on current models "
+            "(B2). Just under the SDK's non-streaming ceiling (~21,333)."
+        ),
+    )
 
 
 class EvidenceStoreConfig(BaseModel):
@@ -258,8 +344,8 @@ class EditorConfig(BaseModel):
     """Editor agent configuration (H3)."""
 
     enabled: bool = Field(
-        default=False,
-        description="Independent kill-switch — lets H1+H2 ship without H3.",
+        default=True,
+        description="Independent kill-switch — set False to ship H1+H2 without H3.",
     )
     model: str | None = Field(
         default=None,
@@ -283,8 +369,8 @@ class ImpliedClaimsConfig(BaseModel):
     """Implied-claim checker configuration (H4)."""
 
     enabled: bool = Field(
-        default=False,
-        description="Independent kill-switch for H4.",
+        default=True,
+        description="Independent kill-switch for H4 (set False to disable).",
     )
     search_strategy: Literal["keyword", "embedding", "llm_extract"] = Field(
         default="llm_extract",
@@ -316,10 +402,11 @@ class HumanizationConfig(BaseModel):
     """Master humanization config attached to EngineConfig."""
 
     enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "Master switch. When False, scoring/editor/implied-claim stages "
-            "skip entirely — pipeline behaves identically to pre-humanization."
+            "Master switch — ON by default (operator preference, 2026-06-24). "
+            "When False, scoring/editor/implied-claim stages skip entirely and "
+            "the pipeline behaves identically to pre-humanization."
         ),
     )
     markers_path: Path = Field(
@@ -335,6 +422,8 @@ class EngineConfig(BaseModel):
     """Top-level engine configuration. Constructed by config/loader.py."""
 
     llm: LLMConfig
+    writer: WriterConfig = Field(default_factory=WriterConfig)
+    verifier: VerifierConfig = Field(default_factory=VerifierConfig)
     evidence_store: EvidenceStoreConfig = Field(default_factory=EvidenceStoreConfig)
     crawl: CrawlConfig = Field(default_factory=CrawlConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)

@@ -5,6 +5,229 @@ All notable changes to the Content Curation Engine (CCE).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — bubble-readiness Phase 1 (current models, citation integrity)
+
+Phase 1 of `docs/internal/bubble-readiness-plan-2026-09-23.md` (local-only):
+what a consumer calling the Writer, Verifier and QualityGate directly needs on
+current Claude models. One commit per item (B1–B4) on
+`feature/bubble-readiness`, plus follow-up commits from the live Sonnet 5 runs
+and two adversarial review passes (tagged with the item they amend).
+
+### Fixed — sampling params on current models (B1)
+- **`AnthropicProvider`** no longer sends `temperature` to models that reject
+  sampling parameters with a 400 (Opus 4.7/4.8/5, Sonnet 5, Fable 5). The rule
+  lists the finite legacy set that still accepts them (4.6 family, Haiku 4.5,
+  older) so a new model release needs no code change. No change on
+  `claude-sonnet-4-6` (the default). Open decision 1 resolved as the
+  capability rule rather than an end-to-end optional `temperature`: callers
+  stay unchanged and model knowledge stays in the one component that knows
+  the model ID.
+- The Writer's 0.2 and Verifier's 0.1 literals are now config defaults:
+  `WriterConfig.temperature` / `VerifierConfig.temperature`
+  (`EngineConfig.writer` / `EngineConfig.verifier`, YAML `writer:` /
+  `verifier:`), also accepted by `Writer(llm, config)` / `Verifier(llm, config)`
+  for direct callers.
+
+### Fixed — silent truncation (B2)
+- **`stop_reason` is now checked.** The Writer, Verifier, Editor and
+  implied-claim checker raise `IncompleteResponseError` (`llm/base.py`) on
+  `stop_reason == "max_tokens"` (and `"refusal"`) instead of parsing the
+  reply. Before, a truncated writer reply became uncited raw markdown and a
+  truncated verifier reply became a zero-score verdict that routed straight to
+  REVIEW with no rewrite. The error is deliberately not a `ValueError`, so
+  `with_llm_retry` does not resend with the same budget; the pipeline records
+  a FAILED job whose `error.message` names the role, model and output tokens.
+- **`VerifierConfig.max_tokens`** (default 21000, `CCE_VERIFIER_MAX_TOKENS`)
+  replaces the `VERIFIER_MAX_TOKENS=16384` literal.
+- **`LLMConfig.max_tokens` default 8192 → 21000.** On current models thinking
+  counts against the cap: in the 2026-09-23 Sonnet 5 smoke run an editor call
+  used 15,769 of 16,384 output tokens. 21000 is just under the SDK's
+  non-streaming ceiling (~21,333), so it gives headroom but no guarantee;
+  lowering `CCE_LLM_EFFORT` is the lever when thinking still crowds out a
+  reply, and going higher needs the provider to stream. The
+  `IncompleteResponseError` message says so.
+- **`LLMConfig.thinking` / `LLMConfig.effort`** (`CCE_LLM_THINKING`,
+  `CCE_LLM_EFFORT`): explicit `thinking: {type: adaptive|disabled}` and
+  `output_config.effort`, sent only to models with adaptive thinking (4.6
+  and later; never Opus 4.5, Haiku 4.5 or older — effort is omitted on Opus
+  4.5 even though it accepts it). Unset (default) omits both, so the 4.6
+  models keep today's no-thinking behaviour. Explicit values are otherwise
+  passed through, so an unsupported combination fails loudly with a 400
+  (e.g. `disabled` on Fable 5 / Opus 5.5, or on Opus 5 at effort xhigh/max). With `thinking: adaptive` the
+  provider also drops `temperature` on the 4.6 models, which reject any value
+  but 1 while thinking is on (found in the live check).
+- Live-checked 2026-09-23: `claude-sonnet-5`, `claude-opus-5`,
+  `claude-sonnet-4-6` and `claude-haiku-4-5`, each with default, adaptive,
+  adaptive+effort, effort-only, disabled and disabled+effort settings, all
+  without a 400.
+
+### Fixed — unparseable writer/verifier replies (B2 follow-up)
+- **Root cause, from captured Sonnet 5 writer replies:** 3 of 6 complete
+  (`end_turn`) replies failed `extract_json` because the model wrote a raw
+  newline inside the long `content` string instead of the `\n` escape, which
+  strict JSON parsing rejects. The writer then fell back to raw markdown with
+  no citations (the 2026-09-23 smoke run shipped a 0-citation unit that way).
+- **Structured outputs:** the Writer and Verifier now pass generic JSON
+  schemas (`WRITER_OUTPUT_SCHEMA`, `VERIFIER_OUTPUT_SCHEMA`: evidence IDs are
+  plain strings; the only enum is the verifier's fixed assessment
+  vocabulary), and `AnthropicProvider` sends them as `output_config.format`
+  on every model with structured outputs (all current models, including the
+  default `claude-sonnet-4-6`; only retired Claude 3 / Opus-Sonnet 4.0 IDs
+  are excluded), merged with `effort`. **Protocol change:**
+  `LLMProvider.complete` gains an optional `output_schema` argument that
+  injected providers must accept (they may ignore it).
+- **No silent fallback:** an unreadable Writer or Verifier reply raises
+  `UnparseableResponseError` (`llm/base.py`) instead of becoming raw
+  markdown or a zero-score verdict. Both callers resend once
+  (`with_llm_retry(max_attempts=2)`), then the job fails like B2. The reply
+  text is on `.raw_response` for the caller to persist — direct
+  Writer/Verifier callers catch the error, and `Pipeline.run` returns it in
+  memory on the new `PipelineResult.error` (never copied onto the persisted
+  `Job`; the engine/CLI/API don't surface it yet). cce never writes or logs
+  it; the message, which the job record stores, holds only the role, model,
+  stop reason and length.
+- **Shape checks** (adversarial review): a reply that parses but can't be
+  used is unparseable too — a writer reply whose `content` is missing or not
+  a string, or whose list fields are wrongly typed (checked before any model
+  is built, so no pydantic `ValidationError` quotes the reply into logs or
+  the job record), and a verifier report without a `claims` list or integer
+  `summary` counts (missing counts used to default to 0: the silent
+  zero-score verdict). An empty `content` string stays a legitimate "no
+  draft" outcome.
+- **Fallback parser:** `extract_json` parses with `strict=False`, so the
+  raw-newline replies parse on models or injected providers without
+  structured outputs, and its failure warning logs the length only, no reply
+  text.
+
+### Added — separate verifier model (B3)
+- **`VerifierConfig.model`** (`CCE_VERIFIER_MODEL`, YAML `verifier.model`):
+  an optional verifier-specific model so the writer's and verifier's blind
+  spots aren't correlated. `build_components` builds a second
+  `AnthropicProvider` from `llm` with only the model replaced (credentials
+  and settings, including thinking/effort, inherited — they must also suit
+  the verifier's model) and exposes it as `ComponentSet.verifier_llm`;
+  `build_pipeline` passes it to the new `Pipeline(verifier_llm=...)`
+  argument. The Writer, Editor and implied-claim checker stay on the main
+  provider. Unset (default), the verifier shares the main provider, so
+  behaviour is unchanged.
+
+### Fixed — phantom citation markers (B4)
+- **The gate now checks every inline marker resolves** before scoring
+  (`QualityGate._unresolved_markers`). The citation-density regex counted any
+  `[ev:...]` marker, so a draft could meet its threshold citing IDs that don't
+  exist. An unresolved marker blocks PASS and counts as fixable: FAIL (rewrite)
+  while iterations remain, REVIEW at the last one, with the unresolved IDs
+  listed in the feedback either way.
+- The marker grammar and `ev_` prefix fallback moved from
+  `output/mdx/citations.py` into `cce/parsing.py` (`EV_MARKER_RE`,
+  `resolve_evidence_id`) and are shared by the gate and emit, so every marker
+  the gate accepts is one emit resolves. Emit output is unchanged.
+- **`QualityGate.evaluate(..., evidence)` is now required** — an omitted set
+  would silently skip the check. The pipeline already passed it.
+- Stricter, as intended: drafts that passed only because of phantom markers
+  now fail. That included the pipeline test fixtures, whose scripted drafts
+  cited `ev_001` while discovery assigns random `ev_<uuid>` IDs.
+  `MockLLMProvider` now resolves placeholder IDs (`ev_001`, `ev_002`, ...) to
+  the discovered IDs in the prompt (`tests/conftest.py:cite_prompt_evidence`,
+  opt-in via `MockLLMProvider(cite_placeholders=True)` for pipeline-level
+  tests only), and the trio citation test resolves against the package
+  evidence instead of a hand-built lookup.
+- **Editor drift check sees bare markers** (adversarial review). The Editor's
+  citation-preservation check matched only `[ev:ID]`, so an editor-added bare
+  `[ev_ID]` (e.g. from an implied-claims hint citing store-wide evidence)
+  passed as "preserved", then failed the stricter gate on every rewrite with
+  an ID the writer had never seen. `_extract_citation_ids` now compares the
+  full text of every marker in the shared grammar: added or dropped bare
+  markers are drift (writer's draft kept), and a `[ev:ID]` → `[ev_ID]`
+  rewrite still is.
+- **Multi-ID brackets** (`[ev_a, ev_b]`) still block PASS — emit renders them
+  as `[^?]` — but get their own feedback line ("use one marker per source")
+  instead of listing valid IDs as unresolved.
+
+## [Unreleased] — content-revision (client editorial feedback)
+
+Engine remediation of the thnkLabs client editorial feedback
+(`docs/internal/thnklabs-content-revision-plan-2026-06-18.md`, local-only),
+decomposed under `docs/decompose/content-revision/` (local-only) and
+implemented as milestone commits **M01–M04** on `feature/content-revision`. **M05**
+(corpus regeneration + `emit-mdx` to the thnkLabs site) is an operational/e2e
+step and is intentionally not part of these commits — it needs live API keys
+and the corrected local `thnklabs.yaml`. Suite: 797 → **835 passed**;
+coverage 94.8%.
+
+### Changed — editorial structure (M01)
+- **`path_configs/thnklabs.yaml`** (operator config, gitignored `*thnk*` — the
+  change ships to the operator environment, not to main): LEARN
+  `section_requirements`/`prompt_addendum` no longer carry the eight-dimensions
+  framing or the `overview`/`closing_frame` scaffolding sections; EXPLORE is now
+  the home of the eight-dimensions framing + curated resources; APPLY assumes
+  Learn+Explore already read. (Client: each path should have a distinct mandate.)
+- **`WRITER_SYSTEM_PROMPT`** (`synthesis/writer.py`) gains a `STRUCTURE GUIDANCE`
+  block banning meta-introductions ("In this essay…") and labelled scaffolding
+  headings ("Overview", "Closing Frame", "Conclusion", …). PDR-001, ADR-004.
+
+### Fixed — citation de-duplication (M02)
+- **`build_citation_index`** (`output/mdx/citations.py`) now keys footnote
+  de-dup on the canonical source URL instead of `evidence_id`: a source cited
+  via multiple evidence excerpts gets **one** footnote number per article
+  (client finding: the same resource was listed under several numbers).
+  Emit-time only — `ContentUnit.citations`/`evidence_map` keep full per-evidence
+  granularity, so the "no citation, no ship" invariant is untouched. New
+  `_canonical_url` strips the fragment + trailing slash (query strings
+  preserved). ADR-001/002, PDR-003.
+
+### Changed — cross-article de-duplication (M03)
+- The three paths now generate **sequentially** (learn → explore → apply)
+  instead of concurrently; each later path receives a digest of its siblings'
+  claims and is instructed not to re-explain them. De-dup is **prose-level
+  only** — a later path may and should re-cite shared sources. Replaces the
+  `asyncio.TaskGroup` fan-out with a serial loop; adds
+  `Writer.write(sibling_context=…)` and `_build_sibling_digest`. ADR-003/006,
+  PDR-002.
+- **Token budget now accumulates across paths** (ADR-003 "all paths"
+  semantics): under sequential execution a later path's checkpoint sees earlier
+  paths' spend. New regression test
+  `test_budget_accumulates_across_paths_sequentially`.
+- Gate attribution unchanged (already keyed by `gate_results_by_path`,
+  T-07.05); the now-vestigial `BaseExceptionGroup` unwrap in `run()` removed;
+  `test_pipeline_parallel_paths.py` → `test_pipeline_sequential_paths.py`
+  (stale-name standard).
+
+### Added — acceptance harness (M04)
+- **`scripts/research/run_acceptance_check.py`** — deterministic structural
+  checks (no scaffolding headings; dimensions-in-EXPLORE; one citation per URL)
+  plus a semantic repetition check: an LLM-judge (authoritative, temp 0) and an
+  embedding near-duplicate signal (reuses `EmbeddingProvider` +
+  `_cosine_similarity`; sim_threshold 0.85). A lexical shingle overlap is a
+  verbatim-copy tripwire only — lexical-overlap-as-gate was **empirically
+  rejected** (ADR-007): the client's corrected trio scores *higher* shingle
+  overlap than the bad engine output (shorter text + reworded repetition).
+- **Resources-section grounding:** the thnkLabs emitter rebuilds the explore
+  "Curated Resources" section deterministically from the article's citations
+  (`_rebuild_resources_section`), and the gate gains a `resources_ungrounded`
+  check — the LLM-written section was an unreliable leakage vector (3/7 topics
+  recommended uncited sources). Judge demoted to **advisory** (it fails the
+  client's own gold standard); the gate is deterministic only.
+
+### Changed — humanization ON by default (operator preference, 2026-06-24)
+- **`HumanizationConfig.enabled`, `EditorConfig.enabled`, `ImpliedClaimsConfig.enabled`
+  now default `True`** (`config/types.py`) — the scorer + editor + implied-claim
+  checker run for every consumer (CLI, batch, **and the API**) unless explicitly
+  disabled. Motivation: regenerated drafts carried ~13 em dashes/1000 (target
+  4.0) and stray contrastive frames; the editor cuts em-dash density and
+  collapses parasitic "X is not A. It is B" frames while preserving `[ev:ID]`.
+- Consequence: `ConfigRegistry.load` now loads `config/humanization_markers.yaml`
+  on every default load (fail-fast `ConfigError` if absent). Tests that don't
+  exercise humanization pass `HumanizationConfig(enabled=False)`.
+
+### Not in scope (this branch)
+- **M05** — corpus regeneration + `emit-mdx --target` to the thnkLabs site:
+  operational/e2e, run separately in an environment with the corrected local
+  `thnklabs.yaml` present (else it regenerates the old structure).
+- Unified cross-article bibliography (per-article chosen, ADR-002); ingesting
+  the hand-edited `.pages` (references only, ADR-005); the LLM-judge live
+  calibration (deferred to the M05 environment).
+
 ## [0.3.0] — 2026-06-10
 
 Full remediation sprint from the 2026-06-09 codebase audit

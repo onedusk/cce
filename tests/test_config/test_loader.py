@@ -17,6 +17,10 @@ _ENV_VARS = [
     "CCE_LLM_API_KEY",
     "CCE_LLM_TEMPERATURE",
     "CCE_LLM_MAX_TOKENS",
+    "CCE_LLM_THINKING",
+    "CCE_LLM_EFFORT",
+    "CCE_VERIFIER_MAX_TOKENS",
+    "CCE_VERIFIER_MODEL",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_MODEL",
     "CCE_EVIDENCE_BACKEND",
@@ -85,6 +89,76 @@ def test_load_config_from_yaml(monkeypatch, tmp_path):
 
     assert config.llm.model == "claude-opus-4-6"
     assert config.llm.api_key == "yaml-key"
+
+
+def test_load_writer_verifier_temperature_from_yaml(monkeypatch, tmp_path):
+    """B1: writer/verifier temperatures are config defaults, YAML-overridable."""
+    _clear_env(monkeypatch)
+    assert load_config().writer.temperature == 0.2
+    assert load_config().verifier.temperature == 0.1
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        yaml.dump({"writer": {"temperature": 0.3}, "verifier": {"temperature": 0.05}})
+    )
+    config = load_config(config_file)
+
+    assert config.writer.temperature == 0.3
+    assert config.verifier.temperature == 0.05
+
+
+def test_load_thinking_effort_and_verifier_budget(monkeypatch, tmp_path):
+    """B2: thinking/effort default to None (param omitted); max_tokens
+    defaults high enough for thinking; all three load from YAML and env."""
+    _clear_env(monkeypatch)
+    defaults = load_config()
+    assert defaults.llm.thinking is None
+    assert defaults.llm.effort is None
+    assert defaults.llm.max_tokens == 21000
+    assert defaults.verifier.max_tokens == 21000
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        yaml.dump(
+            {
+                "llm": {"thinking": "adaptive", "effort": "medium"},
+                "verifier": {"max_tokens": 12000},
+            }
+        )
+    )
+    from_yaml = load_config(config_file)
+    assert from_yaml.llm.thinking == "adaptive"
+    assert from_yaml.llm.effort == "medium"
+    assert from_yaml.verifier.max_tokens == 12000
+
+    monkeypatch.setenv("CCE_LLM_THINKING", "disabled")
+    monkeypatch.setenv("CCE_LLM_EFFORT", "low")
+    monkeypatch.setenv("CCE_VERIFIER_MAX_TOKENS", "20000")
+    from_env = load_config(config_file)
+    assert from_env.llm.thinking == "disabled"
+    assert from_env.llm.effort == "low"
+    assert from_env.verifier.max_tokens == 20000
+
+
+def test_load_verifier_model(monkeypatch, tmp_path):
+    """B3: verifier.model defaults to None (share llm.model); YAML and
+    CCE_VERIFIER_MODEL set it, env winning."""
+    _clear_env(monkeypatch)
+    assert load_config().verifier.model is None
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump({"verifier": {"model": "claude-opus-5"}}))
+    assert load_config(config_file).verifier.model == "claude-opus-5"
+
+    monkeypatch.setenv("CCE_VERIFIER_MODEL", "claude-opus-4-8")
+    assert load_config(config_file).verifier.model == "claude-opus-4-8"
+
+
+def test_invalid_thinking_mode_rejected(monkeypatch):
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("CCE_LLM_THINKING", "enabled")
+    with pytest.raises(ValueError):
+        load_config()
 
 
 def test_load_config_env_overrides_yaml(monkeypatch, tmp_path):

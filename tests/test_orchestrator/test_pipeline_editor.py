@@ -118,7 +118,11 @@ def _editor_response(content: str, _notes: str = "") -> str:
 
 def _llm(*scripted: str) -> MockLLMProvider:
     return MockLLMProvider(
-        [LLMResponse(content=s, model="mock", stop_reason="end_turn") for s in scripted]
+        [
+            LLMResponse(content=s, model="mock", stop_reason="end_turn")
+            for s in scripted
+        ],
+        cite_placeholders=True,
     )
 
 
@@ -313,11 +317,14 @@ async def test_editor_disabled_at_factory_level(monkeypatch, tmp_path):
     cfg_master_only = EngineConfig(
         llm=LLMConfig(api_key="test"),
         crawl=crawl,
-        humanization=HumanizationConfig(enabled=True),
+        # editor explicitly off (the default is now True) to test the double-gate
+        humanization=HumanizationConfig(
+            enabled=True, editor=EditorConfig(enabled=False)
+        ),
     )
     pipe_master_only = _build_pipeline(cfg_master_only, store)
     assert pipe_master_only._scorer is not None
-    assert pipe_master_only._editor is None  # editor.enabled defaults False
+    assert pipe_master_only._editor is None  # editor explicitly disabled
 
     cfg_both = EngineConfig(
         llm=LLMConfig(api_key="test"),

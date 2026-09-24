@@ -14,8 +14,15 @@ from __future__ import annotations
 import logging
 import uuid
 
+from cce.config.types import WriterConfig
 from cce.evidence.formatting import format_evidence_for_prompt
-from cce.llm.base import LLMMessage, LLMProvider, LLMResponse
+from cce.llm.base import (
+    LLMMessage,
+    LLMProvider,
+    LLMResponse,
+    UnparseableResponseError,
+    ensure_complete,
+)
 from cce.llm.retry import with_llm_retry
 from cce.models.content import (
     Citation,
@@ -50,6 +57,13 @@ STYLE GUIDANCE (light -- the editor handles details):
 - Make declarative claims where the evidence is strong. Reserve hedging \
 ("may", "suggests", "could") for genuinely uncertain claims.
 
+STRUCTURE GUIDANCE (applies to every path):
+- Do NOT open with meta-introductions ("In this essay...", "This guide will...", \
+"Here we explore...").
+- Do NOT emit labelled scaffolding headings such as "Overview", "Introduction", \
+"Closing Frame", "Conclusion", or "Summary". Open on substance; end on substance.
+- Headings name the actual subject of their section, not its role in the document.
+
 OUTPUT FORMAT:
 Return a JSON object with exactly these fields:
 {
@@ -66,12 +80,39 @@ Write in clear, accessible prose appropriate for the target audience. \
 Structure the content with markdown headings and paragraphs.\
 """
 
+# JSON schema of the OUTPUT FORMAT above, sent as structured outputs so the
+# reply is always valid JSON. Generic by design: evidence IDs are plain
+# strings, never an enum (the gate checks they resolve — B4).
+WRITER_OUTPUT_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "content": {"type": "string"},
+        "citations_used": {"type": "array", "items": {"type": "string"}},
+        "evidence_map": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "claim": {"type": "string"},
+                    "evidence_ids": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["claim", "evidence_ids"],
+                "additionalProperties": False,
+            },
+        },
+        "gaps": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["content", "citations_used", "evidence_map", "gaps"],
+    "additionalProperties": False,
+}
+
 
 class Writer:
     """Evidence-constrained content writer."""
 
-    def __init__(self, llm: LLMProvider) -> None:
+    def __init__(self, llm: LLMProvider, config: WriterConfig | None = None) -> None:
         self._llm = llm
+        self._config = config or WriterConfig()
 
     async def write(
         self,
@@ -84,6 +125,7 @@ class Writer:
         lineage: ContentLineage | None = None,
         evidence_block: str | None = None,
         ev_lookup: dict[str, Evidence] | None = None,
+        sibling_context: str | None = None,
     ) -> WriterOutput:
         """Produce a draft for one output path from the given evidence.
 
@@ -101,6 +143,13 @@ class Writer:
                 ``format_evidence_for_prompt`` call — the caller has already
                 paid that cost once for the whole run. None -> fall back to
                 computing it here (backward-compat for direct callers).
+            sibling_context: Optional digest of points already covered by
+                sibling paths written earlier in the same topic run (M03,
+                ADR-003). When set, the writer is told to build on rather than
+                re-explain those points; de-duplication is PROSE-level, not
+                citation-level — later paths may and should cite shared
+                sources. None -> omit the block entirely (first path / direct
+                callers).
         """
         if not evidence:
             logger.warning("Writer called with no evidence for path '%s'", path)
@@ -141,6 +190,18 @@ You have {len(evidence)} evidence excerpts to work with.
 === EVIDENCE END ===
 """
 
+        if sibling_context:
+            user_prompt += f"""
+=== ALREADY COVERED BY SIBLING ARTICLES (do not re-explain) ===
+The reader will have read these companion articles. Do NOT re-explain or reword \
+the points below — add new framing, dimensions, or actions instead. You MAY and \
+SHOULD cite the same sources where they support your new points; the constraint is \
+on repeated PROSE, not on citations. Citing a shared source for a genuinely new \
+point is correct.
+{sibling_context}
+=== END SIBLING CONTEXT ===
+"""
+
         if feedback:
             user_prompt += f"""
 === VERIFIER FEEDBACK (from previous iteration) ===
@@ -168,15 +229,18 @@ exists, and mark remaining gaps as [INSUFFICIENT EVIDENCE].
             response = await self._llm.complete(
                 messages,
                 system=system_prompt,
-                temperature=0.2,  # low temp for factual consistency; do not increase without testing
+                temperature=self._config.temperature,
+                output_schema=WRITER_OUTPUT_SCHEMA,
             )
+            ensure_complete(response, role="writer")
             output = self._parse_response(
                 response, evidence, path, lineage, ev_lookup=ev_lookup
             )
             output.token_usage = response.usage
             return output
 
-        return await with_llm_retry(_attempt)
+        # One resend on an unparseable reply, then the error propagates.
+        return await with_llm_retry(_attempt, max_attempts=2)
 
     @staticmethod
     def _build_path_addendum(path_config: PathConfig) -> str:
@@ -193,7 +257,10 @@ exists, and mark remaining gaps as [INSUFFICIENT EVIDENCE].
                 f"Required sections: {', '.join(path_config.section_requirements)}"
             )
         if path_config.max_words:
-            parts.append(f"Target length: ~{path_config.max_words} words")
+            parts.append(
+                f"Length ceiling: up to ~{path_config.max_words} words — match length to what "
+                f"the evidence supports; brevity is fine, do not pad to reach this number"
+            )
         if path_config.max_paragraphs:
             parts.append(
                 f"Structure: ~{path_config.max_paragraphs} substantive paragraphs"
@@ -213,35 +280,19 @@ exists, and mark remaining gaps as [INSUFFICIENT EVIDENCE].
         *,
         ev_lookup: dict[str, Evidence] | None = None,
     ) -> WriterOutput:
-        """Parse the LLM response into a ContentUnit."""
+        """Parse the LLM response into a ContentUnit.
+
+        Raises UnparseableResponseError when the reply is not a JSON object
+        of the expected shape. There is no raw-markdown fallback: it shipped
+        drafts with no citations. The shape is checked before any model is
+        built, so a wrongly typed field can't surface as a ValidationError
+        that quotes the reply into logs and the job record.
+        """
         raw = response.content.strip()
 
-        # Try to extract JSON from the response
         parsed = extract_json(raw)
-
-        if parsed is None:
-            logger.warning(
-                "Writer response was not valid JSON, treating as raw markdown"
-            )
-            # Fallback: treat the whole response as content with no structured metadata
-            return WriterOutput(
-                unit=ContentUnit(
-                    id=f"cu_{uuid.uuid4().hex[:12]}",
-                    path=path,
-                    content=raw,
-                    citations=[],
-                    evidence_map=[],
-                    scores=ContentScores(
-                        confidence=0.0, coverage=0.0, source_diversity=0.0
-                    ),
-                    lineage=lineage
-                    or ContentLineage(policy_id="", run_id="", engine_version=""),
-                ),
-                gaps=[
-                    "Writer response was not structured JSON -- verification required"
-                ],
-                raw_response=raw,
-            )
+        if not isinstance(parsed, dict) or not _writer_reply_shape_ok(parsed):
+            raise UnparseableResponseError("writer", response)
 
         # Evidence ID lookup for URL resolution — use the caller's version
         # when provided (audit P8), else build locally. The caller's dict is
@@ -310,6 +361,31 @@ exists, and mark remaining gaps as [INSUFFICIENT EVIDENCE].
         )
 
         return WriterOutput(unit=unit, gaps=gaps, raw_response=raw)
+
+
+def _is_str_list(value: object) -> bool:
+    return isinstance(value, list) and all(isinstance(v, str) for v in value)
+
+
+def _writer_reply_shape_ok(parsed: dict) -> bool:
+    """True when the fields _parse_response reads have the right types.
+
+    ``content`` must be a string (an empty one is a legitimate "no draft");
+    the list fields may be absent, as before, but not wrongly typed.
+    """
+    evidence_map = parsed.get("evidence_map", [])
+    return (
+        isinstance(parsed.get("content"), str)
+        and _is_str_list(parsed.get("citations_used", []))
+        and _is_str_list(parsed.get("gaps", []))
+        and isinstance(evidence_map, list)
+        and all(
+            isinstance(item, dict)
+            and isinstance(item.get("claim", ""), str)
+            and _is_str_list(item.get("evidence_ids", []))
+            for item in evidence_map
+        )
+    )
 
 
 class WriterOutput:

@@ -91,7 +91,10 @@ async def test_full_load_round_trips_fixture_tree(
 
 async def test_missing_optional_dirs_tolerated(tmp_path: Path):
     """Bare root → empty dicts / None, matching the lifespan tolerance."""
-    engine = EngineConfig(llm=LLMConfig(api_key=""))
+    engine = EngineConfig(
+        llm=LLMConfig(api_key=""),
+        humanization=HumanizationConfig(enabled=False),
+    )
 
     registry = ConfigRegistry.load(tmp_path, engine=engine)
 
@@ -104,7 +107,10 @@ async def test_missing_optional_dirs_tolerated(tmp_path: Path):
 async def test_path_configs_fall_back_to_default(tmp_path: Path):
     """No thnklabs.yaml → default.yaml is selected."""
     _write_path_configs(tmp_path, "default.yaml", ["blog"])
-    engine = EngineConfig(llm=LLMConfig(api_key=""))
+    engine = EngineConfig(
+        llm=LLMConfig(api_key=""),
+        humanization=HumanizationConfig(enabled=False),
+    )
 
     registry = ConfigRegistry.load(tmp_path, engine=engine)
 
@@ -121,7 +127,10 @@ async def test_explicit_path_configs_path_honored(tmp_path: Path):
     _write_path_configs(tmp_path, "thnklabs.yaml", ["essay"])
     custom = tmp_path / "custom_paths.yaml"
     custom.write_text("- id: digest\n  name: Digest\n  description: digest path\n")
-    engine = EngineConfig(llm=LLMConfig(api_key=""))
+    engine = EngineConfig(
+        llm=LLMConfig(api_key=""),
+        humanization=HumanizationConfig(enabled=False),
+    )
 
     registry = ConfigRegistry.load(
         tmp_path, engine=engine, path_configs_path=Path("custom_paths.yaml")
@@ -133,7 +142,10 @@ async def test_explicit_path_configs_path_honored(tmp_path: Path):
 async def test_explicit_taxonomies_dir_honored(tmp_path: Path):
     """taxonomies_dir overrides the default taxonomies/ location."""
     tax_path = _write_taxonomy(tmp_path, dirname="alt_taxonomies")
-    engine = EngineConfig(llm=LLMConfig(api_key=""))
+    engine = EngineConfig(
+        llm=LLMConfig(api_key=""),
+        humanization=HumanizationConfig(enabled=False),
+    )
 
     registry = ConfigRegistry.load(
         tmp_path, engine=engine, taxonomies_dir=Path("alt_taxonomies")
@@ -147,7 +159,10 @@ async def test_explicit_policies_dir_honored(tmp_path: Path):
     alt = tmp_path / "alt_policies"
     alt.mkdir()
     (alt / "custom.yaml").write_text("id: custom\nname: Custom\n")
-    engine = EngineConfig(llm=LLMConfig(api_key=""))
+    engine = EngineConfig(
+        llm=LLMConfig(api_key=""),
+        humanization=HumanizationConfig(enabled=False),
+    )
 
     registry = ConfigRegistry.load(
         tmp_path, engine=engine, policies_dir=Path("alt_policies")
@@ -173,7 +188,10 @@ async def test_policies_loader_exception_warns_and_continues(
         raise OSError("unreadable directory")
 
     monkeypatch.setattr("cce.config.registry.load_policies", _boom)
-    engine = EngineConfig(llm=LLMConfig(api_key=""))
+    engine = EngineConfig(
+        llm=LLMConfig(api_key=""),
+        humanization=HumanizationConfig(enabled=False),
+    )
 
     registry = ConfigRegistry.load(tmp_path, engine=engine)
 
@@ -203,7 +221,10 @@ async def test_missing_markers_raises_when_humanization_enabled(tmp_path: Path):
 
 async def test_get_policy_keyerror_lists_known_ids(tmp_path: Path):
     _write_policy(tmp_path, "strict")
-    engine = EngineConfig(llm=LLMConfig(api_key=""))
+    engine = EngineConfig(
+        llm=LLMConfig(api_key=""),
+        humanization=HumanizationConfig(enabled=False),
+    )
     registry = ConfigRegistry.load(tmp_path, engine=engine)
 
     assert registry.get_policy("strict").id == "strict"
@@ -213,7 +234,10 @@ async def test_get_policy_keyerror_lists_known_ids(tmp_path: Path):
 
 async def test_get_path_config_keyerror_lists_known_ids(tmp_path: Path):
     _write_path_configs(tmp_path, "default.yaml", ["blog"])
-    engine = EngineConfig(llm=LLMConfig(api_key=""))
+    engine = EngineConfig(
+        llm=LLMConfig(api_key=""),
+        humanization=HumanizationConfig(enabled=False),
+    )
     registry = ConfigRegistry.load(tmp_path, engine=engine)
 
     assert registry.get_path_config("blog").id == "blog"
@@ -222,7 +246,10 @@ async def test_get_path_config_keyerror_lists_known_ids(tmp_path: Path):
 
 
 async def test_accessors_report_none_loaded_on_empty_registry(tmp_path: Path):
-    engine = EngineConfig(llm=LLMConfig(api_key=""))
+    engine = EngineConfig(
+        llm=LLMConfig(api_key=""),
+        humanization=HumanizationConfig(enabled=False),
+    )
     registry = ConfigRegistry.load(tmp_path, engine=engine)
 
     with pytest.raises(KeyError, match=r"\(none loaded\)"):
@@ -241,7 +268,9 @@ async def test_env_overrides_yaml_for_engine_config(
 ):
     """Registry-loaded engine config keeps env > YAML precedence."""
     config_yaml = tmp_path / "config.yaml"
-    config_yaml.write_text("llm:\n  model: yaml-model\n")
+    config_yaml.write_text(
+        "llm:\n  model: yaml-model\nhumanization:\n  enabled: false\n"
+    )
     monkeypatch.setenv("CCE_LLM_MODEL", "env-model")
 
     registry = ConfigRegistry.load(tmp_path, config_yaml)

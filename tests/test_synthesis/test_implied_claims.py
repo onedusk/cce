@@ -8,7 +8,7 @@ import pytest
 
 from cce.config.markers import HumanizationMarkers, load_markers
 from cce.config.types import ImpliedClaimsConfig
-from cce.llm.base import LLMResponse
+from cce.llm.base import IncompleteResponseError, LLMResponse
 from cce.models.evidence import Evidence
 from cce.synthesis.implied_claims import (
     ContrastiveFrame,
@@ -293,4 +293,31 @@ async def test_check_still_processes_genuine_alternative_when_parasitic_present(
     assert len(annotations) == 1  # only the genuine_alternative frame triggered
     assert annotations[0].frame.kind == "genuine_alternative"
     # LLM was called exactly once — for the genuine-alternative frame only.
+    assert len(llm.calls) == 1
+
+
+async def test_topic_extraction_raises_on_truncated_reply(markers):
+    """B2: a truncated topic-extraction reply raises instead of being parsed."""
+    llm = MockLLMProvider(
+        [
+            LLMResponse(
+                content='{"dismissed_topic": "sleep',
+                model="claude-sonnet-5",
+                usage={"output_tokens": 16384},
+                stop_reason="max_tokens",
+            )
+        ]
+    )
+    checker = ImpliedClaimChecker(
+        llm=llm,
+        evidence_store=StubStore(results=[make_evidence()]),
+        config=ImpliedClaimsConfig(enabled=True),
+        markers=markers,
+    )
+
+    with pytest.raises(IncompleteResponseError, match="implied-claim checker"):
+        await checker.check(
+            "Unlike sleeping pills, CBT-I works.", cited_evidence=[make_evidence()]
+        )
+
     assert len(llm.calls) == 1

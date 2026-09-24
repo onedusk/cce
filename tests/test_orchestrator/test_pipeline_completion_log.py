@@ -18,7 +18,7 @@ from tests.conftest import (
     make_source_policy,
 )
 from tests.test_orchestrator.conftest import make_adapter
-from tests.test_orchestrator.test_pipeline_parallel_paths import _SleepyLLM
+from tests.test_orchestrator.test_pipeline_sequential_paths import _RecordingLLM
 
 # ---------------------------------------------------------------------------
 # Unit-level: formatter + per-path iteration extractor
@@ -153,7 +153,7 @@ async def test_completion_line_emitted_once(sqlite_store, caplog):
         config=config,
         crawl_adapter=make_adapter(),
         evidence_store=sqlite_store,
-        llm=_SleepyLLM(),
+        llm=_RecordingLLM(),
     )
 
     with caplog.at_level(logging.INFO, logger="cce.orchestrator.pipeline"):

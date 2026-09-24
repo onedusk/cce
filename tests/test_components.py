@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import dataclasses
 import inspect
+import json
 import logging
 import re
 from pathlib import Path
@@ -27,6 +28,7 @@ from cce.config.types import (
     EvidenceStoreConfig,
     HumanizationConfig,
     LLMConfig,
+    VerifierConfig,
 )
 from cce.discovery.embeddings import EmbeddingUnavailableError
 from cce.engine import CurationEngine
@@ -162,6 +164,7 @@ async def test_embedding_fallback_warn_and_continue(
         crawl=CrawlConfig(api_key="test-key"),
         evidence_store=EvidenceStoreConfig(sqlite_path=tmp_path / "ev.db"),
         embedding=EmbeddingConfig(enabled=True, base_url="http://127.0.0.1:9"),
+        humanization=HumanizationConfig(enabled=False),  # isolate the embedding path
     )
 
     class _UnreachableProvider:
@@ -217,6 +220,118 @@ async def test_build_pipeline_accepts_prebuilt_components(tmp_path: Path):
     assert pipeline._path_configs == components.path_configs
 
 
+def _b3_config(tmp_path: Path, verifier_model: str | None) -> EngineConfig:
+    return EngineConfig(
+        llm=LLMConfig(api_key="test-key", model="claude-sonnet-4-6"),
+        verifier=VerifierConfig(model=verifier_model),
+        crawl=CrawlConfig(api_key="test-key"),
+        evidence_store=EvidenceStoreConfig(sqlite_path=tmp_path / "ev.db"),
+        embedding=EmbeddingConfig(enabled=False),
+        humanization=HumanizationConfig(enabled=True),
+    )
+
+
+async def test_verifier_model_gets_its_own_provider(tmp_path: Path):
+    """B3: verifier.model builds a second provider with inherited
+    credentials; only the Verifier moves — writer, editor and implied-claim
+    checker keep the main provider."""
+    config = _b3_config(tmp_path, verifier_model="claude-opus-5")
+    registry = ConfigRegistry.load(Path("."), engine=config)
+    store = SQLiteEvidenceStore(config.evidence_store)
+    await store.connect()
+    try:
+        components = build_components(config, registry, store)
+        pipeline = build_pipeline(config, registry, store, components)
+    finally:
+        await store.close()
+
+    assert components.verifier_llm is not components.llm
+    assert components.verifier_llm._config.model == "claude-opus-5"
+    assert components.verifier_llm._config.api_key == "test-key"
+    assert components.llm._config.model == "claude-sonnet-4-6"
+    assert pipeline._verifier._llm is components.verifier_llm
+    assert pipeline._writer._llm is components.llm
+    assert components.editor is not None
+    assert components.editor._llm is components.llm
+    assert components.implied_claims is not None
+    assert components.implied_claims._llm is components.llm
+
+
+async def test_verifier_model_unset_shares_the_main_provider(tmp_path: Path):
+    """B3: unset, behaviour is unchanged — one provider for every role."""
+    config = _b3_config(tmp_path, verifier_model=None)
+    registry = ConfigRegistry.load(Path("."), engine=config)
+    store = SQLiteEvidenceStore(config.evidence_store)
+    await store.connect()
+    try:
+        components = build_components(config, registry, store)
+        pipeline = build_pipeline(config, registry, store, components)
+    finally:
+        await store.close()
+
+    assert components.verifier_llm is components.llm
+    assert pipeline._verifier._llm is components.llm
+
+
+async def test_verifier_requests_use_the_verifier_model(tmp_path: Path):
+    """B3 acceptance: with verifier.model set, the Verifier's SDK requests
+    carry its own model ID while the Writer's carry the main one."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from tests.conftest import make_content_unit, make_curation_request, make_evidence
+
+    def _sdk_response(text: str) -> MagicMock:
+        block = MagicMock()
+        block.text = text
+        response = MagicMock()
+        response.content = [block]
+        response.model = "echo"
+        response.usage = MagicMock(
+            input_tokens=1,
+            output_tokens=1,
+            cache_creation_input_tokens=0,
+            cache_read_input_tokens=0,
+        )
+        response.stop_reason = "end_turn"
+        return response
+
+    config = _b3_config(tmp_path, verifier_model="claude-opus-5")
+    registry = ConfigRegistry.load(Path("."), engine=config)
+    store = SQLiteEvidenceStore(config.evidence_store)
+    await store.connect()
+    try:
+        with patch("cce.llm.anthropic.anthropic.AsyncAnthropic") as mock_cls:
+            client = MagicMock()
+            # One reply that satisfies both the writer and verifier shapes.
+            counts = dict.fromkeys(
+                (
+                    "total_claims",
+                    "supported",
+                    "unsupported",
+                    "uncited",
+                    "leakage",
+                    "conflicts",
+                    "gaps_acknowledged",
+                ),
+                0,
+            )
+            reply = json.dumps({"content": "x", "claims": [], "summary": counts})
+            client.messages.create = AsyncMock(return_value=_sdk_response(reply))
+            mock_cls.return_value = client
+            pipeline = build_pipeline(config, registry, store)
+
+            evidence = [make_evidence(id="ev_001")]
+            await pipeline._writer.write(make_curation_request(), evidence, "learn")
+            await pipeline._verifier.verify(
+                make_content_unit(content="Claim [ev:ev_001]."), evidence
+            )
+    finally:
+        await store.close()
+
+    models = [c.kwargs["model"] for c in client.messages.create.call_args_list]
+    assert models == ["claude-sonnet-4-6", "claude-opus-5"]
+
+
 def test_componentset_completeness_snapshot():
     """Field snapshot: a new ComponentSet field has no default, so the
     factory's constructor call fails until build_components is updated —
@@ -224,6 +339,7 @@ def test_componentset_completeness_snapshot():
     snapshot makes that contract explicit and reviewed."""
     assert [f.name for f in dataclasses.fields(ComponentSet)] == [
         "llm",
+        "verifier_llm",
         "crawl_adapter",
         "embedding",
         "taxonomy",
