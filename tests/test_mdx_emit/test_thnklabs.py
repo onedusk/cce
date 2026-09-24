@@ -13,7 +13,9 @@ from tests.conftest import make_evidence
 pytestmark = pytest.mark.unit
 
 
-def _unit(content: str, path: str = "learn", tags: list[str] | None = None) -> ContentUnit:
+def _unit(
+    content: str, path: str = "learn", tags: list[str] | None = None
+) -> ContentUnit:
     return ContentUnit(
         id="cu_1",
         path=path,
@@ -63,7 +65,10 @@ class TestFormatThnklabsPage:
 
     def test_curated_at_included_only_when_provided(self):
         with_ts = format_thnklabs_page(
-            _unit("# T\n\nHi."), {}, topic_slug="t", curated_at="2026-06-23T00:00:00+00:00"
+            _unit("# T\n\nHi."),
+            {},
+            topic_slug="t",
+            curated_at="2026-06-23T00:00:00+00:00",
         )
         assert _parse_metadata(with_ts)["curatedAt"] == "2026-06-23T00:00:00+00:00"
         without = format_thnklabs_page(_unit("# T\n\nHi."), {}, topic_slug="t")
@@ -88,7 +93,9 @@ class TestFormatThnklabsPage:
             "- **Real Source** [ev:ev_1]: a grounded source\n"
             "- **Invented Podcast — Someone**: recalled, not in evidence\n"
         )
-        lookup = {"ev_1": make_evidence(id="ev_1", url="https://who.int/x", title="WHO X")}
+        lookup = {
+            "ev_1": make_evidence(id="ev_1", url="https://who.int/x", title="WHO X")
+        }
         mdx = format_thnklabs_page(_unit(body), lookup, topic_slug="t")
         res = mdx.split("## Curated Resources", 1)[1]
         bullets = [ln for ln in res.splitlines() if ln.strip().startswith("-")]

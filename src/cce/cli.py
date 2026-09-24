@@ -297,7 +297,8 @@ def emit_mdx_command(
         "generic", "--format", help="Output format: 'generic' (engine) or 'thnklabs'"
     ),
     status: str = typer.Option(
-        "draft", help="ArticleMetadata status for --format thnklabs (e.g. draft, published)"
+        "draft",
+        help="ArticleMetadata status for --format thnklabs (e.g. draft, published)",
     ),
 ) -> None:
     """Emit MDX files from a completed curation job."""
