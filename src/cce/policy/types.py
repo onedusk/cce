@@ -120,6 +120,7 @@ class SourcePolicy(BaseModel):
     recency: RecencyRule = Field(default_factory=RecencyRule)
     max_sources_per_run: int = Field(
         default=50,
+        ge=0,
         description="Cap on total sources discovered per curation run",
     )
     topic_overrides: list[TopicOverride] = Field(

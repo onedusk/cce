@@ -177,8 +177,12 @@ needs. One commit per item (B5–B13) on `feature/bubble-readiness-phase2`.
     `max_evidence_total`) + `kept`.
 - The early return (nothing survives the policy or the source cap) carries
   every key too, zero-filled. The three crawl keys are unchanged.
-- Crawl results an adapter never returned count as `crawl_failed`.
-- One INFO log line lists the non-zero drop reasons.
+- Each requested URL counts once, as `crawl_success` or `crawl_failed`:
+  results an adapter never returned are failures, and extra or duplicate
+  results (an injected adapter adding child pages) don't count as more
+  sources. `max_sources_per_run` must be 0 or more.
+- One INFO log line lists the non-zero drop reasons from both ledgers, on
+  the early return too.
 
 ### Security — MDX escaping and a prompt-injection stance (B13)
 August audit 2.2 and 2.5. The contract is in the new root `SECURITY.md`

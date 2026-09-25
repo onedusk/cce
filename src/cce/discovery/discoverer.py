@@ -87,6 +87,26 @@ _LEDGER_KEYS = (
 )
 
 
+# The ledger keys that are drops (logged when non-zero).
+_DROP_KEYS = (
+    "urls_dropped_policy",
+    "urls_capped",
+    "crawl_failed",
+    "dropped_fragment",
+    "dropped_date",
+    "dropped_reputation",
+    "dropped_marketing",
+    "deduplicated",
+    "capped",
+)
+
+
+def _log_drops(metrics: dict[str, int | float]) -> None:
+    dropped = [f"{k}={metrics[k]}" for k in _DROP_KEYS if metrics.get(k)]
+    if dropped:
+        logger.info("Discovery drops: %s", ", ".join(dropped))
+
+
 def _discovery_metrics(**counts: int) -> dict[str, int | float]:
     """Every ledger key (missing ones 0), plus crawl_failure_rate."""
     metrics: dict[str, int | float] = {key: counts.get(key, 0) for key in _LEDGER_KEYS}
@@ -276,9 +296,9 @@ class Discoverer:
 
         if not fresh_urls and not reusable_evidence:
             logger.warning("Discovery: no URLs survived policy filter")
-            return DiscoveryResult(
-                evidence=[], metrics=_discovery_metrics(**url_ledger)
-            )
+            metrics = _discovery_metrics(**url_ledger)
+            _log_drops(metrics)
+            return DiscoveryResult(evidence=[], metrics=metrics)
 
         # Steps 4-5: Crawl fresh URLs, extract + filter evidence, merge reusable
         evidence, metrics = await self._crawl_and_extract(
@@ -331,6 +351,7 @@ class Discoverer:
             capped=before_cap - len(evidence),
             kept=len(evidence),
         )
+        _log_drops(metrics)
 
         # Every requested URL is tallied as exactly one success or failure
         # (a result the adapter never returned is a failure).
@@ -420,16 +441,13 @@ class Discoverer:
             ),
             0,
         )
-        crawl_success = 0
-        # An adapter that returns fewer results than requests lost the rest.
-        crawl_failed = max(0, len(fresh_urls) - len(crawl_results))
+        good_results = 0
         for result in crawl_results:
             if result.status_code == 0 or not result.markdown.strip():
-                crawl_failed += 1
                 logger.debug("Skipping empty or failed crawl: %s", result.url)
                 continue
 
-            crawl_success += 1
+            good_results += 1
             extracted, n_chunks = self._extract_evidence_counted(
                 result, effective_policy
             )
@@ -448,6 +466,13 @@ class Discoverer:
                     continue
                 seen_hashes.add(ev.excerpt_hash)
                 evidence.append(ev)
+
+        # One outcome per requested URL, so the URL ledger sums whatever the
+        # adapter returns: missing results are failures, extra or duplicate
+        # ones (an adapter adding child pages) don't count as more sources.
+        # By count, not URL, since an adapter may report the redirected URL.
+        crawl_success = min(good_results, len(fresh_urls))
+        crawl_failed = len(fresh_urls) - crawl_success
 
         # Merge reusable evidence from previously-crawled URLs (audit P3).
         # Same excerpt-hash dedup applies so nothing is double-counted.
@@ -476,13 +501,6 @@ class Discoverer:
             "excerpts_reused": len(reusable_evidence),
             **counts,
         }
-
-        dropped = {k: v for k, v in counts.items() if k != "excerpts_gathered" and v}
-        if dropped:
-            logger.info(
-                "Discovery drops: %s",
-                ", ".join(f"{k}={v}" for k, v in sorted(dropped.items())),
-            )
 
         return evidence, metrics
 

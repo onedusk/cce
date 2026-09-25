@@ -180,7 +180,10 @@ async def test_every_drop_reason_is_counted_and_both_ledgers_balance(caplog):
     assert m["kept"] == len(result.evidence)
     assert_ledgers_balance(m)
     [line] = [r.message for r in caplog.records if "Discovery drops" in r.message]
+    for key in ("urls_dropped_policy=1", "urls_capped=1", "crawl_failed=1"):
+        assert key in line  # URL-level drops too (final review)
     assert "dropped_marketing=1" in line and "deduplicated=2" in line
+    assert "capped=2" in line
 
 
 async def test_fresh_urls_past_the_source_cap_are_counted():
@@ -256,3 +259,46 @@ async def test_early_return_carries_the_full_ledger(search, policy_kw, store, ex
     assert_ledgers_balance(result.metrics)
     nonzero = {k: v for k, v in result.metrics.items() if v}
     assert nonzero == expected
+
+
+@pytest.mark.parametrize("shape", ["extra-child-page", "every-result-twice"])
+async def test_adapter_returning_more_results_keeps_the_url_ledger_exact(shape):
+    """Final review of B10: extra or duplicate results counted as extra
+    crawl successes, so the URL ledger summed past urls_gathered."""
+
+    class _Generous(MockCrawlAdapter):
+        async def crawl_many(self, requests: list[CrawlRequest]) -> list[CrawlResult]:
+            results = await super().crawl_many(requests)
+            if shape == "every-result-twice":
+                return results + results
+            return results + [_page("https://child.gov/p", _para("child"))]
+
+    urls = ["https://one.gov/", "https://two.gov/"]
+    adapter = _Generous(
+        search_map={"test topic": urls},
+        url_map={u: _page(u, _para(u)) for u in urls},
+    )
+    result = await _discoverer(adapter).discover(
+        make_curation_request(), make_source_policy()
+    )
+
+    assert result.metrics["crawl_success"] == 2
+    assert result.metrics["crawl_failed"] == 0
+    assert_ledgers_balance(result.metrics)
+
+
+async def test_early_return_logs_its_drops(caplog):
+    adapter = MockCrawlAdapter(search_map={"test topic": ["https://denied.com/x"]})
+    with caplog.at_level(logging.INFO, logger="cce.discovery.discoverer"):
+        await _discoverer(adapter).discover(
+            make_curation_request(), make_source_policy(domains_deny=["denied.com"])
+        )
+
+    assert "Discovery drops: urls_dropped_policy=1" in caplog.text
+
+
+def test_negative_source_cap_is_rejected():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="max_sources_per_run"):
+        make_source_policy(max_sources_per_run=-1)
