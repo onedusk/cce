@@ -307,7 +307,7 @@ class Pipeline:
                 evidence = await self._run_tagging(evidence, job, job_logger)
 
             # --- Stage 2: Store evidence ---
-            ev_lookup = await self._store_evidence(evidence, job_logger)
+            evidence, ev_lookup = await self._store_evidence(evidence, job_logger)
 
             # --- Stage 3: Write + Verify loop (per output path, run sequentially) ---
             (
@@ -444,20 +444,35 @@ class Pipeline:
         self,
         evidence: list[Evidence],
         job_logger: logging.Logger | logging.LoggerAdapter,
-    ) -> dict[str, Evidence]:
-        """Persist evidence and return the evidence-id lookup."""
+    ) -> tuple[list[Evidence], dict[str, Evidence]]:
+        """Persist evidence; return it with stored IDs, plus the id lookup.
+
+        A copy ``put_many`` skipped because the same (url, excerpt_hash) was
+        already stored (e.g. by a concurrent job) takes the stored row's ID
+        before anything is written, so every cited ID exists in the store
+        (B6). Only the ID changes: URL and verbatim excerpt are identical.
+        """
         inserted = await self._evidence_store.put_many(evidence)
         job_logger.info(
             "Stored %d new evidence objects (%d duplicates skipped)",
             inserted,
             len(evidence) - inserted,
         )
+        remap = await self._evidence_store.get_stored_ids(evidence)
+        if remap:
+            evidence = [
+                ev.model_copy(update={"id": remap[ev.id]}) if ev.id in remap else ev
+                for ev in evidence
+            ]
+            job_logger.info(
+                "Remapped %d evidence ID(s) to the already-stored rows", len(remap)
+            )
 
         # Build the evidence-id lookup once and pass it through (audit P8).
         # Writer + _write_verify_loop previously rebuilt this dict on every
         # iteration of every path — O(paths × iterations) sweeps over the
         # same list.
-        return {ev.id: ev for ev in evidence}
+        return evidence, {ev.id: ev for ev in evidence}
 
     def _interpret_terminal_decisions(
         self,
@@ -981,7 +996,9 @@ class Pipeline:
         annotations: list[ImpliedClaimAnnotation] = []
         if self._implied_claim_checker is not None:
             annotations = await self._implied_claim_checker.check(
-                unit.content, cited_evidence=path_evidence
+                unit.content,
+                cited_evidence=path_evidence,
+                evidence_store=self._evidence_store,
             )
             log.info(
                 "ImpliedClaimChecker: %d annotation(s) for path '%s' iter %d",

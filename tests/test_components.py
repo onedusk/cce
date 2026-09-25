@@ -130,7 +130,7 @@ async def test_parity_embedded_vs_api(
     store = SQLiteEvidenceStore(config.evidence_store)
     await store.connect()
     try:
-        components = build_components(config, registry, store)
+        components = build_components(config, registry)
     finally:
         await store.close()
 
@@ -202,7 +202,7 @@ async def test_embedding_fallback_warn_and_continue(
     await store.connect()
     try:
         with caplog.at_level(logging.WARNING, logger="cce.components"):
-            components = build_components(config, registry, store)
+            components = build_components(config, registry)
     finally:
         await store.close()
 
@@ -227,7 +227,7 @@ async def test_build_pipeline_accepts_prebuilt_components(tmp_path: Path):
     store = SQLiteEvidenceStore(config.evidence_store)
     await store.connect()
     try:
-        components = build_components(config, registry, store)
+        components = build_components(config, registry)
         pipeline = build_pipeline(config, registry, store, components)
     finally:
         await store.close()
@@ -259,7 +259,7 @@ async def test_verifier_model_gets_its_own_provider(tmp_path: Path):
     store = SQLiteEvidenceStore(config.evidence_store)
     await store.connect()
     try:
-        components = build_components(config, registry, store)
+        components = build_components(config, registry)
         pipeline = build_pipeline(config, registry, store, components)
     finally:
         await store.close()
@@ -283,7 +283,7 @@ async def test_verifier_model_unset_shares_the_main_provider(tmp_path: Path):
     store = SQLiteEvidenceStore(config.evidence_store)
     await store.connect()
     try:
-        components = build_components(config, registry, store)
+        components = build_components(config, registry)
         pipeline = build_pipeline(config, registry, store, components)
     finally:
         await store.close()
@@ -410,7 +410,7 @@ async def test_build_components_rejects_registry_without_markers(tmp_path: Path)
     await store.connect()
     try:
         with pytest.raises(ValueError, match="holds no markers"):
-            build_components(config, registry, store)
+            build_components(config, registry)
     finally:
         await store.close()
 
@@ -555,7 +555,6 @@ async def test_verifier_llm_override_routes_only_the_verifier(tmp_path: Path):
     components = build_components(
         config,
         _b5_registry(config, tmp_path),
-        None,  # type: ignore[arg-type] — no store used at construction
         overrides=ComponentOverrides(
             llm=writer_llm, verifier_llm=verifier_llm, crawl_adapter=MockCrawlAdapter()
         ),
@@ -572,7 +571,6 @@ async def test_llm_override_shares_verifier_when_no_verifier_model(tmp_path: Pat
     components = build_components(
         config,
         _b5_registry(config, tmp_path),
-        None,  # type: ignore[arg-type]
         overrides=ComponentOverrides(llm=llm, crawl_adapter=MockCrawlAdapter()),
     )
 
@@ -586,7 +584,6 @@ async def test_llm_override_with_verifier_model_raises(tmp_path: Path):
         build_components(
             config,
             _b5_registry(config, tmp_path),
-            None,  # type: ignore[arg-type]
             overrides=ComponentOverrides(
                 llm=MockLLMProvider(), crawl_adapter=MockCrawlAdapter()
             ),
@@ -599,7 +596,6 @@ async def test_embedding_override_is_used_even_when_disabled_in_config(tmp_path:
     components = build_components(
         config,
         _b5_registry(config, tmp_path),
-        None,  # type: ignore[arg-type]
         overrides=ComponentOverrides(
             llm=MockLLMProvider(),
             crawl_adapter=MockCrawlAdapter(),
@@ -616,6 +612,6 @@ async def test_build_pipeline_rejects_components_plus_overrides(tmp_path: Path):
     overrides = ComponentOverrides(
         llm=MockLLMProvider(), crawl_adapter=MockCrawlAdapter()
     )
-    components = build_components(config, registry, None, overrides=overrides)  # type: ignore[arg-type]
+    components = build_components(config, registry, overrides=overrides)
     with pytest.raises(ValueError, match="not both"):
         build_pipeline(config, registry, None, components, overrides=overrides)  # type: ignore[arg-type]

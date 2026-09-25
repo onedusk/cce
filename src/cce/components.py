@@ -73,7 +73,6 @@ class ComponentOverrides:
 def build_components(
     config: EngineConfig,
     registry: ConfigRegistry,
-    evidence_store: EvidenceStore,
     *,
     overrides: ComponentOverrides | None = None,
 ) -> ComponentSet:
@@ -83,9 +82,9 @@ def build_components(
     (embedding, taxonomy, path configs): construction or load failure logs a
     warning and yields ``None`` / empty, exactly as the old wiring site did.
 
-    ``evidence_store`` is required because the implied-claim checker is
-    constructor-injected with the live store (counter-evidence search) — the
-    registry holds config-time data only.
+    The set holds no evidence store (B6): the implied-claim checker gets its
+    Pipeline's store per call, so one set can back several Pipelines — one
+    per tenant, each with its own store — without pooling their evidence.
 
     ``overrides`` (B5) replaces the config-built LLM providers, crawl adapter
     or embedding provider with the caller's own. Raises ``ValueError`` when
@@ -195,7 +194,6 @@ def build_components(
             else:
                 implied_claim_checker = ImpliedClaimChecker(
                     llm=llm,
-                    evidence_store=evidence_store,
                     config=config.humanization.implied_claims,
                     markers=markers,
                 )
@@ -233,6 +231,10 @@ def build_pipeline(
     ``api/app.py:_build_pipeline`` shim). ``overrides`` is forwarded to
     :func:`build_components`; passing it with prebuilt ``components`` raises,
     so an override is never silently ignored.
+
+    Multi-tenant use (B6): build one Pipeline per tenant, each with its own
+    ``evidence_store`` (and, through the engine, its own job store). They
+    may share one ``ComponentSet``; nothing in it holds tenant data.
     """
     if components is not None and overrides is not None:
         raise ValueError(
@@ -240,9 +242,7 @@ def build_pipeline(
             "overrides would be ignored"
         )
     if components is None:
-        components = build_components(
-            config, registry, evidence_store, overrides=overrides
-        )
+        components = build_components(config, registry, overrides=overrides)
     return Pipeline(
         config=config,
         crawl_adapter=components.crawl_adapter,

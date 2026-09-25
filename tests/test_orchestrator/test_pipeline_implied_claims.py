@@ -85,12 +85,12 @@ def _editor(llm: MockLLMProvider) -> Editor:
 
 def _checker(
     llm: MockLLMProvider,
-    store,
     config: ImpliedClaimsConfig | None = None,
 ) -> ImpliedClaimChecker:
+    # The checker searches the store of the Pipeline running it (B6), so the
+    # tests below pass their search-recording wrapper as the Pipeline's store.
     return ImpliedClaimChecker(
         llm=llm,
-        evidence_store=store,
         config=config or ImpliedClaimsConfig(enabled=True),
         markers=_markers(),
     )
@@ -193,11 +193,11 @@ async def test_checker_invoked_before_editor_when_score_fails(sqlite_store):
     pipeline = Pipeline(
         config=config,
         crawl_adapter=adapter,
-        evidence_store=sqlite_store,
+        evidence_store=counter_store,
         llm=llm,
         scorer=_scorer(),
         editor=_editor(llm),
-        implied_claim_checker=_checker(llm, counter_store),
+        implied_claim_checker=_checker(llm),
     )
     result = await pipeline.run(make_curation_request(), make_source_policy())
 
@@ -259,11 +259,11 @@ async def test_checker_skipped_when_score_passes(sqlite_store):
     pipeline = Pipeline(
         config=config,
         crawl_adapter=adapter,
-        evidence_store=sqlite_store,
+        evidence_store=store,
         llm=llm,
         scorer=_AlwaysPassingScorer(),  # type: ignore[arg-type]
         editor=_editor(llm),
-        implied_claim_checker=_checker(llm, store),
+        implied_claim_checker=_checker(llm),
     )
     await pipeline.run(make_curation_request(), make_source_policy())
 
@@ -296,11 +296,11 @@ async def test_checker_skipped_when_no_editor_wired(sqlite_store):
     pipeline = Pipeline(
         config=config,
         crawl_adapter=adapter,
-        evidence_store=sqlite_store,
+        evidence_store=store,
         llm=llm,
         scorer=_scorer(),
         editor=None,  # explicit
-        implied_claim_checker=_checker(llm, store),
+        implied_claim_checker=_checker(llm),
     )
     await pipeline.run(make_curation_request(), make_source_policy())
 
@@ -336,11 +336,11 @@ async def test_checker_emits_no_annotations_when_no_contrastive_frames(sqlite_st
     pipeline = Pipeline(
         config=config,
         crawl_adapter=adapter,
-        evidence_store=sqlite_store,
+        evidence_store=store,
         llm=llm,
         scorer=_scorer(),
         editor=_editor(llm),
-        implied_claim_checker=_checker(llm, store),
+        implied_claim_checker=_checker(llm),
     )
     result = await pipeline.run(make_curation_request(), make_source_policy())
 

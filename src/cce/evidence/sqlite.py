@@ -3,7 +3,8 @@
 Phase 1 storage backend. Uses aiosqlite for async compatibility with the
 rest of the pipeline. The schema is intentionally simple -- one table, no
 ORM, no migrations framework. If the schema needs to change, we add a
-version check and ALTER TABLE statements in _ensure_schema().
+version check and ALTER TABLE statements in _ensure_schema(); a changed
+constraint needs a table rebuild instead (see _migrate_to_v4).
 """
 
 from __future__ import annotations
@@ -19,15 +20,32 @@ from cce.models.evidence import Evidence, SourceQuality
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # Chunk size for WHERE url IN (...) lookups. Kept well below SQLite's default
 # SQLITE_MAX_VARIABLE_NUMBER (999 on most builds) so callers can pass a large
 # candidate list without hitting the parameter cap.
 _URL_LOOKUP_CHUNK = 500
 
-CREATE_EVIDENCE_TABLE = """
-CREATE TABLE IF NOT EXISTS evidence (
+# Column order matters: _from_row reads SELECT * rows positionally, and the
+# v4 rebuild copies by these names.
+_EVIDENCE_COLUMNS = (
+    "id",
+    "url",
+    "title",
+    "author",
+    "published_at",
+    "retrieved_at",
+    "excerpt",
+    "excerpt_hash",
+    "locator",
+    "source_quality",
+    "tags",
+    "dimension_signals",
+)
+
+_EVIDENCE_TABLE_DDL = """
+CREATE TABLE IF NOT EXISTS {table} (
     id              TEXT PRIMARY KEY,
     url             TEXT NOT NULL,
     title           TEXT,
@@ -41,9 +59,14 @@ CREATE TABLE IF NOT EXISTS evidence (
     tags            TEXT,       -- JSON array, nullable (v3)
     dimension_signals TEXT,     -- JSON object, nullable (v3)
 
-    UNIQUE(excerpt_hash)       -- dedup on verbatim content
+    -- One row per verbatim excerpt per source URL (v4, B6). v1-v3 had
+    -- UNIQUE(excerpt_hash): an excerpt syndicated at a second URL was
+    -- silently not stored, and cited under an ID that never existed.
+    UNIQUE(url, excerpt_hash)
 );
 """
+
+CREATE_EVIDENCE_TABLE = _EVIDENCE_TABLE_DDL.format(table="evidence")
 
 CREATE_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_evidence_url ON evidence(url);",
@@ -119,10 +142,14 @@ class SQLiteEvidenceStore:
             await self._db.commit()
             return True
         except aiosqlite.IntegrityError:
-            return False  # duplicate excerpt_hash
+            return False  # duplicate (url, excerpt_hash) or id
 
     async def put_many(self, evidence: list[Evidence]) -> int:
-        """Insert multiple evidence objects, skipping duplicates."""
+        """Insert multiple evidence objects, skipping duplicates.
+
+        A skipped row keeps its in-memory ID, which then names nothing in the
+        store; callers resolve it with :meth:`get_stored_ids` (B6).
+        """
         assert self._db is not None
         if not evidence:
             return 0
@@ -187,6 +214,36 @@ class SQLiteEvidenceStore:
             rows = await cursor.fetchall()
             return [self._from_row(row) for row in rows]
 
+    async def get_stored_ids(self, evidence: list[Evidence]) -> dict[str, str]:
+        """Map in-memory IDs to the stored ID of the same (url, excerpt_hash).
+
+        Returns only the IDs that differ: rows a concurrent job stored first
+        under its own ID, so this job's copy was skipped by ``put_many``. Only
+        same-URL, same-text rows are ever mapped, so provenance is unchanged.
+        Chunked like :meth:`get_existing_urls`.
+        """
+        if not evidence:
+            return {}
+        assert self._db is not None
+        hashes = sorted({ev.excerpt_hash for ev in evidence})
+        stored: dict[tuple[str, str], str] = {}
+        for start in range(0, len(hashes), _URL_LOOKUP_CHUNK):
+            chunk = hashes[start : start + _URL_LOOKUP_CHUNK]
+            placeholders = ",".join("?" * len(chunk))
+            query = (
+                "SELECT id, url, excerpt_hash FROM evidence "
+                f"WHERE excerpt_hash IN ({placeholders})"
+            )
+            async with self._db.execute(query, chunk) as cursor:
+                for row_id, url, excerpt_hash in await cursor.fetchall():
+                    stored[(url, excerpt_hash)] = row_id
+        remap: dict[str, str] = {}
+        for ev in evidence:
+            stored_id = stored.get((ev.url, ev.excerpt_hash))
+            if stored_id is not None and stored_id != ev.id:
+                remap[ev.id] = stored_id
+        return remap
+
     async def exists_by_hash(self, excerpt_hash: str) -> bool:
         assert self._db is not None
         async with self._db.execute(
@@ -226,7 +283,11 @@ class SQLiteEvidenceStore:
         for start in range(0, len(urls), _URL_LOOKUP_CHUNK):
             chunk = urls[start : start + _URL_LOOKUP_CHUNK]
             placeholders = ",".join("?" * len(chunk))
-            query = f"SELECT * FROM evidence WHERE url IN ({placeholders})"
+            # rowid order: first stored wins when two reused URLs carry the
+            # same excerpt (the discoverer keeps the first copy per hash).
+            query = (
+                f"SELECT * FROM evidence WHERE url IN ({placeholders}) ORDER BY rowid"
+            )
             async with self._db.execute(query, chunk) as cursor:
                 rows = await cursor.fetchall()
             evidence.extend(self._from_row(row) for row in rows)
@@ -316,6 +377,10 @@ class SQLiteEvidenceStore:
 
         if stored_version < 3:
             await self._migrate_to_v3()
+        # By table shape, not version: an older binary opening a v4 file
+        # rewrites schema_version to 3 but leaves the v4 table, and the
+        # rebuild must neither repeat nor be skipped because of that.
+        await self._migrate_to_v4()
 
         if stored_version != SCHEMA_VERSION:
             await self._db.execute(
@@ -337,6 +402,47 @@ class SQLiteEvidenceStore:
             await self._db.execute(
                 "ALTER TABLE evidence ADD COLUMN dimension_signals TEXT;"
             )
+
+    async def _migrate_to_v4(self) -> None:
+        """Rebuild the table if it still has v1-v3's UNIQUE(excerpt_hash) (B6).
+
+        SQLite can't drop an inline constraint, so this copies every row into
+        a table with UNIQUE(url, excerpt_hash) in one transaction (lossless:
+        rows unique by hash are unique by (url, hash)), then re-creates the
+        indexes the DROP removed. A no-op for a table already in v4 shape.
+        """
+        assert self._db is not None
+        if not await self._has_hash_only_unique():
+            return
+        columns = ", ".join(_EVIDENCE_COLUMNS)
+        logger.info("Migrating evidence table to v4: UNIQUE(url, excerpt_hash)")
+        await self._db.commit()
+        await self._db.executescript(
+            "BEGIN;\n"
+            "DROP TABLE IF EXISTS evidence_v4;\n"
+            + _EVIDENCE_TABLE_DDL.format(table="evidence_v4")
+            + f"INSERT INTO evidence_v4 ({columns}) SELECT {columns} FROM evidence;\n"
+            "DROP TABLE evidence;\n"
+            "ALTER TABLE evidence_v4 RENAME TO evidence;\n"
+            "COMMIT;\n"
+        )
+        for idx_sql in CREATE_INDEXES:
+            await self._db.execute(idx_sql)
+
+    async def _has_hash_only_unique(self) -> bool:
+        """True when a unique index covers exactly (excerpt_hash)."""
+        assert self._db is not None
+        async with self._db.execute("PRAGMA index_list(evidence)") as cursor:
+            indexes = await cursor.fetchall()
+        for index in indexes:
+            name, unique = index[1], index[2]
+            if not unique:
+                continue
+            async with self._db.execute(f"PRAGMA index_info('{name}')") as cursor:
+                columns = [row[2] for row in await cursor.fetchall()]
+            if columns == ["excerpt_hash"]:
+                return True
+        return False
 
     @staticmethod
     def _to_row(ev: Evidence) -> tuple:

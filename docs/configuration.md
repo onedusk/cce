@@ -162,7 +162,20 @@ An unreadable reply is resent once, then fails the job.
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `CCE_EVIDENCE_BACKEND` | `sqlite` | Backend id (only `sqlite` implemented) |
-| `CCE_EVIDENCE_SQLITE_PATH` | `evidence.db` | SQLite file (also jobs + API keys) |
+| `CCE_EVIDENCE_SQLITE_PATH` | `evidence.db` | SQLite file (also jobs, packages with their full evidence, and API keys). Relative paths resolve against the working directory |
+
+`CCE_EVIDENCE_SQLITE_PATH` is process-wide and overrides YAML, so it can't
+keep tenants apart in one process: every engine or Pipeline that relies on it
+shares one evidence pool and one job store. For per-tenant separation, give
+each tenant its own stores — `CurationEngine.embedded(evidence_store=...,
+job_store=...)` (injected stores are the caller's to connect and close), or
+one `build_pipeline(config, registry, tenant_store, components)` per tenant.
+Tenants may share one `ComponentSet`; it holds no tenant data.
+
+Schema v4 (B6) makes evidence unique on `(url, excerpt_hash)` rather than
+`excerpt_hash` alone. An existing database is rebuilt losslessly the first
+time the new code opens it (one transaction; back the file up first if you
+want a copy of the old shape).
 
 ### Crawl
 

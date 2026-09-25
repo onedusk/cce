@@ -58,7 +58,6 @@ def _make_checker(
     store = StubStore(results=counter_evidence or [])
     checker = ImpliedClaimChecker(
         llm=llm,
-        evidence_store=store,
         config=config or ImpliedClaimsConfig(enabled=True),
         markers=markers,
     )
@@ -71,7 +70,6 @@ def _make_checker(
 def test_detect_frames_finds_unlike_pattern(markers):
     checker = ImpliedClaimChecker(
         llm=MockLLMProvider(),
-        evidence_store=StubStore(),
         config=ImpliedClaimsConfig(enabled=True),
         markers=markers,
     )
@@ -84,7 +82,6 @@ def test_detect_frames_finds_unlike_pattern(markers):
 def test_detect_frames_returns_empty_when_no_contrast(markers):
     checker = ImpliedClaimChecker(
         llm=MockLLMProvider(),
-        evidence_store=StubStore(),
         config=ImpliedClaimsConfig(enabled=True),
         markers=markers,
     )
@@ -103,6 +100,7 @@ async def test_check_emits_annotation_when_counter_exists(markers):
 
     annotations = await checker.check(
         "Unlike sleeping pills, CBT-I addresses the root cause.",
+        evidence_store=_store,
         cited_evidence=cited,
     )
 
@@ -121,6 +119,7 @@ async def test_check_skips_frame_with_no_counter_evidence(markers):
 
     annotations = await checker.check(
         "Unlike sleeping pills, CBT-I works.",
+        evidence_store=_store,
         cited_evidence=cited,
     )
 
@@ -135,6 +134,7 @@ async def test_release_valve_suppresses_low_ratio_counter(markers):
 
     annotations = await checker.check(
         "Unlike sleeping pills, CBT-I works.",
+        evidence_store=_store,
         cited_evidence=cited,
     )
 
@@ -148,6 +148,7 @@ async def test_release_valve_does_not_suppress_when_cited_empty(markers):
 
     annotations = await checker.check(
         "Unlike sleeping pills, CBT-I works.",
+        evidence_store=_store,
         cited_evidence=[],
     )
 
@@ -165,7 +166,9 @@ async def test_search_strategy_embedding_raises(markers):
 
     with pytest.raises(NotImplementedError):
         await checker.check(
-            "Unlike sleeping pills, CBT-I works.", cited_evidence=[make_evidence()]
+            "Unlike sleeping pills, CBT-I works.",
+            evidence_store=_store,
+            cited_evidence=[make_evidence()],
         )
 
 
@@ -174,7 +177,11 @@ async def test_dismissed_topic_extraction_uses_zero_temperature(markers):
     cited = [make_evidence() for _ in range(10)]
     checker, llm, _store = _make_checker(markers=markers, counter_evidence=counter)
 
-    await checker.check("Unlike sleeping pills, CBT-I works.", cited_evidence=cited)
+    await checker.check(
+        "Unlike sleeping pills, CBT-I works.",
+        evidence_store=_store,
+        cited_evidence=cited,
+    )
 
     # The first (and only) LLM call is the topic extraction
     assert llm.calls
@@ -187,7 +194,9 @@ async def test_annotation_rewrite_hint_includes_first_five_evidence_ids(markers)
     checker, _llm, _store = _make_checker(markers=markers, counter_evidence=counter)
 
     annotations = await checker.check(
-        "Unlike sleeping pills, CBT-I works.", cited_evidence=cited
+        "Unlike sleeping pills, CBT-I works.",
+        evidence_store=_store,
+        cited_evidence=cited,
     )
 
     # Hint truncates evidence id list to 5 (Stage 2 implementation)
@@ -205,6 +214,7 @@ async def test_check_returns_empty_when_no_frames_detected(markers):
 
     annotations = await checker.check(
         "CBT-I targets the underlying habits keeping people awake.",
+        evidence_store=store,
         cited_evidence=[make_evidence()],
     )
 
@@ -232,7 +242,6 @@ def test_detect_frames_tags_parasitic_vs_genuine(markers):
     corresponding ``kind`` field."""
     checker = ImpliedClaimChecker(
         llm=MockLLMProvider(),
-        evidence_store=StubStore(),
         config=ImpliedClaimsConfig(enabled=True),
         markers=markers,
     )
@@ -256,13 +265,13 @@ async def test_check_skips_parasitic_frames_no_llm_call(markers):
     store = StubStore(results=[])
     checker = ImpliedClaimChecker(
         llm=llm,
-        evidence_store=store,
         config=ImpliedClaimsConfig(enabled=True),
         markers=markers,
     )
 
     annotations = await checker.check(
         "Boredom is not a problem to be solved. It is a signal to be heard.",
+        evidence_store=store,
         cited_evidence=cited,
     )
 
@@ -287,6 +296,7 @@ async def test_check_still_processes_genuine_alternative_when_parasitic_present(
     annotations = await checker.check(
         "Unlike sleeping pills, CBT-I works. "
         "This is not a shortcut. It is a longer investment.",
+        evidence_store=store,
         cited_evidence=cited,
     )
 
@@ -308,16 +318,18 @@ async def test_topic_extraction_raises_on_truncated_reply(markers):
             )
         ]
     )
+    store = StubStore(results=[make_evidence()])
     checker = ImpliedClaimChecker(
         llm=llm,
-        evidence_store=StubStore(results=[make_evidence()]),
         config=ImpliedClaimsConfig(enabled=True),
         markers=markers,
     )
 
     with pytest.raises(IncompleteResponseError, match="implied-claim checker"):
         await checker.check(
-            "Unlike sleeping pills, CBT-I works.", cited_evidence=[make_evidence()]
+            "Unlike sleeping pills, CBT-I works.",
+            evidence_store=store,
+            cited_evidence=[make_evidence()],
         )
 
     assert len(llm.calls) == 1

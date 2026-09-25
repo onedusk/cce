@@ -127,7 +127,11 @@ class EvidenceStoreConfig(BaseModel):
     )
     sqlite_path: Path = Field(
         default=Path("evidence.db"),
-        description="Path to SQLite database file",
+        description=(
+            "Path to SQLite database file (also holds jobs, packages and API "
+            "keys). Process-wide when set via CCE_EVIDENCE_SQLITE_PATH: don't "
+            "rely on it for per-tenant separation — inject stores instead (B6)."
+        ),
     )
 
 

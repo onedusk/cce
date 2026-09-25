@@ -86,12 +86,10 @@ class ImpliedClaimChecker:
     def __init__(
         self,
         llm: LLMProvider,
-        evidence_store: EvidenceStore,
         config: ImpliedClaimsConfig,
         markers: HumanizationMarkers,
     ) -> None:
         self._llm = llm
-        self._store = evidence_store
         self._config = config
         self._patterns = markers.compiled_contrastive_patterns()
 
@@ -99,6 +97,8 @@ class ImpliedClaimChecker:
         self,
         content: str,
         cited_evidence: list[Evidence],
+        *,
+        evidence_store: EvidenceStore,
     ) -> list[ImpliedClaimAnnotation]:
         """Return annotations for frames whose dismissed side has counter-evidence.
 
@@ -108,6 +108,9 @@ class ImpliedClaimChecker:
                 release-valve ratio: if the counter-evidence pool is small
                 relative to the cited pool on the dismissed topic, the
                 contrast is editorially permissible without a spectrum rewrite.
+            evidence_store: The store of the Pipeline running this check. Passed
+                per call, not bound at construction, so one checker shared by
+                several Pipelines (tenants) never searches another's store (B6).
         """
         frames = self._detect_frames(content)
         if not frames:
@@ -125,7 +128,7 @@ class ImpliedClaimChecker:
             dismissed = await self._extract_dismissed_topic(frame)
             if not dismissed:
                 continue
-            counter = await self._search_counter_evidence(dismissed)
+            counter = await self._search_counter_evidence(dismissed, evidence_store)
             if not counter:
                 continue
             if self._below_release_valve(counter, cited_evidence):
@@ -178,12 +181,14 @@ class ImpliedClaimChecker:
 
         return await with_llm_retry(_attempt)
 
-    async def _search_counter_evidence(self, dismissed_topic: str) -> list[Evidence]:
+    async def _search_counter_evidence(
+        self, dismissed_topic: str, evidence_store: EvidenceStore
+    ) -> list[Evidence]:
         """Search the evidence store for material supporting the dismissed topic."""
         if self._config.search_strategy in ("keyword", "llm_extract"):
             # v1: both strategies hit the same keyword search — the LLM
             # extracted the topic phrase, the store does keyword lookup.
-            return await self._store.search(
+            return await evidence_store.search(
                 topic=dismissed_topic,
                 limit=self._config.counter_evidence_search_limit,
             )

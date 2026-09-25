@@ -31,6 +31,44 @@ needs. One commit per item (B5–B13) on `feature/bubble-readiness-phase2`.
 - `tests/test_engine.py` now builds through the real factory with injected
   fakes instead of monkeypatching `build_pipeline`.
 
+### Fixed — stored evidence IDs; per-tenant stores (B6)
+- **Every cited evidence ID now exists in the store.** The store was
+  UNIQUE on `excerpt_hash` alone, so an excerpt already stored under another
+  URL (syndicated text) was silently not stored, yet cited under a fresh ID
+  that `GET /evidence/{id}` couldn't find. Open decision 2 resolved as the
+  hybrid:
+  - **Schema v4: `UNIQUE(url, excerpt_hash)`.** Existing databases are
+    rebuilt losslessly on first open, in one transaction; the trigger is the
+    table's actual unique-index shape, so a downgrade that rewrites
+    `schema_version` can't cause a repeat or a skip. Verified on a copy of the
+    local 1,305-row `evidence.db`: rows identical, 32 jobs untouched,
+    reconnect a no-op. **Back up `evidence.db` before upgrading** if you want
+    the old shape.
+  - **`EvidenceStore.get_stored_ids`** (Protocol addition — third-party
+    stores must implement it) maps an in-memory ID to the stored ID of the
+    same `(url, excerpt_hash)`. The pipeline applies it before writing, so a
+    copy a concurrent job stored first is cited under the stored ID. Only
+    same-URL, same-text rows are remapped, so a citation can never move to a
+    URL this run's policy excluded (the flaw of a remap-only fix).
+  - `get_by_urls` returns rows in stored order (first stored wins).
+- **Per-tenant stores.** `CurationEngine.embedded()` accepts `evidence_store`
+  and `job_store`; injected stores are used as given and not closed by
+  `close()`. `CCE_EVIDENCE_SQLITE_PATH` is documented as process-wide and
+  unfit for tenant separation.
+- **The implied-claim checker takes its Pipeline's store per call**
+  (`check(..., evidence_store=...)`; its constructor no longer takes one), so
+  a `ComponentSet` holds no tenant data and can back several Pipelines.
+  **Breaking:** `build_components(config, registry, *, overrides=None)` no
+  longer takes a store, and `ImpliedClaimChecker(...)` drops
+  `evidence_store`.
+- Acceptance tests: a syndicated excerpt and a same-URL race both cite only
+  stored IDs (both fail without the fix); every cited ID resolves through
+  `GET /evidence/{id}`; two Pipelines sharing one `ComponentSet` with two
+  stores never see each other's rows (a token planted in tenant A reaches none
+  of tenant B's prompts, package or store; a positive control on tenant A
+  proves the test sees store routing); engines with injected stores keep
+  separate job lists.
+
 ## [Unreleased] — bubble-readiness Phase 1 (current models, citation integrity)
 
 Phase 1 of `docs/internal/bubble-readiness-plan-2026-09-23.md` (local-only):
