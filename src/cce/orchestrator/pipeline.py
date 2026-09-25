@@ -364,6 +364,9 @@ class Pipeline:
                 writer_gaps_by_path,
             ) = await self._run_all_paths(
                 request=request,
+                penalize_coi=policy.resolve_for_topic(
+                    request.topic
+                ).reputation.penalize_conflict_of_interest,
                 evidence=evidence,
                 gate=gate,
                 lineage=lineage,
@@ -614,6 +617,7 @@ class Pipeline:
         self,
         *,
         request: CurationRequest,
+        penalize_coi: bool = True,
         evidence: list[Evidence],
         path: str,
         gate: QualityGate,
@@ -642,6 +646,7 @@ class Pipeline:
         path_tokens = _zero_tokens()
         unit, gate_results, writer_gaps = await self._write_verify_loop(
             request=request,
+            penalize_coi=penalize_coi,
             evidence=evidence,
             path=path,
             gate=gate,
@@ -659,6 +664,7 @@ class Pipeline:
         self,
         *,
         request: CurationRequest,
+        penalize_coi: bool = True,
         evidence: list[Evidence],
         gate: QualityGate,
         lineage: ContentLineage,
@@ -710,6 +716,7 @@ class Pipeline:
             sibling_context = _build_sibling_digest(all_units) if all_units else None
             unit, gate_results, path_tokens, writer_gaps = await self._run_one_path(
                 request=request,
+                penalize_coi=penalize_coi,
                 evidence=evidence,
                 path=path,
                 gate=gate,
@@ -751,6 +758,7 @@ class Pipeline:
         ev_lookup: dict[str, Evidence] | None = None,
         job_token_usage: Mapping[str, int] | None = None,
         sibling_context: str | None = None,
+        penalize_coi: bool = True,
     ) -> tuple[ContentUnit | None, list[GateResult], list[str]]:
         """Run the writer-verifier loop for a single output path.
 
@@ -915,6 +923,7 @@ class Pipeline:
             report = await self._run_verifier(
                 unit,
                 request=request,
+                penalize_coi=penalize_coi,
                 path_evidence=path_evidence,
                 verifier_block=verifier_block,
                 path=path,
@@ -1140,6 +1149,7 @@ class Pipeline:
         path: str,
         job: Job | None,
         token_usage: dict | None,
+        penalize_coi: bool = True,
     ) -> VerificationReport:
         """Verify the draft against path evidence; append the VERIFY record."""
         _tokens = token_usage
@@ -1150,6 +1160,7 @@ class Pipeline:
             path_evidence,
             jurisdiction=jurisdiction,
             evidence_block=verifier_block,
+            penalize_conflict_of_interest=penalize_coi,
         )
 
         # Accumulate token usage from verifier

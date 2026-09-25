@@ -107,6 +107,20 @@ assess it as "unsupported" regardless of apparent match.\
 # Pre-computed full system prompt (base + trust weighting)
 _VERIFIER_FULL_PROMPT = VERIFIER_SYSTEM_PROMPT + TRUST_WEIGHTING_ADDENDUM
 
+# The same trust weighting without the conflict-of-interest rules, for a
+# policy with penalize_conflict_of_interest: false (B9) — e.g. research that
+# must read vendors' own pages. The [potential-COI] tag stays in the evidence
+# block as information.
+_TRUST_WEIGHTING_NO_COI = """
+
+SOURCE TRUST WEIGHTING:
+When evaluating claim support, apply these weighting rules:
+- Claims supported by [peer-reviewed] evidence carry stronger weight.
+- Claims supported by [primary-source] evidence carry stronger weight.
+- When a claim has mixed source quality, note this in your explanation.\
+"""
+_VERIFIER_PROMPT_NO_COI = VERIFIER_SYSTEM_PROMPT + _TRUST_WEIGHTING_NO_COI
+
 
 def _id_list() -> dict:
     return {"type": "array", "items": {"type": "string"}}
@@ -334,6 +348,7 @@ class Verifier:
         *,
         jurisdiction: str | None = None,
         evidence_block: str | None = None,
+        penalize_conflict_of_interest: bool = True,
     ) -> VerificationReport:
         """Verify a content unit against its evidence.
 
@@ -346,6 +361,8 @@ class Verifier:
                 ``format_evidence_for_prompt`` call — the caller has already
                 paid that cost once for the whole run. None -> fall back to
                 computing it here (backward-compat for direct callers).
+            penalize_conflict_of_interest: Apply the conflict-of-interest rules
+                (the policy's ``reputation.penalize_conflict_of_interest``, B9).
         """
         if not unit.content:
             return VerificationReport(
@@ -387,7 +404,11 @@ traced to the evidence above should be flagged.
         async def _attempt() -> VerificationReport:
             response = await self._llm.complete(
                 messages,
-                system=_VERIFIER_FULL_PROMPT,
+                system=(
+                    _VERIFIER_FULL_PROMPT
+                    if penalize_conflict_of_interest
+                    else _VERIFIER_PROMPT_NO_COI
+                ),
                 temperature=self._config.temperature,
                 max_tokens=self._config.max_tokens,
                 output_schema=VERIFIER_OUTPUT_SCHEMA,

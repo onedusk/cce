@@ -562,3 +562,48 @@ async def test_human_publish_policy_passed_run_awaits_approval(sqlite_store):
     assert result.package is not None
     assert result.package.verification[0].decision == "pass"
     assert result.succeeded is False
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("policy_kwargs", "topic", "expect_coi_rules"),
+    [
+        ({}, "test topic", True),
+        ({"reputation": "no_coi"}, "test topic", False),
+        # An override matching the topic decides (the effective policy).
+        ({"override": "no_coi"}, "test topic", False),
+    ],
+    ids=["default", "policy-off", "override-off"],
+)
+async def test_pipeline_verifier_follows_the_policy_coi_flag(
+    sqlite_store, policy_kwargs, topic, expect_coi_rules
+):
+    """B9: the verifier's COI rules follow the effective policy's
+    reputation.penalize_conflict_of_interest."""
+    from cce.policy.types import ReputationRule, TopicOverride
+    from cce.verification.verifier import (
+        _VERIFIER_FULL_PROMPT,
+        _VERIFIER_PROMPT_NO_COI,
+    )
+
+    no_coi = ReputationRule(penalize_conflict_of_interest=False)
+    kwargs = {}
+    if policy_kwargs.get("reputation") == "no_coi":
+        kwargs["reputation"] = no_coi
+    if policy_kwargs.get("override") == "no_coi":
+        kwargs["topic_overrides"] = [
+            TopicOverride(topic_pattern="test", reputation=no_coi)
+        ]
+    llm = _llm(_writer_json(), _verifier_json(supported=10, total=10, gaps=0))
+    pipeline = Pipeline(
+        config=make_engine_config(),
+        crawl_adapter=_make_adapter(),
+        evidence_store=sqlite_store,
+        llm=llm,
+    )
+
+    await pipeline.run(make_curation_request(topic=topic), make_source_policy(**kwargs))
+
+    verifier_system = llm.calls[1]["system"]
+    expected = _VERIFIER_FULL_PROMPT if expect_coi_rules else _VERIFIER_PROMPT_NO_COI
+    assert verifier_system == expected

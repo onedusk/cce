@@ -24,6 +24,23 @@ reputation:
     - hopkinsmedicine.org
     - sleepfoundation.org
   block_marketing: true
+  # B9: these used to be hard-coded; spelled out with this policy's values.
+  # Phrases now match as whole words ('affiliate' no longer flags
+  # 'affiliated'). .org is kept as a primary-source suffix for
+  # health-content parity (the engine default is .gov/.edu only).
+  marketing_phrases:
+    - sponsored
+    - advertisement
+    - promoted
+    - affiliate
+    - buy now
+    - sign up free
+    - limited time offer
+  primary_source_suffixes:
+    - .gov
+    - .edu
+    - .org
+  penalize_conflict_of_interest: true
 recency:
   max_age_days: 1825  # 5 years
   prefer_recent: true

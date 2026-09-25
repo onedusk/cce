@@ -123,6 +123,38 @@ needs. One commit per item (B5–B13) on `feature/bubble-readiness-phase2`.
   the plain reading of "always include"). This is the one intended change to
   default output — an additive key per sidecar entry, in both formats.
 
+### Fixed — configurable trust heuristics (B9)
+- **Marketing filter:** the seven hard-coded phrases become
+  `reputation.marketing_phrases` (default: the same seven), matched as whole
+  words, case-insensitive, with any whitespace between words. `affiliate` no
+  longer flags `affiliated`, nor `sponsored` `unsponsored`; plurals such as
+  `advertisements` are no longer caught by default either. `[]` flags nothing.
+  `block_marketing: false` already kept flagged pages (still COI-tagged).
+  Also fixes a `TypeError` (a FAILED job) when an adapter returned a list
+  title.
+- **Conflict-of-interest rules** behind `reputation.penalize_conflict_of_interest`
+  (default true). Off, the verifier drops the two COI rules but keeps the rest
+  of the trust weighting; the `[potential-COI]` tag stays as information. Read
+  from the topic-override-resolved policy (new public
+  `SourcePolicy.resolve_for_topic`). Independent of `block_marketing`.
+- **Primary sources:** `reputation.primary_source_suffixes`, label-boundary
+  matched. Open decision 4 resolved (user choice): the engine default is
+  `.gov`, `.edu` — `.org` tagged aggregators such as en.wikipedia.org and
+  coursera.org as primary (225 of 519 primary-flagged rows in the local
+  store) — while `policies/peer-reviewed.yaml` lists `.org` explicitly, so
+  thnklabs results don't change. The example policies and code-built
+  `ReputationRule()`s get the new default.
+- **Domain matching** on the host at label boundaries instead of substrings,
+  ignoring port and userinfo: a deny entry blocks hosts containing its labels
+  in sequence (`x.com` no longer blocks `fox.com`; `amazon.com` still blocks
+  `amazon.com.au`), and an allow entry admits only the host or its
+  subdomains (allow `nih.gov` no longer admits `nih.gov.evil.io` or
+  `evilnih.gov`). A parity test over every shipped policy shows no other
+  allow/deny change. `trusted_institutions` and the peer-review URL
+  heuristic stay substring-matched (policies rely on bare `pubmed`).
+- Note: rows reused from an existing store keep their crawl-time flags; new
+  heuristics apply to newly crawled URLs.
+
 ## [Unreleased] — bubble-readiness Phase 1 (current models, citation integrity)
 
 Phase 1 of `docs/internal/bubble-readiness-plan-2026-09-23.md` (local-only):

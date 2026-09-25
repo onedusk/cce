@@ -179,3 +179,29 @@ def test_load_real_peer_reviewed_policy():
     assert "reddit.com" in policy.domains_deny
     assert "nih.gov" in policy.reputation.trusted_institutions
     assert policy.max_sources_per_run == 15
+
+
+def test_peer_reviewed_policy_keeps_org_as_primary_source():
+    """B9 / open decision 4: the engine default dropped .org, the health
+    policy keeps it explicitly so thnklabs results don't change."""
+    from cce.policy.types import DEFAULT_MARKETING_PHRASES
+
+    root = Path(__file__).resolve().parent.parent.parent
+    policy = load_policy(root / "policies" / "peer-reviewed.yaml")
+    assert policy.reputation.primary_source_suffixes == [".gov", ".edu", ".org"]
+    assert policy.reputation.marketing_phrases == list(DEFAULT_MARKETING_PHRASES)
+    assert policy.reputation.penalize_conflict_of_interest is True
+
+
+def test_new_reputation_keys_round_trip_through_yaml(tmp_path):
+    (tmp_path / "p.yaml").write_text(
+        "id: research\nname: Research\nreputation:\n"
+        "  block_marketing: false\n"
+        "  marketing_phrases: [sponsored]\n"
+        "  primary_source_suffixes: [gov.uk]\n"
+        "  penalize_conflict_of_interest: false\n"
+    )
+    policy = load_policy(tmp_path / "p.yaml")
+    assert policy.reputation.marketing_phrases == ["sponsored"]
+    assert policy.reputation.primary_source_suffixes == ["gov.uk"]
+    assert policy.reputation.penalize_conflict_of_interest is False

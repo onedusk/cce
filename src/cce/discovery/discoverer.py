@@ -15,7 +15,9 @@ import re
 import time
 import uuid
 from collections import defaultdict
+from collections.abc import Sequence
 from datetime import UTC, datetime
+from functools import lru_cache
 from urllib.parse import urlparse
 
 from cce.config.types import CrawlConfig
@@ -24,7 +26,12 @@ from cce.discovery.embeddings import EmbeddingProvider, EmbeddingUnavailableErro
 from cce.evidence.store import EvidenceStore
 from cce.models.evidence import DiscoveryResult, Evidence, SourceQuality
 from cce.models.request import CurationConstraints, CurationRequest
-from cce.policy.types import ReputationRule, SourcePolicy
+from cce.policy.types import (
+    DEFAULT_MARKETING_PHRASES,
+    DEFAULT_PRIMARY_SOURCE_SUFFIXES,
+    ReputationRule,
+    SourcePolicy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +56,64 @@ _CRAWL_FAILURE_WARN_THRESHOLD = 0.3
 SEARCH_RESULT_LIMIT = 20  # max URLs from search
 MIN_FRAGMENT_SIZE = 50  # min chars for evidence excerpt
 MAX_CHUNK_SIZE = 1500  # max chars per evidence chunk
+
+
+# -- Domain and phrase matching (B9) -----------------------------------------
+
+
+def _url_host(url: str) -> str:
+    """Lower-cased host without port, userinfo or trailing dot ('' if none)."""
+    try:
+        host = urlparse(url).hostname or ""
+    except ValueError:
+        return ""
+    return host.rstrip(".")
+
+
+def _entry_labels(entry: str) -> list[str]:
+    """Policy domain entry -> labels; tolerates '.gov', '*.example.com'."""
+    normalized = entry.strip().lower().lstrip("*").strip(".")
+    return normalized.split(".") if normalized else []
+
+
+def _host_matches(host: str, entry: str) -> bool:
+    """True when ``host`` is ``entry`` or a subdomain of it."""
+    labels = _entry_labels(entry)
+    if not labels:
+        return False
+    suffix = ".".join(labels)
+    return host == suffix or host.endswith("." + suffix)
+
+
+def _host_contains(host: str, entry: str) -> bool:
+    """True when ``entry``'s labels appear as a contiguous run in ``host``."""
+    labels = _entry_labels(entry)
+    if not labels:
+        return False
+    host_labels = host.split(".")
+    n = len(labels)
+    return any(
+        host_labels[i : i + n] == labels for i in range(len(host_labels) - n + 1)
+    )
+
+
+@lru_cache(maxsize=64)
+def _phrase_pattern(phrases: tuple[str, ...]) -> re.Pattern[str] | None:
+    """Whole-word, case-insensitive matcher for any phrase (None if empty).
+
+    Lookarounds rather than \\b so phrases with non-word edges still work;
+    words within a phrase may be separated by any whitespace (line wraps).
+    """
+    alternatives = [
+        r"\s+".join(re.escape(word) for word in phrase.split())
+        for phrase in phrases
+        if phrase.strip()
+    ]
+    if not alternatives:
+        return None
+    return re.compile(
+        r"(?<!\w)(?:" + "|".join(alternatives) + r")(?!\w)", re.IGNORECASE
+    )
 
 
 class Discoverer:
@@ -356,40 +421,31 @@ class Discoverer:
     @staticmethod
     def _resolve_overrides(topic: str, policy: SourcePolicy) -> SourcePolicy:
         """Apply any matching topic overrides to the base policy."""
-        for override in policy.topic_overrides:
-            if re.search(override.topic_pattern, topic, re.IGNORECASE):
-                # Layer override fields onto a copy of the base policy
-                merged_allow = policy.domains_allow + override.domains_allow
-                merged_deny = policy.domains_deny + override.domains_deny
-                return SourcePolicy(
-                    id=policy.id,
-                    name=policy.name,
-                    domains_allow=merged_allow,
-                    domains_deny=merged_deny,
-                    reputation=override.reputation or policy.reputation,
-                    recency=override.recency or policy.recency,
-                    max_sources_per_run=policy.max_sources_per_run,
-                    topic_overrides=[],  # don't recurse
-                )
-        return policy
+        return policy.resolve_for_topic(topic)
 
     @staticmethod
     def _passes_policy(url: str, policy: SourcePolicy) -> bool:
-        """Check if a URL is allowed by the source policy."""
-        domain = urlparse(url).netloc.lower()
-        if not domain:
+        """Check if a URL is allowed by the source policy.
+
+        Matches on the URL's host at label boundaries, never substrings (B9):
+        a deny entry matches when its labels appear as a contiguous run in the
+        host (``x.com`` no longer blocks ``fox.com``; ``amazon.com`` still
+        blocks ``amazon.com.au``), and an allow entry only when the host is it
+        or ends with it (``nih.gov`` no longer admits ``nih.gov.evil.io``).
+        """
+        host = _url_host(url)
+        if not host:
             return False
 
         # Deny list takes priority
-        for denied in policy.domains_deny:
-            if denied.lower() in domain:
-                return False
+        if any(_host_contains(host, denied) for denied in policy.domains_deny):
+            return False
 
         # If allow list is non-empty, URL must match
-        if policy.domains_allow:
-            matched = any(allowed.lower() in domain for allowed in policy.domains_allow)
-            if not matched:
-                return False
+        if policy.domains_allow and not any(
+            _host_matches(host, allowed) for allowed in policy.domains_allow
+        ):
+            return False
 
         return True
 
@@ -558,9 +614,13 @@ class Discoverer:
 
         quality = SourceQuality(
             is_peer_reviewed=self._looks_peer_reviewed(result),
-            is_primary_source=self._looks_primary(result),
+            is_primary_source=self._looks_primary(
+                result, policy.reputation.primary_source_suffixes
+            ),
             domain_reputation=self._assess_reputation(result.url, policy.reputation),
-            conflict_of_interest=self._looks_marketing(result),
+            conflict_of_interest=self._looks_marketing(
+                result, policy.reputation.marketing_phrases
+            ),
         )
 
         evidence: list[Evidence] = []
@@ -753,14 +813,22 @@ class Discoverer:
         return any(ind in url_lower for ind in indicators)
 
     @staticmethod
-    def _looks_primary(result: CrawlResult) -> bool:
-        """Heuristic: .gov, .edu, or known research domains."""
-        domain = urlparse(result.url).netloc.lower()
-        return any(domain.endswith(suffix) for suffix in [".gov", ".edu", ".org"])
+    def _looks_primary(
+        result: CrawlResult,
+        suffixes: Sequence[str] = DEFAULT_PRIMARY_SOURCE_SUFFIXES,
+    ) -> bool:
+        """Heuristic: the host ends with a primary-source suffix (B9: from the
+        policy, label-boundary matched; default .gov / .edu)."""
+        host = _url_host(result.url)
+        return bool(host) and any(_host_matches(host, s) for s in suffixes)
 
     @staticmethod
     def _assess_reputation(url: str, rules: ReputationRule) -> str:
-        """Map a URL to a reputation tier based on policy rules."""
+        """Map a URL to a reputation tier based on policy rules.
+
+        Still substring-matched (not B9): policies rely on bare entries such
+        as ``pubmed`` matching inside a host.
+        """
         domain = urlparse(url).netloc.lower()
         for trusted in rules.trusted_institutions:
             if trusted.lower() in domain:
@@ -770,16 +838,18 @@ class Discoverer:
         return "unknown"
 
     @staticmethod
-    def _looks_marketing(result: CrawlResult) -> bool:
-        """Basic heuristic for marketing/sponsored content."""
-        indicators = [
-            "sponsored",
-            "advertisement",
-            "promoted",
-            "affiliate",
-            "buy now",
-            "sign up free",
-            "limited time offer",
-        ]
-        text_lower = (result.markdown[:2000] + result.title).lower()
-        return any(ind in text_lower for ind in indicators)
+    def _looks_marketing(
+        result: CrawlResult,
+        phrases: Sequence[str] = DEFAULT_MARKETING_PHRASES,
+    ) -> bool:
+        """Marketing/sponsored heuristic: any policy phrase, as whole words
+        (B9: ``affiliate`` no longer matches ``affiliated``), in the title or
+        the first 2,000 characters."""
+        pattern = _phrase_pattern(tuple(phrases))
+        if pattern is None:
+            return False
+        title = result.title
+        if isinstance(title, list):  # adapters can return list metadata
+            title = ", ".join(str(t) for t in title)
+        text = result.markdown[:2000] + "\n" + (title or "")
+        return pattern.search(text) is not None

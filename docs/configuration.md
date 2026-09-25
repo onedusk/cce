@@ -109,7 +109,15 @@ shaped*. Loaded by id at job time, not part of `EngineConfig`:
   tiers, recency rules). Keyed by the `id` field inside each file — that id is
   what `--policy-id` and the API's `policy_id` refer to. The API loads every
   `*.yaml` in this directory at boot; malformed files are logged and skipped
-  (boot resilience — see PDR-003 in the audit pack).
+  (boot resilience — see PDR-003 in the audit pack). `domains_allow` /
+  `domains_deny` match the URL's host at label boundaries: an allow entry
+  admits the host or its subdomains, a deny entry blocks any host containing
+  its labels in sequence (`x.com` doesn't block `fox.com`; `amazon.com` does
+  block `amazon.com.au`). `reputation` also takes `marketing_phrases`
+  (whole-word; `[]` flags nothing), `primary_source_suffixes` (default
+  `.gov`, `.edu`) and `penalize_conflict_of_interest` (default true) — see
+  `policies/peer-reviewed.yaml`. `trusted_institutions` still matches by
+  substring.
 - `taxonomies/` — taxonomy definitions for evidence classification. The API
   currently selects `taxonomies/wellbeing-8d.yaml` when present.
 - `path_configs/` — output path definitions (tone, structure, depth per

@@ -703,3 +703,17 @@ def test_jobs_status_filter_accepts_ready_for_approval(tmp_path):
     assert result.exit_code == 0, result.output
     assert "awaiting approval" in result.output
     assert "ready_for_approval " in result.output  # fits the widened column
+
+
+def test_validate_suggests_the_new_reputation_keys(tmp_path):
+    """B9: cce validate knows marketing_phrases and hints on a typo."""
+    _write_validate_tree(tmp_path)
+    (tmp_path / "policies" / "typo.yaml").write_text(
+        "id: typo\nname: Typo\nreputation:\n  marketing_phrase: [sponsored]\n"
+    )
+
+    result = runner.invoke(app, ["validate", "--root", str(tmp_path)])
+
+    assert result.exit_code == 1
+    typo_line = next(line for line in result.output.splitlines() if "typo.yaml" in line)
+    assert "did you mean 'marketing_phrases'?" in typo_line
