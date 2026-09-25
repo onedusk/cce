@@ -203,3 +203,49 @@ async def test_editor_rewrite_that_adds_the_injected_id_is_rejected():
     )
 
     assert out.citations_preserved is False
+
+
+@pytest.mark.integration
+async def test_writer_keeps_only_citations_to_the_paths_evidence(sqlite_store):
+    """Final review of B13: the writer filtered citations against the whole
+    run, so an ID the path's cap left out stayed on unit.citations and in
+    _evidence.json. Two stored rows at the page URL (reused by discovery,
+    so their IDs are known); max_evidence=1 shows the writer only one."""
+    from cce.models.paths import PathConfig
+    from tests.test_orchestrator.conftest import make_adapter
+
+    shown = make_evidence(
+        id="ev_aaaaaaaaaaa1",
+        url="https://example.com/article",
+        excerpt="The longer excerpt the path keeps, because the cap prefers length.",
+    )
+    hidden = make_evidence(
+        id="ev_aaaaaaaaaaa2", url="https://example.com/article", excerpt="Shorter."
+    )
+    await sqlite_store.put_many([shown, hidden])
+    reply = json.dumps(
+        {
+            "content": f"A claim [ev:{shown.id}]. Another [ev:{hidden.id}].",
+            "citations_used": [shown.id, hidden.id],
+            "evidence_map": [{"claim": "c", "evidence_ids": [shown.id, hidden.id]}],
+            "gaps": [],
+        }
+    )
+    script = [reply, verifier_json(supported=10, total=10, gaps=0)] * 3
+    pipeline = Pipeline(
+        config=make_engine_config(),
+        crawl_adapter=make_adapter(),
+        evidence_store=sqlite_store,
+        llm=_llm(*script),
+        path_configs={"blog": PathConfig(id="blog", name="Blog", max_evidence=1)},
+    )
+    result = await pipeline.run(make_curation_request(), make_source_policy())
+
+    assert result.gate_results[0].decision == GateDecision.FAIL  # B4, path-scoped
+    [unit] = result.package.units
+    assert [c.evidence_id for c in unit.citations] == [shown.id]
+    assert {i for m in unit.evidence_map for i in m.evidence_ids} == {shown.id}
+    exported = json.loads(
+        export_evidence([unit], {e.id: e for e in result.package.evidence})
+    )
+    assert [e["id"] for e in exported] == [shown.id]

@@ -186,7 +186,9 @@ class ImpliedClaimChecker:
                 temperature=0.0,
             )
             ensure_complete(response, role="implied-claim checker")
-            parsed = extract_json(response.content) or {}
+            parsed = extract_json(response.content)
+            if not isinstance(parsed, dict):  # unreadable: no topic, no hint
+                parsed = {}
             return str(parsed.get("dismissed_topic", "")).strip()
 
         return await with_llm_retry(_attempt)

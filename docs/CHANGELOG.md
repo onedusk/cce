@@ -209,6 +209,14 @@ August audit 2.2 and 2.5. The contract is in the new root `SECURITY.md`
   `[^?]` and appears in no citation list; for fixed IDs the gate decides
   the same whatever the excerpt text says. A model citing a real but
   unrelated ID remains model behaviour, covered in `SECURITY.md`.
+- Final-review follow-ups: line endings are normalised before the ESM check
+  (a lone CR let `export ...` through); IDs and `domain_reputation` in the
+  evidence headers are defanged like excerpts; defang matches only the
+  prompts' own fence words, or a whole `=== ... ===` line, so code such as
+  `x === Infinity` is left alone; the writer keeps only citations to the
+  path's evidence, the same set the gate checks; an unreadable
+  implied-claim reply (e.g. a JSON list) gives no hint instead of failing
+  the job. `SECURITY.md` now states each guarantee's exact scope.
 - Live-checked 2026-09-25: one writer and one verifier call each on
   `claude-sonnet-5`, `claude-opus-5`, `claude-sonnet-4-6` and
   `claude-haiku-4-5` with the injection page among three benign excerpts.

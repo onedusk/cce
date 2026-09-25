@@ -860,6 +860,9 @@ class Pipeline:
         if path_config and path_config.max_evidence:
             sources = evidence[: path_config.max_evidence]
         path_evidence = [*context, *sources]
+        # The writer keeps only citations to what it was shown, the same set
+        # the gate checks markers against (final review of B13).
+        path_lookup = {ev.id: ev for ev in path_evidence}
 
         # Pre-format the evidence prompt blocks once per path — all iterations
         # share the same blocks since `path_evidence` is immutable here
@@ -942,7 +945,7 @@ class Pipeline:
                 feedback=feedback,
                 lineage=lineage,
                 evidence_block=writer_block,
-                ev_lookup=ev_lookup,
+                ev_lookup=path_lookup,
                 sibling_context=sibling_context,
             )
 

@@ -78,20 +78,25 @@ cached prompt prefixes stay byte-stable. Implementation:
 
 **Deterministic guarantees** (they hold whatever a model does):
 
-- A citation marker whose ID is not in the path's evidence blocks a PASS at
-  the quality gate, renders as `[^?]`, and is left out of the page's
-  citations and `_evidence.json`.
+- A citation marker whose ID is not in the path's evidence (what the writer
+  was shown) blocks a PASS at the quality gate.
 - The writer keeps only `citations_used` and `evidence_map` IDs that
-  resolve to the path's evidence.
+  resolve to the path's evidence, and `_evidence.json` lists only those.
+- On the page, a marker whose ID is not in the run's evidence renders as
+  `[^?]` and is left out of the page's citations. (`cce emit-mdx` emits a
+  job that didn't complete only with `--job ... --force`.)
 - An editor rewrite whose citation markers differ from the draft's is
   discarded; the writer's draft is kept.
 - The quality gate reads the verifier's counts, the draft's markers, the
   evidence IDs and config, never excerpt or title text. For fixed evidence
   IDs and a fixed verifier reply, the decision is the same whatever the
   excerpts say.
-- Replies are parsed as JSON of a fixed shape (structured outputs on models
-  that support them). An unreadable reply is retried once, then fails the
-  job.
+- Writer and verifier replies are parsed as JSON of a fixed shape
+  (structured outputs on models that support them); an unreadable one is
+  retried once, then fails the job. The editor's reply is delimited
+  markdown: unreadable, or with different citation markers, it is discarded
+  and the writer's draft kept. The implied-claim checker gives no hint for
+  an unreadable reply.
 
 **Residual risk.** A model that follows injected text can still cite a real
 but unrelated evidence ID, and a verifier can still mark an injected claim
