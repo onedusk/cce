@@ -44,13 +44,16 @@ class ConfigError(ValueError):
     """
 
 
-def validate_required_keys(config: EngineConfig, *, require_crawl: bool = True) -> None:
+def validate_required_keys(
+    config: EngineConfig, *, require_llm: bool = True, require_crawl: bool = True
+) -> None:
     """Fail fast with the exact env-var name (finding 4.3).
 
     Called by CurationEngine.embedded(), the API lifespan, and
-    pipeline-running CLI commands — NOT by load_config().
+    pipeline-running CLI commands — NOT by load_config(). ``require_llm`` /
+    ``require_crawl`` are False when the caller injects that provider (B5).
     """
-    if not config.llm.api_key:
+    if require_llm and not config.llm.api_key:
         raise ConfigError(
             "ANTHROPIC_API_KEY is not set. Add it to .env or the environment "
             "(see .env.example)."

@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
+from cce.components import ComponentOverrides
 from cce.engine import CurationEngine, JobHandle
 from cce.models.job import JobStatus
 from cce.models.request import CurationRequest
-from cce.orchestrator.pipeline import Pipeline
 from tests.test_orchestrator.conftest import (
     llm as make_llm,
 )
@@ -34,16 +34,19 @@ async def _make_engine(
 ) -> CurationEngine:
     """Build a CurationEngine through the real ``embedded()`` factory.
 
-    Real config YAML, policy YAML, env keys, and stores (T-04.03) — only the
-    pipeline build is substituted (mock LLM + crawl adapter) so the pipeline
-    outcome stays scripted. This is the factory-line coverage that survives
-    the M05/M06 refactor (audit 1.1).
+    Real config YAML, policy YAML, stores and the real ``build_pipeline`` —
+    the mock LLM and crawl adapter are injected with ``ComponentOverrides``
+    (B5), so no API keys are needed and the outcome stays scripted.
+    Humanization is off and the taxonomy / path-config surfaces point at
+    empty temp paths, so the run is hermetic (no gitignored operator files).
     """
     config_yaml = tmp_path / "config.yaml"
     config_yaml.write_text(
         "evidence_store:\n"
         f"  sqlite_path: {tmp_path / 'engine_test.db'}\n"
         "embedding:\n"
+        "  enabled: false\n"
+        "humanization:\n"
         "  enabled: false\n"
         "api:\n"
         "  require_auth: false\n"
@@ -56,28 +59,24 @@ async def _make_engine(
         "id: test-policy\nname: Test Policy\n"
     )
 
-    # embedded() fail-fasts on missing keys (M01); dummy values satisfy it.
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setenv("FIRECRAWL_API_KEY", "test-key")
+    # Injected providers need no keys (B5): prove it by removing them.
+    for var in ("ANTHROPIC_API_KEY", "CCE_LLM_API_KEY", "FIRECRAWL_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.delenv("CCE_CRAWL_API_KEY", raising=False)
     # Keep the YAML sqlite_path authoritative even if the host env sets one.
     monkeypatch.delenv("CCE_EVIDENCE_SQLITE_PATH", raising=False)
 
     if llm_responses is None:
         llm_responses = [writer_json(), verifier_json()]
 
-    def _mock_pipeline_build(config, registry, evidence_store) -> Pipeline:
-        return Pipeline(
-            config=config,
-            crawl_adapter=make_adapter(),
-            evidence_store=evidence_store,
-            llm=make_llm(*llm_responses),
-        )
-
-    monkeypatch.setattr("cce.engine.build_pipeline", _mock_pipeline_build)
-
     return await CurationEngine.embedded(
         config_path=str(config_yaml),
         policies_dir=str(policies_dir),
+        taxonomies_dir=str(tmp_path / "no-taxonomies"),
+        path_configs_path=str(tmp_path / "no-path-configs.yaml"),
+        overrides=ComponentOverrides(
+            llm=make_llm(*llm_responses), crawl_adapter=make_adapter()
+        ),
     )
 
 

@@ -18,7 +18,12 @@ from pathlib import Path
 import pytest
 
 from cce.api.app import create_app
-from cce.components import ComponentSet, build_components, build_pipeline
+from cce.components import (
+    ComponentOverrides,
+    ComponentSet,
+    build_components,
+    build_pipeline,
+)
 from cce.config.loader import load_config
 from cce.config.registry import ConfigRegistry
 from cce.config.types import (
@@ -28,12 +33,26 @@ from cce.config.types import (
     EvidenceStoreConfig,
     HumanizationConfig,
     LLMConfig,
+    QualityGateConfig,
     VerifierConfig,
 )
 from cce.discovery.embeddings import EmbeddingUnavailableError
 from cce.engine import CurationEngine
 from cce.evidence.sqlite import SQLiteEvidenceStore
+from cce.llm.base import LLMResponse
+from cce.models.job import JobStage
 from cce.orchestrator.pipeline import Pipeline
+from cce.synthesis.editor import EDITOR_SYSTEM_PROMPT
+from cce.synthesis.implied_claims import _DISMISSED_TOPIC_PROMPT
+from cce.synthesis.writer import WRITER_SYSTEM_PROMPT
+from cce.verification.verifier import _VERIFIER_FULL_PROMPT
+from tests.conftest import (
+    MockCrawlAdapter,
+    MockEmbeddingProvider,
+    MockLLMProvider,
+    make_curation_request,
+    make_source_policy,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -394,3 +413,209 @@ async def test_build_components_rejects_registry_without_markers(tmp_path: Path)
             build_components(config, registry, store)
     finally:
         await store.close()
+
+
+# ---------------------------------------------------------------------------
+# Provider injection (B5)
+# ---------------------------------------------------------------------------
+
+
+class _RecordingAdapter(MockCrawlAdapter):
+    """MockCrawlAdapter that records search and crawl calls."""
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.searches: list[str] = []
+        self.crawled: list[str] = []
+
+    async def search(self, query: str, limit: int = 10) -> list[str]:
+        self.searches.append(query)
+        return await super().search(query, limit)
+
+    async def crawl(self, request):  # type: ignore[no-untyped-def]
+        self.crawled.append(request.url)
+        return await super().crawl(request)
+
+
+def _b5_config(tmp_path: Path, **overrides) -> EngineConfig:
+    return EngineConfig(
+        llm=LLMConfig(api_key=""),
+        crawl=CrawlConfig(api_key=None),
+        evidence_store=EvidenceStoreConfig(sqlite_path=tmp_path / "ev.db"),
+        embedding=EmbeddingConfig(enabled=False),
+        humanization=HumanizationConfig(enabled=True),
+        quality_gate={"medium": QualityGateConfig(max_writer_iterations=1)},
+        **overrides,
+    )
+
+
+def _b5_registry(config: EngineConfig, tmp_path: Path) -> ConfigRegistry:
+    # Explicit empty taxonomy / path-config surfaces: the repo root may hold
+    # gitignored operator files that would change behaviour locally vs CI.
+    return ConfigRegistry.load(
+        Path("."),
+        engine=config,
+        taxonomies_dir=tmp_path / "no-taxonomies",
+        path_configs_path=tmp_path / "no-path-configs.yaml",
+    )
+
+
+class _Unbuildable:
+    def __init__(self, *args, **kwargs) -> None:
+        raise AssertionError("a concrete provider was built despite the override")
+
+
+async def test_overrides_reach_every_llm_and_crawl_consumer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """B5 acceptance: injected fakes are used by discovery, the Writer, the
+    Verifier, the Editor and the implied-claim checker — and no concrete
+    Anthropic/Firecrawl client is constructed."""
+    from tests.test_orchestrator.conftest import make_adapter, verifier_json
+    from tests.test_orchestrator.test_pipeline_implied_claims import (
+        _ai_flat_with_contrast,
+        _editor_response,
+        _topic_extract_response,
+    )
+
+    monkeypatch.setattr("cce.llm.anthropic.AnthropicProvider", _Unbuildable)
+    monkeypatch.setattr(
+        "cce.discovery.adapters.firecrawl.FirecrawlAdapter", _Unbuildable
+    )
+
+    template = make_adapter()
+    adapter = _RecordingAdapter(
+        url_map=template._url_map, search_map=template._search_map
+    )
+    fake_llm = MockLLMProvider(
+        [
+            LLMResponse(content=_ai_flat_with_contrast(), stop_reason="end_turn"),
+            LLMResponse(
+                content=_topic_extract_response("sleeping pills"),
+                stop_reason="end_turn",
+            ),
+            LLMResponse(
+                content=_editor_response("Sleep matters a great deal [ev:ev_001]."),
+                stop_reason="end_turn",
+            ),
+            LLMResponse(
+                content=verifier_json(supported=10, total=10, gaps=0),
+                stop_reason="end_turn",
+            ),
+        ],
+        cite_placeholders=True,
+    )
+
+    config = _b5_config(tmp_path)
+    registry = _b5_registry(config, tmp_path)
+    store = SQLiteEvidenceStore(config.evidence_store)
+    await store.connect()
+    try:
+        pipeline = build_pipeline(
+            config,
+            registry,
+            store,
+            overrides=ComponentOverrides(llm=fake_llm, crawl_adapter=adapter),
+        )
+        result = await pipeline.run(make_curation_request(), make_source_policy())
+    finally:
+        await store.close()
+
+    # Identity: every consumer holds the injected objects.
+    assert pipeline._discoverer._adapter is adapter
+    assert pipeline._writer._llm is fake_llm
+    assert pipeline._verifier._llm is fake_llm
+    assert pipeline._editor is not None and pipeline._editor._llm is fake_llm
+    checker = pipeline._implied_claim_checker
+    assert checker is not None and checker._llm is fake_llm
+
+    # Behaviour: each role actually called through the fakes.
+    assert adapter.searches and adapter.crawled
+    systems = [c["system"] or "" for c in fake_llm.calls]
+    for prompt in (
+        WRITER_SYSTEM_PROMPT,
+        _DISMISSED_TOPIC_PROMPT,
+        EDITOR_SYSTEM_PROMPT,
+        _VERIFIER_FULL_PROMPT,
+    ):
+        assert any(s.startswith(prompt) for s in systems), prompt[:40]
+    stages = {rec.stage for rec in result.job.stages}
+    assert {
+        JobStage.DISCOVER,
+        JobStage.WRITE,
+        JobStage.SCORE,
+        JobStage.EDIT,
+        JobStage.VERIFY,
+    } <= stages
+
+
+async def test_verifier_llm_override_routes_only_the_verifier(tmp_path: Path):
+    writer_llm, verifier_llm = MockLLMProvider(), MockLLMProvider()
+    config = _b5_config(tmp_path)
+    components = build_components(
+        config,
+        _b5_registry(config, tmp_path),
+        None,  # type: ignore[arg-type] — no store used at construction
+        overrides=ComponentOverrides(
+            llm=writer_llm, verifier_llm=verifier_llm, crawl_adapter=MockCrawlAdapter()
+        ),
+    )
+
+    assert components.llm is writer_llm
+    assert components.verifier_llm is verifier_llm
+    assert components.editor is not None and components.editor._llm is writer_llm
+
+
+async def test_llm_override_shares_verifier_when_no_verifier_model(tmp_path: Path):
+    llm = MockLLMProvider()
+    config = _b5_config(tmp_path)
+    components = build_components(
+        config,
+        _b5_registry(config, tmp_path),
+        None,  # type: ignore[arg-type]
+        overrides=ComponentOverrides(llm=llm, crawl_adapter=MockCrawlAdapter()),
+    )
+
+    assert components.verifier_llm is llm
+
+
+async def test_llm_override_with_verifier_model_raises(tmp_path: Path):
+    """Building the verifier from config would bypass the injected gateway."""
+    config = _b5_config(tmp_path, verifier=VerifierConfig(model="claude-opus-5"))
+    with pytest.raises(ValueError, match="verifier_llm"):
+        build_components(
+            config,
+            _b5_registry(config, tmp_path),
+            None,  # type: ignore[arg-type]
+            overrides=ComponentOverrides(
+                llm=MockLLMProvider(), crawl_adapter=MockCrawlAdapter()
+            ),
+        )
+
+
+async def test_embedding_override_is_used_even_when_disabled_in_config(tmp_path: Path):
+    embedding = MockEmbeddingProvider()
+    config = _b5_config(tmp_path)
+    components = build_components(
+        config,
+        _b5_registry(config, tmp_path),
+        None,  # type: ignore[arg-type]
+        overrides=ComponentOverrides(
+            llm=MockLLMProvider(),
+            crawl_adapter=MockCrawlAdapter(),
+            embedding=embedding,
+        ),
+    )
+
+    assert components.embedding is embedding
+
+
+async def test_build_pipeline_rejects_components_plus_overrides(tmp_path: Path):
+    config = _b5_config(tmp_path)
+    registry = _b5_registry(config, tmp_path)
+    overrides = ComponentOverrides(
+        llm=MockLLMProvider(), crawl_adapter=MockCrawlAdapter()
+    )
+    components = build_components(config, registry, None, overrides=overrides)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="not both"):
+        build_pipeline(config, registry, None, components, overrides=overrides)  # type: ignore[arg-type]

@@ -5,6 +5,32 @@ All notable changes to the Content Curation Engine (CCE).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — bubble-readiness Phase 2 (multi-tenant Pipeline use)
+
+Phase 2 of `docs/internal/bubble-readiness-plan-2026-09-23.md` (local-only):
+what a consumer running the full `Pipeline` for many tenants in one process
+needs. One commit per item (B5–B13) on `feature/bubble-readiness-phase2`.
+
+### Added — provider injection (B5)
+- **`ComponentOverrides`** (`components.py`): `llm`, `verifier_llm`,
+  `crawl_adapter` and `embedding`, accepted by `build_components`,
+  `build_pipeline` and `CurationEngine.embedded(overrides=...)`. Every field
+  left `None` is built from config as before, so the default path is
+  unchanged. An injected `llm` reaches the writer, editor and implied-claim
+  checker, and the verifier unless `verifier_llm` is given; setting
+  `verifier.model` with only `llm` injected raises `ValueError` (building
+  the verifier from config would bypass the injected gateway), as does
+  passing both `components` and `overrides` to `build_pipeline`. The
+  embedding override is included because the item's purpose is routing
+  every outbound call.
+- `validate_required_keys` gains `require_llm`; `embedded()` skips the key
+  check for injected providers.
+- Injected LLM providers must accept `output_schema`, set `stop_reason` and
+  report the four usage keys the token budget reads (documented in
+  `docs/configuration.md`).
+- `tests/test_engine.py` now builds through the real factory with injected
+  fakes instead of monkeypatching `build_pipeline`.
+
 ## [Unreleased] — bubble-readiness Phase 1 (current models, citation integrity)
 
 Phase 1 of `docs/internal/bubble-readiness-plan-2026-09-23.md` (local-only):

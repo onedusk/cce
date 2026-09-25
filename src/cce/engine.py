@@ -23,7 +23,7 @@ from pathlib import Path
 
 import httpx
 
-from cce.components import build_pipeline
+from cce.components import ComponentOverrides, build_pipeline
 from cce.config.loader import load_config, validate_required_keys
 from cce.config.registry import ConfigRegistry
 from cce.config.types import EngineConfig
@@ -228,12 +228,16 @@ class CurationEngine:
         policies_dir: str = "policies",
         taxonomies_dir: str = "taxonomies",
         path_configs_path: str | None = None,
+        *,
+        overrides: ComponentOverrides | None = None,
     ) -> CurationEngine:
         """Create an in-process engine instance.
 
         Loads config, builds all components, returns ready-to-use engine.
         ``policies_dir`` / ``taxonomies_dir`` / ``path_configs_path`` feed
         ``ConfigRegistry.load`` (M06) — the registry owns path selection.
+        ``overrides`` injects the caller's LLM provider(s), crawl adapter or
+        embedding provider (B5); an injected provider needs no API key.
         """
         engine = cls()
         engine._mode = "embedded"
@@ -242,7 +246,12 @@ class CurationEngine:
         # (markers, taxonomy): a missing API key must surface first, not be
         # masked by a markers error (final-review finding 3, 2026-06-09).
         config = load_config(Path(config_path) if config_path else None)
-        validate_required_keys(config)
+        o = overrides or ComponentOverrides()
+        validate_required_keys(
+            config,
+            require_llm=o.llm is None,
+            require_crawl=o.crawl_adapter is None,
+        )
 
         # One registry owns every configuration surface (ADR-002, M06).
         registry = ConfigRegistry.load(
@@ -263,7 +272,7 @@ class CurationEngine:
 
         # Build pipeline through the shared component factory (M05, ADR-001)
         engine._pipeline = build_pipeline(
-            engine._config, registry, engine._evidence_store
+            engine._config, registry, engine._evidence_store, overrides=overrides
         )
 
         engine._policies = registry.policies

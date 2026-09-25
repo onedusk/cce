@@ -77,6 +77,20 @@ audit-2026-06-09 M06; they were accepted but ignored from Phase 3 until
 then). Relative arguments resolve against `root`; absolute ones are used
 as-is.
 
+**Injecting providers instead of configuring them.** A consumer that must
+route outbound calls through its own gateway passes
+`overrides=ComponentOverrides(llm=..., verifier_llm=..., crawl_adapter=...,
+embedding=...)` to `CurationEngine.embedded()` or `build_pipeline()`
+(`src/cce/components.py`). Each field left `None` is built from config as
+usual; an injected `llm` also serves the editor and implied-claim checker,
+and the verifier unless `verifier_llm` is given (setting `verifier.model`
+with only `llm` injected raises). An injected LLM or crawl adapter needs no
+`ANTHROPIC_API_KEY` / `FIRECRAWL_API_KEY`. Injected LLM providers must accept
+`output_schema`, set `stop_reason`, and report the `input_tokens`,
+`output_tokens`, `cache_creation_input_tokens` and `cache_read_input_tokens`
+usage keys (the token budget reads them). Configuration itself still loads
+only through the registry.
+
 **New configuration surfaces must enter through the registry** — add a field
 to `ConfigRegistry`, load it in `load()`, and consume it from
 `build_components`. Do not add `load_*` calls to `engine.py` or
