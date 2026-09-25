@@ -18,6 +18,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from functools import lru_cache
+from typing import Literal
 from urllib.parse import urlparse
 
 from cce.config.types import CrawlConfig
@@ -56,6 +57,44 @@ _CRAWL_FAILURE_WARN_THRESHOLD = 0.3
 SEARCH_RESULT_LIMIT = 20  # max URLs from search
 MIN_FRAGMENT_SIZE = 50  # min chars for evidence excerpt
 MAX_CHUNK_SIZE = 1500  # max chars per evidence chunk
+
+
+# -- Discovery drop ledger (B10) ---------------------------------------------
+#
+# Two ledgers, because URL-level drops happen before any excerpt exists:
+#   urls_gathered == urls_dropped_policy + urls_capped + urls_reused
+#                    + crawl_failed + crawl_success
+#   excerpts_gathered == dropped_fragment + dropped_date + dropped_reputation
+#                        + dropped_marketing + deduplicated + capped + kept
+# linked through crawl_success (pages whose chunks enter the excerpt ledger)
+# and urls_reused / excerpts_reused (stored rows rehydrated for reused URLs).
+_LEDGER_KEYS = (
+    "urls_gathered",
+    "urls_dropped_policy",
+    "urls_capped",
+    "urls_reused",
+    "crawl_success",
+    "crawl_failed",
+    "excerpts_gathered",
+    "excerpts_reused",
+    "dropped_fragment",
+    "dropped_date",
+    "dropped_reputation",
+    "dropped_marketing",
+    "deduplicated",
+    "capped",
+    "kept",
+)
+
+
+def _discovery_metrics(**counts: int) -> dict[str, int | float]:
+    """Every ledger key (missing ones 0), plus crawl_failure_rate."""
+    metrics: dict[str, int | float] = {key: counts.get(key, 0) for key in _LEDGER_KEYS}
+    crawled = int(metrics["crawl_success"]) + int(metrics["crawl_failed"])
+    metrics["crawl_failure_rate"] = (
+        round(int(metrics["crawl_failed"]) / crawled, 2) if crawled else 0.0
+    )
+    return metrics
 
 
 # -- Domain and phrase matching (B9) -----------------------------------------
@@ -184,6 +223,7 @@ class Discoverer:
         # Step 3: Filter against policy
         effective_policy = self._resolve_overrides(request.topic, policy)
         filtered_urls = self._apply_policy_filters(candidate_urls, effective_policy)
+        urls_dropped_policy = len(candidate_urls) - len(filtered_urls)
 
         # Step 3b: Split into fresh URLs (need crawling) and reusable stored evidence
         # from previously-indexed URLs (audit P3). Happens before the max-sources cap
@@ -191,6 +231,10 @@ class Discoverer:
         fresh_urls, reusable_evidence = await self._split_fresh_and_reusable(
             filtered_urls
         )
+        # Candidates are unique and reused URLs are a subset of them.
+        n_reused_urls = len(filtered_urls) - len(fresh_urls)
+        fresh_overflow = max(0, len(fresh_urls) - policy.max_sources_per_run)
+        reused_urls_before_cap = {ev.url for ev in reusable_evidence}
 
         # Cap total sources at policy.max_sources_per_run (review finding F-3).
         # Fresh URLs keep priority; reusable evidence fills the remaining
@@ -213,6 +257,17 @@ class Discoverer:
                     seen_urls.add(ev.url)
                     kept.append(ev)
             reusable_evidence = kept
+        reused_capped = len(reused_urls_before_cap) - len(
+            {ev.url for ev in reusable_evidence}
+        )
+        url_ledger = {
+            "urls_gathered": len(candidate_urls),
+            "urls_dropped_policy": urls_dropped_policy,
+            "urls_capped": fresh_overflow + reused_capped,
+            # A URL the store reports but has no rows for counts as reused
+            # with zero excerpts, so the URL identity stays exact.
+            "urls_reused": n_reused_urls - reused_capped,
+        }
         logger.info(
             "Discovery: %d fresh URLs to crawl, %d reusable evidence rows",
             len(fresh_urls),
@@ -222,12 +277,7 @@ class Discoverer:
         if not fresh_urls and not reusable_evidence:
             logger.warning("Discovery: no URLs survived policy filter")
             return DiscoveryResult(
-                evidence=[],
-                metrics={
-                    "crawl_success": 0,
-                    "crawl_failed": 0,
-                    "crawl_failure_rate": 0.0,
-                },
+                evidence=[], metrics=_discovery_metrics(**url_ledger)
             )
 
         # Steps 4-5: Crawl fresh URLs, extract + filter evidence, merge reusable
@@ -275,8 +325,15 @@ class Discoverer:
             relevance_scores=relevance_scores,
         )
 
-        # Every crawl result is tallied as exactly one success or failure, so
-        # the sum equals the page count previously taken from len(crawl_results).
+        metrics = _discovery_metrics(
+            **url_ledger,
+            **{k: int(v) for k, v in metrics.items() if k in _LEDGER_KEYS},
+            capped=before_cap - len(evidence),
+            kept=len(evidence),
+        )
+
+        # Every requested URL is tallied as exactly one success or failure
+        # (a result the adapter never returned is a failure).
         pages_crawled = int(metrics["crawl_success"]) + int(metrics["crawl_failed"])
         logger.info(
             "Discovery complete: %d evidence objects from %d pages (%d before cap)",
@@ -348,13 +405,24 @@ class Discoverer:
             ]
             crawl_results = await self._adapter.crawl_many(crawl_requests)
 
-        # Step 5: Extract, filter, and normalize (with in-run dedup by excerpt hash)
+        # Step 5: Extract, filter, and normalize (with in-run dedup by excerpt
+        # hash), counting every excerpt that doesn't survive by reason (B10).
         evidence: list[Evidence] = []
         seen_hashes: set[str] = set()
-        filtered_date = 0
-        filtered_reputation = 0
+        counts: dict[str, int] = dict.fromkeys(
+            (
+                "excerpts_gathered",
+                "dropped_fragment",
+                "dropped_date",
+                "dropped_reputation",
+                "dropped_marketing",
+                "deduplicated",
+            ),
+            0,
+        )
         crawl_success = 0
-        crawl_failed = 0
+        # An adapter that returns fewer results than requests lost the rest.
+        crawl_failed = max(0, len(fresh_urls) - len(crawl_results))
         for result in crawl_results:
             if result.status_code == 0 or not result.markdown.strip():
                 crawl_failed += 1
@@ -362,24 +430,34 @@ class Discoverer:
                 continue
 
             crawl_success += 1
-            extracted = self._extract_evidence(result, effective_policy)
+            extracted, n_chunks = self._extract_evidence_counted(
+                result, effective_policy
+            )
+            counts["excerpts_gathered"] += n_chunks
+            counts["dropped_fragment"] += n_chunks - len(extracted)
             for ev in extracted:
                 if not self._passes_date_filter(ev, effective_policy, constraints):
-                    filtered_date += 1
+                    counts["dropped_date"] += 1
                     continue
-                if not self._passes_reputation_filter(ev, effective_policy.reputation):
-                    filtered_reputation += 1
+                reason = self._reputation_drop_reason(ev, effective_policy.reputation)
+                if reason is not None:
+                    counts[f"dropped_{reason}"] += 1
                     continue
-                if ev.excerpt_hash not in seen_hashes:
-                    seen_hashes.add(ev.excerpt_hash)
-                    evidence.append(ev)
+                if ev.excerpt_hash in seen_hashes:
+                    counts["deduplicated"] += 1
+                    continue
+                seen_hashes.add(ev.excerpt_hash)
+                evidence.append(ev)
 
         # Merge reusable evidence from previously-crawled URLs (audit P3).
         # Same excerpt-hash dedup applies so nothing is double-counted.
+        counts["excerpts_gathered"] += len(reusable_evidence)
         for ev in reusable_evidence:
-            if ev.excerpt_hash not in seen_hashes:
-                seen_hashes.add(ev.excerpt_hash)
-                evidence.append(ev)
+            if ev.excerpt_hash in seen_hashes:
+                counts["deduplicated"] += 1
+                continue
+            seen_hashes.add(ev.excerpt_hash)
+            evidence.append(ev)
 
         # Track crawl success/failure metrics
         total_crawls = crawl_success + crawl_failed
@@ -395,13 +473,15 @@ class Discoverer:
             "crawl_success": crawl_success,
             "crawl_failed": crawl_failed,
             "crawl_failure_rate": round(failure_rate, 2),
+            "excerpts_reused": len(reusable_evidence),
+            **counts,
         }
 
-        if filtered_date or filtered_reputation:
+        dropped = {k: v for k, v in counts.items() if k != "excerpts_gathered" and v}
+        if dropped:
             logger.info(
-                "Discovery filters: %d dropped by date, %d dropped by reputation",
-                filtered_date,
-                filtered_reputation,
+                "Discovery drops: %s",
+                ", ".join(f"{k}={v}" for k, v in sorted(dropped.items())),
             )
 
         return evidence, metrics
@@ -506,22 +586,29 @@ class Discoverer:
 
         Fail-open: evidence with no source_quality always passes.
         """
+        return Discoverer._reputation_drop_reason(ev, reputation) is None
+
+    @staticmethod
+    def _reputation_drop_reason(
+        ev: Evidence, reputation: ReputationRule
+    ) -> Literal["reputation", "marketing"] | None:
+        """Why the reputation hard filters drop ``ev`` (None = kept), B10."""
         if ev.source_quality is None:
-            return True
+            return None
 
         if reputation.require_peer_reviewed and not ev.source_quality.is_peer_reviewed:
-            return False
+            return "reputation"
 
         if (
             reputation.require_primary_source
             and not ev.source_quality.is_primary_source
         ):
-            return False
+            return "reputation"
 
         if reputation.block_marketing and ev.source_quality.conflict_of_interest:
-            return False
+            return "marketing"
 
-        return True
+        return None
 
     # -- Embedding relevance --
 
@@ -609,6 +696,13 @@ class Discoverer:
         section) and creates one Evidence object per chunk. Each chunk
         is a verbatim excerpt with full provenance.
         """
+        return self._extract_evidence_counted(result, policy)[0]
+
+    def _extract_evidence_counted(
+        self, result: CrawlResult, policy: SourcePolicy
+    ) -> tuple[list[Evidence], int]:
+        """``_extract_evidence`` plus the number of chunks considered, so the
+        caller can count those dropped as too short (B10)."""
         chunks = self._chunk_content(result.markdown)
         now = datetime.now(UTC)
 
@@ -674,7 +768,7 @@ class Discoverer:
                 )
             )
 
-        return evidence
+        return evidence, len(chunks)
 
     @staticmethod
     def _chunk_content(

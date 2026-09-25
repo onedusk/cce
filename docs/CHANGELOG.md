@@ -155,6 +155,24 @@ needs. One commit per item (B5–B13) on `feature/bubble-readiness-phase2`.
 - Note: rows reused from an existing store keep their crawl-time flags; new
   heuristics apply to newly crawled URLs.
 
+### Added — every discovery drop counted by reason (B10)
+- The DISCOVER stage's metrics (`DiscoveryResult.metrics`, the job's
+  DISCOVER `StageRecord`) now carry two ledgers that each sum exactly, so
+  "why did this topic get so little evidence?" is answered from the job:
+  - **URLs:** `urls_gathered` = `urls_dropped_policy` (allow/deny) +
+    `urls_capped` (`max_sources_per_run`, fresh and reused) + `urls_reused`
+    (already in the store, not re-crawled) + `crawl_failed` + `crawl_success`.
+  - **Excerpts:** `excerpts_gathered` (chunks of crawled pages plus
+    `excerpts_reused` stored rows) = `dropped_fragment` (under 50 characters)
+    + `dropped_date` + `dropped_reputation` (peer-review / primary-source
+    requirements) + `dropped_marketing` + `deduplicated` (same excerpt hash
+    within the run) + `capped` (`max_excerpts_per_source` /
+    `max_evidence_total`) + `kept`.
+- The early return (nothing survives the policy or the source cap) carries
+  every key too, zero-filled. The three crawl keys are unchanged.
+- Crawl results an adapter never returned count as `crawl_failed`.
+- One INFO log line lists the non-zero drop reasons.
+
 ## [Unreleased] — bubble-readiness Phase 1 (current models, citation integrity)
 
 Phase 1 of `docs/internal/bubble-readiness-plan-2026-09-23.md` (local-only):

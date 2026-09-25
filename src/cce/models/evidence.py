@@ -74,7 +74,13 @@ class DiscoveryResult(BaseModel):
     metrics: dict[str, int | float] = Field(
         default_factory=dict,
         description=(
-            "Keys: crawl_success, crawl_failed, crawl_failure_rate — same "
-            "keys previously stashed on the Discoverer instance"
+            "Crawl keys (crawl_success, crawl_failed, crawl_failure_rate) "
+            "plus two drop ledgers that each sum exactly (B10). URLs: "
+            "urls_gathered = urls_dropped_policy + urls_capped + urls_reused "
+            "+ crawl_failed + crawl_success. Excerpts: excerpts_gathered = "
+            "dropped_fragment + dropped_date + dropped_reputation + "
+            "dropped_marketing + deduplicated + capped + kept "
+            "(excerpts_reused counts the stored rows within gathered). "
+            "See cce.models.job.DiscoverMetrics"
         ),
     )
