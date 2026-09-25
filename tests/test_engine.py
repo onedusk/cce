@@ -366,3 +366,29 @@ async def test_embedded_wait_returns_ready_for_approval(tmp_path: Path, monkeypa
         assert job.status == JobStatus.READY_FOR_APPROVAL
     finally:
         await engine.close()
+
+
+async def test_embedded_closes_the_stores_it_opened_when_setup_fails(
+    tmp_path: Path, monkeypatch
+):
+    """Review of B5: a build error after the stores opened (here verifier.model
+    with only an llm override) left both connections open."""
+    from cce.evidence.sqlite import SQLiteEvidenceStore
+    from cce.jobs.store import JobStore
+
+    opened: list = []
+    for cls in (JobStore, SQLiteEvidenceStore):
+
+        async def connect(self, _real=cls.connect):
+            opened.append(self)
+            await _real(self)
+
+        monkeypatch.setattr(cls, "connect", connect)
+
+    with pytest.raises(ValueError, match="verifier.model is set"):
+        await _make_engine(
+            tmp_path, monkeypatch, extra_yaml="verifier:\n  model: claude-opus-5\n"
+        )
+
+    assert len(opened) == 2
+    assert all(store._db is None for store in opened)

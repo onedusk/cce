@@ -276,24 +276,28 @@ class CurationEngine:
         )
         engine._config = registry.engine
 
-        # Open stores (unless the caller supplied its own — B6)
-        if job_store is None:
-            job_store = JobStore(db_path=engine._config.evidence_store.sqlite_path)
-            await job_store.connect()
-            engine._owned_stores.append(job_store)
-        engine._job_store = job_store
+        try:
+            # Open stores (unless the caller supplied its own — B6)
+            if job_store is None:
+                job_store = JobStore(db_path=engine._config.evidence_store.sqlite_path)
+                await job_store.connect()
+                engine._owned_stores.append(job_store)
+            engine._job_store = job_store
 
-        if evidence_store is None:
-            sqlite_store = SQLiteEvidenceStore(engine._config.evidence_store)
-            await sqlite_store.connect()
-            engine._owned_stores.append(sqlite_store)
-            evidence_store = sqlite_store
-        engine._evidence_store = evidence_store
+            if evidence_store is None:
+                sqlite_store = SQLiteEvidenceStore(engine._config.evidence_store)
+                await sqlite_store.connect()
+                engine._owned_stores.append(sqlite_store)
+                evidence_store = sqlite_store
+            engine._evidence_store = evidence_store
 
-        # Build pipeline through the shared component factory (M05, ADR-001)
-        engine._pipeline = build_pipeline(
-            engine._config, registry, engine._evidence_store, overrides=overrides
-        )
+            # Build pipeline through the shared component factory (M05, ADR-001)
+            engine._pipeline = build_pipeline(
+                engine._config, registry, engine._evidence_store, overrides=overrides
+            )
+        except BaseException:
+            await engine.close()  # nobody else can: the engine is never returned
+            raise
 
         engine._policies = registry.policies
 
