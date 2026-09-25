@@ -210,6 +210,38 @@ August audit 2.2 and 2.5. The contract is in the new root `SECURITY.md`
   the same whatever the excerpt text says. A model citing a real but
   unrelated ID remains model behaviour, covered in `SECURITY.md`.
 
+### Added — pinned context on the request (B11)
+- **`CurationRequest.context: list[Evidence]`** (and `JobCreateRequest.context`,
+  passed through by the API route and remote mode): settled statements the
+  caller already knows. They skip discovery, the 50-character fragment
+  minimum, the evidence caps and the per-path `max_evidence` cap, and are
+  never tagged. Defaults to `[]`, which leaves every prompt, stage record and
+  output byte-identical.
+- The writer and verifier see them first, under `=== CONTEXT (settled) ===`
+  with a one-line guidance, and the discovered excerpts under
+  `=== SOURCES ===`, both inside the cached evidence block (system prompts
+  unchanged apart from B13's clause, which now says the text comes from
+  third-party pages or the caller). The verifier sees context without trust
+  tags, and the guidance says the trust weighting doesn't apply to it.
+- Context is citable as `[ev:ID]`, checked by the gate like any evidence (B4),
+  and part of `PublishPackage.evidence`, so emit resolves it.
+- **Stored under the caller's IDs, never remapped:** context is stored
+  before discovered evidence, so a discovered copy of a pinned excerpt (same
+  URL and text) takes the context ID and is dropped, counted as
+  `context_duplicates` on the DISCOVER stage record (only for runs with
+  context). A context ID already stored with other content, or a pinned
+  excerpt already stored at that URL under another ID, fails the job.
+- Validation: IDs unique and free of whitespace, `[`, `]` and `,` (the
+  marker grammar), `excerpt_hash` equal to the SHA-256 of the excerpt. A
+  request the model rejects is now a 422 `invalid_request` from
+  `POST /v1/curate/jobs`, naming the rule without echoing the input (it was
+  a 500).
+- A context-only run (discovery finds nothing) proceeds. Direct `Writer` /
+  `Verifier` callers get the same layout (`Verifier.verify(context=...)`).
+- Source diversity counts context URLs for runs with context.
+- `docs/openapi.json` regenerated (additive: `context` and the `Evidence`
+  schema).
+
 ## [Unreleased] — bubble-readiness Phase 1 (current models, citation integrity)
 
 Phase 1 of `docs/internal/bubble-readiness-plan-2026-09-23.md` (local-only):

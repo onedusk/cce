@@ -79,3 +79,43 @@ class TestCurationRequestValidation:
         assert r.risk_profile == "medium"
         assert r.subtopics == []
         assert r.constraints is None
+
+
+class TestPinnedContext:
+    """B11: CurationRequest.context carries caller-pinned evidence."""
+
+    @staticmethod
+    def _ctx(ev_id: str = "ctx_a", excerpt: str = "No em-dashes, anywhere."):
+        from tests.conftest import make_evidence
+
+        return make_evidence(id=ev_id, url="consumer://acme/canon", excerpt=excerpt)
+
+    def test_defaults_to_empty(self):
+        assert CurationRequest(**_valid()).context == []
+
+    def test_accepts_a_short_statement(self):
+        r = CurationRequest(**_valid(context=[self._ctx()]))
+        assert r.context[0].excerpt == "No em-dashes, anywhere."  # under 50 chars
+
+    def test_rejects_duplicate_ids(self):
+        with pytest.raises(ValidationError, match="duplicate context id"):
+            CurationRequest(
+                **_valid(context=[self._ctx(), self._ctx(excerpt="Other.")])
+            )
+
+    @pytest.mark.parametrize("bad_id", ["ctx a", "ctx]a", "ctx[a", "ctx,a", ""])
+    def test_rejects_ids_a_marker_cannot_carry(self, bad_id):
+        with pytest.raises(ValidationError, match="can't be cited"):
+            CurationRequest(**_valid(context=[self._ctx(ev_id=bad_id)]))
+
+    def test_rejects_a_wrong_excerpt_hash(self):
+        bad = self._ctx().model_copy(update={"excerpt_hash": "0" * 64})
+        with pytest.raises(ValidationError, match="excerpt_hash is not the SHA-256"):
+            CurationRequest(**_valid(context=[bad]))
+
+    def test_round_trips_on_a_job(self):
+        from cce.models.job import Job
+
+        job = Job(id="job_1", request=CurationRequest(**_valid(context=[self._ctx()])))
+        again = Job.model_validate_json(job.model_dump_json())
+        assert again.request.context == job.request.context

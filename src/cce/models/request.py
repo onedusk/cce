@@ -5,9 +5,17 @@ A CurationRequest is the only required input to run the engine.
 
 from __future__ import annotations
 
+import hashlib
+import re
 from typing import ClassVar
 
 from pydantic import BaseModel, Field, field_validator
+
+from cce.models.evidence import Evidence
+
+# An ID has to fit inside a [ev:ID] marker (parsing.EV_MARKER_RE), and the
+# gate reads a "," inside one as several IDs.
+_CITABLE_ID_RE = re.compile(r"[^\s\[\],]+")
 
 
 class CurationConstraints(BaseModel):
@@ -73,6 +81,17 @@ class CurationRequest(BaseModel):
         pattern=r"^(low|medium|high)$",
         description="Maps to quality gate thresholds: low, medium, high",
     )
+    context: list[Evidence] = Field(
+        default_factory=list,
+        description=(
+            "Pinned evidence (B11): settled statements the caller already "
+            "knows. Skips discovery, the 50-character fragment minimum and "
+            "every cap; shown to the writer and verifier as settled context, "
+            "citable as [ev:ID] and stored under the caller's IDs. IDs must "
+            "be unique and contain no whitespace, '[', ']' or ','; "
+            "excerpt_hash must be the SHA-256 hex of the excerpt."
+        ),
+    )
 
     @field_validator("paths")
     @classmethod
@@ -80,6 +99,25 @@ class CurationRequest(BaseModel):
         # Everything downstream is keyed by path; a repeat would leave one
         # draft unrecorded (review of B7). Dropped, order kept.
         return list(dict.fromkeys(v))
+
+    @field_validator("context")
+    @classmethod
+    def _context_citable(cls, v: list[Evidence]) -> list[Evidence]:
+        seen: set[str] = set()
+        for ev in v:
+            if not _CITABLE_ID_RE.fullmatch(ev.id):
+                raise ValueError(
+                    f"context id {ev.id[:50]!r} can't be cited as [ev:ID]: no "
+                    "whitespace, '[', ']' or ','"
+                )
+            if ev.id in seen:
+                raise ValueError(f"duplicate context id {ev.id!r}")
+            seen.add(ev.id)
+            if ev.excerpt_hash != hashlib.sha256(ev.excerpt.encode()).hexdigest():
+                raise ValueError(
+                    f"context {ev.id!r}: excerpt_hash is not the SHA-256 of excerpt"
+                )
+        return v
 
     @field_validator("subtopics")
     @classmethod

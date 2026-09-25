@@ -428,6 +428,7 @@ class CurationEngine:
             jurisdiction=(
                 request.constraints.jurisdiction if request.constraints else None
             ),
+            context=request.context,
         )
         resp = await self._http_client.post(
             "/v1/curate/jobs",

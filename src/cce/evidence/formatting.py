@@ -55,10 +55,26 @@ def _open_evidence(ev: Evidence) -> str:
     return f'<evidence id="{html.escape(ev.id, quote=True)}">'
 
 
+# Guidance for pinned context (B11), in the block rather than the system
+# prompts so a run without context sends exactly the prompts it did before.
+_CONTEXT_GUIDANCE = {
+    "writer": (
+        "Settled statements supplied with the request: treat them as "
+        "established and cite them with [ev:ID] like any other evidence."
+    ),
+    "verifier": (
+        "Settled statements supplied with the request: a claim is supported "
+        "when a cited context entry states it. The source trust weighting does "
+        "not apply to them."
+    ),
+}
+
+
 def format_evidence_for_prompt(
     evidence: list[Evidence],
     *,
     style: str = "writer",
+    context: list[Evidence] | None = None,
 ) -> str:
     """Format evidence objects as a reference block for LLM prompts.
 
@@ -66,13 +82,28 @@ def format_evidence_for_prompt(
         evidence: List of Evidence objects to format.
         style: "writer" for synthesis prompts (detailed metadata),
             "verifier" for verification prompts (compact with quality tags).
+        context: Pinned context (B11). When given, it comes first under
+            ``=== CONTEXT (settled) ===`` (verifier style without quality
+            tags) and ``evidence`` follows under ``=== SOURCES ===``; when
+            empty, the block is exactly what it was without it.
 
     Returns:
         Formatted string with one evidence block per object.
     """
-    if style == "verifier":
-        return _format_verifier(evidence)
-    return _format_writer(evidence)
+    verifier = style == "verifier"
+    block = _format_verifier(evidence) if verifier else _format_writer(evidence)
+    if not context:
+        return block
+    context_block = (
+        _format_verifier(context, quality_tags=False)
+        if verifier
+        else _format_writer(context)
+    )
+    guidance = _CONTEXT_GUIDANCE["verifier" if verifier else "writer"]
+    return (
+        f"=== CONTEXT (settled) ===\n{guidance}\n{context_block}\n"
+        f"=== SOURCES ===\n{block}"
+    )
 
 
 def _format_writer(evidence: list[Evidence]) -> str:
@@ -103,12 +134,12 @@ def _format_writer(evidence: list[Evidence]) -> str:
     return "\n".join(lines)
 
 
-def _format_verifier(evidence: list[Evidence]) -> str:
+def _format_verifier(evidence: list[Evidence], *, quality_tags: bool = True) -> str:
     """Compact format with quality tags for the verifier prompt."""
     lines: list[str] = []
     for ev in evidence:
         tags: list[str] = []
-        if ev.source_quality:
+        if quality_tags and ev.source_quality:
             if ev.source_quality.is_peer_reviewed:
                 tags.append("peer-reviewed")
             if ev.source_quality.is_primary_source:

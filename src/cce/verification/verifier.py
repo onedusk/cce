@@ -359,6 +359,7 @@ class Verifier:
         jurisdiction: str | None = None,
         evidence_block: str | None = None,
         penalize_conflict_of_interest: bool = True,
+        context: list[Evidence] | None = None,
     ) -> VerificationReport:
         """Verify a content unit against its evidence.
 
@@ -373,6 +374,8 @@ class Verifier:
                 computing it here (backward-compat for direct callers).
             penalize_conflict_of_interest: Apply the conflict-of-interest rules
                 (the policy's ``reputation.penalize_conflict_of_interest``, B9).
+            context: Pinned context (B11) for the fallback block; ignored when
+                ``evidence_block`` is given (the pipeline formats it in).
         """
         if not unit.content:
             return VerificationReport(
@@ -381,7 +384,12 @@ class Verifier:
 
         # Build evidence reference for the verifier (skip if pre-computed)
         if evidence_block is None:
-            evidence_block = format_evidence_for_prompt(evidence, style="verifier")
+            context_ids = {ev.id for ev in context or []}
+            evidence_block = format_evidence_for_prompt(
+                [ev for ev in evidence if ev.id not in context_ids],
+                style="verifier",
+                context=context,
+            )
 
         jurisdiction_line = ""
         if jurisdiction:

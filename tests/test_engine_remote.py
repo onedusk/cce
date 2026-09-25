@@ -32,6 +32,7 @@ from cce.orchestrator.pipeline import Pipeline
 from tests.conftest import (
     make_curation_request,
     make_engine_config,
+    make_evidence,
     make_source_policy,
 )
 from tests.test_orchestrator.conftest import (
@@ -135,6 +136,7 @@ async def test_curate_maps_request_fields_onto_wire(engine: CurationEngine):
         taxonomy_id="wellbeing-8d",
         path_config_id="thnklabs",
         risk_profile="high",
+        context=[make_evidence(id="ctx_a", url="consumer://c", excerpt="Pinned.")],
     )
     handle = await engine.curate(request)
     assert handle.job_id.startswith("job_")
@@ -151,6 +153,7 @@ async def test_curate_maps_request_fields_onto_wire(engine: CurationEngine):
     assert received.risk_profile == "high"
     assert received.constraints is not None
     assert received.constraints.jurisdiction == "EU"
+    assert received.context == request.context  # B11
 
 
 async def test_status_returns_job_state(engine: CurationEngine):

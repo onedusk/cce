@@ -176,22 +176,22 @@ _FORGED_DRAFT = (
 )
 
 
-async def _verifier_prompt(unit_content: str, evidence) -> str:
+async def _verifier_prompt(unit_content: str, evidence, **kw) -> str:
     from tests.test_orchestrator.conftest import verifier_json
 
     llm = MockLLMProvider(
         [LLMResponse(content=verifier_json(supported=1, total=1, gaps=0), model="m")]
     )
-    await Verifier(llm).verify(make_content_unit(content=unit_content), evidence)
+    await Verifier(llm).verify(make_content_unit(content=unit_content), evidence, **kw)
     return llm.calls[0]["messages"][0].content
 
 
-async def _writer_prompt(evidence, **kw) -> str:
+async def _writer_prompt(evidence, request=None, **kw) -> str:
     reply = json.dumps(
         {"content": "Draft.", "citations_used": [], "evidence_map": [], "gaps": []}
     )
     llm = MockLLMProvider([LLMResponse(content=reply, model="m")])
-    await Writer(llm).write(make_curation_request(), evidence, "blog", **kw)
+    await Writer(llm).write(request or make_curation_request(), evidence, "blog", **kw)
     return llm.calls[0]["messages"][0].content
 
 

@@ -232,6 +232,37 @@ def _path_verifications(
     return records
 
 
+def _drop_context_duplicates(
+    context: list[Evidence],
+    evidence: list[Evidence],
+    ev_lookup: dict[str, Evidence],
+    job: Job,
+    job_logger: logging.Logger | logging.LoggerAdapter,
+) -> tuple[list[Evidence], dict[str, Evidence]]:
+    """Drop discovered items that are a pinned context item (B11).
+
+    After storing, a discovered item carries a context ID only when it is
+    the same stored row (reused by URL, or the same excerpt at the same URL),
+    so context wins. The count goes on the DISCOVER record as
+    ``context_duplicates``, only for runs with context.
+    """
+    context_ids = {ev.id for ev in context}
+    kept = [ev for ev in evidence if ev.id not in context_ids]
+    dropped = len(evidence) - len(kept)
+    if dropped:
+        job_logger.info("Dropped %d discovered duplicate(s) of pinned context", dropped)
+    for i, rec in enumerate(job.stages):
+        if rec.stage == JobStage.DISCOVER:
+            job.stages[i] = rec.model_copy(
+                update={
+                    "metrics": {**(rec.metrics or {}), "context_duplicates": dropped}
+                }
+            )
+    lookup = {ev.id: ev for ev in context}
+    lookup.update((ev.id, ev) for ev in kept)
+    return kept, lookup
+
+
 def _budget_stop_note(path: str, stages: Sequence[StageRecord]) -> str:
     """The budget-stop reason for a path that never reached the gate."""
     for rec in stages:
@@ -359,8 +390,9 @@ class Pipeline:
             # --- Stage 1: Discover ---
             discovery = await self._run_discovery(request, policy, job, job_logger)
             evidence = discovery.evidence
+            context = list(request.context)  # pinned evidence (B11)
 
-            if not evidence:
+            if not evidence and not context:
                 return PipelineResult(
                     package=None,
                     job=self._update_job(
@@ -374,7 +406,15 @@ class Pipeline:
                 evidence = await self._run_tagging(evidence, job, job_logger)
 
             # --- Stage 2: Store evidence ---
+            # Context first, under the caller's IDs (never remapped), so a
+            # discovered copy of a pinned excerpt takes the context ID.
+            if context:
+                await self._store_context(context)
             evidence, ev_lookup = await self._store_evidence(evidence, job_logger)
+            if context:
+                evidence, ev_lookup = _drop_context_duplicates(
+                    context, evidence, ev_lookup, job, job_logger
+                )
 
             # --- Stage 3: Write + Verify loop (per output path, run sequentially) ---
             (
@@ -412,7 +452,7 @@ class Pipeline:
                     writer_gaps_by_path,
                     job.stages,
                 ),
-                evidence=evidence,
+                evidence=[*context, *evidence],
                 token_usage=token_usage,
             )
             job = self._update_job(job, final_status)
@@ -551,6 +591,26 @@ class Pipeline:
         # iteration of every path — O(paths × iterations) sweeps over the
         # same list.
         return evidence, {ev.id: ev for ev in evidence}
+
+    async def _store_context(self, context: list[Evidence]) -> None:
+        """Persist pinned context under the caller's IDs (B11), so they resolve
+        through ``GET /evidence/{id}``. Fails the job when an ID is already
+        stored with other content, or the excerpt is stored at that URL under
+        another ID: either way the cited ID would not show what was verified.
+        """
+        await self._evidence_store.put_many(context)
+        stored = {
+            ev.id: ev
+            for ev in await self._evidence_store.get_many([ev.id for ev in context])
+        }
+        for ev in context:
+            row = stored.get(ev.id)
+            if row is None or (row.url, row.excerpt_hash) != (ev.url, ev.excerpt_hash):
+                raise ValueError(
+                    f"context {ev.id!r} conflicts with stored evidence: the ID is "
+                    "stored with a different excerpt or URL, or this excerpt and "
+                    "URL are stored under another ID"
+                )
 
     def _interpret_terminal_decisions(
         self,
@@ -807,21 +867,28 @@ class Pipeline:
         max_iters = gate_config.max_writer_iterations
 
         path_config = self._path_configs.get(path)
+        context = list(request.context)  # pinned evidence, never capped (B11)
         # ev_lookup is built once in Pipeline.run() and passed down (audit P8).
         # Falls back to a local rebuild when called directly (e.g. unit tests).
         if ev_lookup is None:
-            ev_lookup = {ev.id: ev for ev in evidence}
+            ev_lookup = {ev.id: ev for ev in [*context, *evidence]}
 
-        # Per-path evidence cap (keeps full list for tag aggregation)
-        path_evidence = evidence
+        # Per-path evidence cap on discovered sources (keeps full list for tag
+        # aggregation); pinned context comes first and is never capped.
+        sources = evidence
         if path_config and path_config.max_evidence:
-            path_evidence = evidence[: path_config.max_evidence]
+            sources = evidence[: path_config.max_evidence]
+        path_evidence = [*context, *sources]
 
         # Pre-format the evidence prompt blocks once per path — all iterations
         # share the same blocks since `path_evidence` is immutable here
         # (audit P7). Saves (iterations - 1) formatting passes per path.
-        writer_block = format_evidence_for_prompt(path_evidence, style="writer")
-        verifier_block = format_evidence_for_prompt(path_evidence, style="verifier")
+        writer_block = format_evidence_for_prompt(
+            sources, style="writer", context=context
+        )
+        verifier_block = format_evidence_for_prompt(
+            sources, style="verifier", context=context
+        )
 
         for iteration in range(1, max_iters + 1):
             # --- Budget checkpoint (M08, ADR-003) ---

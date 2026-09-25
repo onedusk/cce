@@ -11,6 +11,7 @@ from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, Field
 
+from cce.models.evidence import Evidence
 from cce.models.job import Job
 from cce.models.request import CurationRequest
 
@@ -139,6 +140,10 @@ class JobCreateRequest(BaseModel):
     path_config_id: str | None = None
     risk_profile: str = "medium"
     jurisdiction: str | None = None
+    context: list[Evidence] = Field(
+        default_factory=list,
+        description="Pinned evidence (B11); see CurationRequest.context",
+    )
 
 
 # ---------------------------------------------------------------------------
