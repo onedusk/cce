@@ -369,11 +369,16 @@ def emit_mdx_command(
                 return packages
 
             if job:
+                job_obj = await store.get_job(job)
                 package = await store.get_package(job)
                 if package is None:
-                    typer.echo(f"Error: no package found for job {job}", err=True)
+                    status = (
+                        f" (job status '{job_obj.status.value}')" if job_obj else ""
+                    )
+                    typer.echo(
+                        f"Error: no package found for job {job}{status}", err=True
+                    )
                     raise typer.Exit(1)
-                job_obj = await store.get_job(job)
                 if job_obj is None:
                     typer.echo(f"Error: job record not found for {job}", err=True)
                     raise typer.Exit(1)

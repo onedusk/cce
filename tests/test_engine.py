@@ -64,8 +64,15 @@ async def _make_engine(
     for var in ("ANTHROPIC_API_KEY", "CCE_LLM_API_KEY", "FIRECRAWL_API_KEY"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.delenv("CCE_CRAWL_API_KEY", raising=False)
-    # Keep the YAML sqlite_path authoritative even if the host env sets one.
-    monkeypatch.delenv("CCE_EVIDENCE_SQLITE_PATH", raising=False)
+    # Keep the YAML authoritative even if the host env sets these (a host
+    # CCE_PUBLISH_POLICY=human would turn COMPLETED into READY_FOR_APPROVAL;
+    # a host CCE_VERIFIER_MODEL makes an llm-only override raise).
+    for var in (
+        "CCE_EVIDENCE_SQLITE_PATH",
+        "CCE_PUBLISH_POLICY",
+        "CCE_VERIFIER_MODEL",
+    ):
+        monkeypatch.delenv(var, raising=False)
 
     if llm_responses is None:
         llm_responses = [writer_json(), verifier_json()]

@@ -216,6 +216,31 @@ class TestEmitJobStatusGuard:
         assert "--force" in result.output
         assert list(target.iterdir()) == []
 
+    def test_failed_job_without_a_package_names_its_status(self, tmp_path):
+        """Review of B8: the CHANGELOG promises the status is named; a failed
+        job has no package, so the no-package error now carries it."""
+
+        async def seed_failed() -> str:
+            store = JobStore(db_path=tmp_path / "test.db")
+            await store.connect()
+            try:
+                job = make_job(status=JobStatus.FAILED)
+                await store.create_job(job)
+                return job.id
+            finally:
+                await store.close()
+
+        target = tmp_path / "content"
+        target.mkdir()
+        job_id = asyncio.run(seed_failed())
+
+        result = _run_emit("--job", job_id, db_path=tmp_path / "test.db", target=target)
+
+        assert result.exit_code == 1
+        assert f"no package found for job {job_id} (job status 'failed')" in (
+            result.output
+        )
+
     def test_dry_run_is_refused_too(self, tmp_path):
         db_path = tmp_path / "test.db"
         target = tmp_path / "content"
