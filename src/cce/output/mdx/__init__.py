@@ -1,6 +1,8 @@
 """MDX emit — public API.
 
 Converts a PublishPackage into a directory of .mdx files + companion JSON.
+Page bodies are MDX-escaped (``escape.py``); the JSON sidecars carry raw,
+untrusted text. The output contract is in SECURITY.md.
 """
 
 from __future__ import annotations

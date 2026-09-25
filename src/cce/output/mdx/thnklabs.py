@@ -29,6 +29,7 @@ from cce.models.evidence import Evidence
 from cce.models.package import PublishPackage
 from cce.output.mdx import EmitResult, _strip_evidence_gaps, slugify
 from cce.output.mdx.citations import build_citation_index
+from cce.output.mdx.escape import escape_mdx_body, escape_mdx_inline
 from cce.output.mdx.evidence import export_evidence
 from cce.output.mdx.formatter import _citation_to_dict, _derive_title
 from cce.output.mdx.meta import merge_topic_meta
@@ -82,7 +83,8 @@ def _rebuild_resources_section(body: str, citations) -> str:
     end = m.end() + nxt.start() if nxt else len(body)
 
     bullets = "\n".join(
-        f"- **{(c.title or c.url or '').strip()}** [^{c.index}]" for c in citations
+        f"- **{escape_mdx_inline(c.title or c.url or '')}** [^{c.index}]"
+        for c in citations
     )
     new_section = f"## Curated Resources\n\n{bullets}\n"
     tail = body[end:]
@@ -128,7 +130,9 @@ def format_thnklabs_page(
         metadata["curatedAt"] = curated_at
 
     metadata_json = json.dumps(metadata, indent=2, ensure_ascii=False)
-    return f"export const metadata = {metadata_json};\n\n{body}\n"
+    # Metadata above is derived from the raw body (JSON-escaped); only the
+    # rendered body is MDX-escaped (B13).
+    return f"export const metadata = {metadata_json};\n\n{escape_mdx_body(body)}\n"
 
 
 def emit_thnklabs(

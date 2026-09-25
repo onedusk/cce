@@ -13,6 +13,7 @@ from typing import Literal
 from cce.models.content import ContentUnit
 from cce.models.evidence import Evidence
 from cce.output.mdx.citations import CitationEntry, build_citation_index
+from cce.output.mdx.escape import escape_mdx_body
 
 
 def format_mdx_page(
@@ -66,7 +67,8 @@ def format_mdx_page(
     }
 
     metadata_json = json.dumps(metadata, indent=2, ensure_ascii=False)
-    return f"export const metadata = {metadata_json}\n\n{result.content}\n"
+    body = escape_mdx_body(result.content)  # B13; metadata used the raw text
+    return f"export const metadata = {metadata_json}\n\n{body}\n"
 
 
 def _derive_title(content: str) -> str:
