@@ -209,6 +209,14 @@ August audit 2.2 and 2.5. The contract is in the new root `SECURITY.md`
   `[^?]` and appears in no citation list; for fixed IDs the gate decides
   the same whatever the excerpt text says. A model citing a real but
   unrelated ID remains model behaviour, covered in `SECURITY.md`.
+- Live-checked 2026-09-25: one writer and one verifier call each on
+  `claude-sonnet-5`, `claude-opus-5`, `claude-sonnet-4-6` and
+  `claude-haiku-4-5` with the injection page among three benign excerpts.
+  All 8 replies were complete and parsed; none cited `ev_attacker01` or the
+  hostile page (Sonnet 5 reported the page as a prompt-injection attempt in
+  its gaps). A two-path Sonnet 5 `cce curate` run had no truncation or parse
+  failure, read the prompt cache on later calls, and kept every citation
+  through all four editor passes.
 
 ### Added — pinned context on the request (B11)
 - **`CurationRequest.context: list[Evidence]`** (and `JobCreateRequest.context`,
@@ -241,6 +249,10 @@ August audit 2.2 and 2.5. The contract is in the new root `SECURITY.md`
 - Source diversity counts context URLs for runs with context.
 - `docs/openapi.json` regenerated (additive: `context` and the `Evidence`
   schema).
+- Live-checked 2026-09-25 on `claude-sonnet-5` with three short statements
+  and real discovery: the job completed, three paragraphs cite a context
+  entry next to a discovered source, and the verifier assessed all three
+  context-backed claims as supported.
 
 ## [Unreleased] — bubble-readiness Phase 1 (current models, citation integrity)
 
