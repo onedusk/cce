@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Literal
 
 import typer
 
@@ -305,6 +306,14 @@ def emit_mdx_command(
         "--force",
         help="With --job: emit even if the job status is not 'completed'",
     ),
+    cite_by: str = typer.Option(
+        "url",
+        "--cite-by",
+        help=(
+            "Footnote keying: 'url' (one per source, default) or 'evidence' "
+            "(one per evidence ID, each with its locator)"
+        ),
+    ),
 ) -> None:
     """Emit MDX files from a completed curation job."""
     if sum([bool(job), bool(topic), all_jobs]) > 1:
@@ -326,6 +335,12 @@ def emit_mdx_command(
             f"Error: unknown --format '{emit_format}' (use generic|thnklabs)", err=True
         )
         raise typer.Exit(1)
+    if cite_by not in ("url", "evidence"):
+        typer.echo(f"Error: unknown --cite-by '{cite_by}' (use url|evidence)", err=True)
+        raise typer.Exit(1)
+    citation_key: Literal["url", "evidence"] = (
+        "evidence" if cite_by == "evidence" else "url"
+    )
 
     target_path = Path(target)
     if not target_path.is_dir():
@@ -416,6 +431,7 @@ def emit_mdx_command(
                     topic_slug=slug_override,
                     topic_name=topic_name,
                     status=status,
+                    citation_key=citation_key,
                 )
             )
         else:
@@ -425,6 +441,7 @@ def emit_mdx_command(
                     target_dir=target_path,
                     topic_slug=slug_override,
                     topic_name=topic_name,
+                    citation_key=citation_key,
                 )
             )
 

@@ -9,8 +9,9 @@ the trailing semicolon).
 
 This module reshapes the SAME `PublishPackage` into that format. Everything
 except the page.mdx metadata is reused verbatim:
-- body + footnotes: `build_citation_index` (URL-keyed per M02),
-- `_evidence.json`: `export_evidence` (already byte-identical to deployed),
+- body + footnotes: `build_citation_index` (URL-keyed per M02 by default;
+  `citation_key="evidence"` keys by evidence ID with locators, B12),
+- `_evidence.json`: `export_evidence` (each entry carries its `locator`, B12),
 - `meta.json`: `merge_topic_meta` (preserves editorial fields, updates CCE ones).
 Only `format_thnklabs_page` differs from `format_mdx_page`.
 """
@@ -21,6 +22,7 @@ import json
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from cce.models.content import ContentUnit
 from cce.models.evidence import Evidence
@@ -96,9 +98,12 @@ def format_thnklabs_page(
     topic_slug: str,
     status: str = "draft",
     curated_at: str | None = None,
+    citation_key: Literal["url", "evidence"] = "url",
 ) -> str:
     """Render one ContentUnit as a thnkLabs `page.mdx` (ArticleMetadata + body)."""
-    result = build_citation_index(unit.content, evidence_by_id)
+    result = build_citation_index(
+        unit.content, evidence_by_id, citation_key=citation_key
+    )
     body = _rebuild_resources_section(result.content, result.citations)
 
     metadata: dict = {
@@ -133,6 +138,7 @@ def emit_thnklabs(
     topic_name: str | None = None,
     *,
     status: str = "draft",
+    citation_key: Literal["url", "evidence"] = "url",
 ) -> EmitResult:
     """Emit a completed package as thnkLabs MDX (page.mdx per path + _evidence.json + meta.json).
 
@@ -170,6 +176,7 @@ def emit_thnklabs(
             topic_slug=topic_slug,
             status=status,
             curated_at=curated_at,
+            citation_key=citation_key,
         )
         (path_dir / "page.mdx").write_text(mdx_content, encoding="utf-8")
         files_written += 1

@@ -131,3 +131,18 @@ class TestExportEvidence:
         # Should be ISO string, not Python repr
         assert isinstance(result[0]["retrievedAt"], str)
         assert "T" in result[0]["retrievedAt"]
+
+
+def test_sidecar_always_carries_the_locator_when_set():
+    """B12: the sidecar used to drop Evidence.locator."""
+    with_locator = make_evidence(id="ev_loc", locator="page:3")
+    without = make_evidence(id="ev_noloc", locator=None)
+    units = [_unit_with_citations("learn", "ev_loc", "ev_noloc")]
+
+    result = json.loads(
+        export_evidence(units, {"ev_loc": with_locator, "ev_noloc": without})
+    )
+
+    by_id = {e["id"]: e for e in result}
+    assert by_id["ev_loc"]["locator"] == "page:3"
+    assert "locator" not in by_id["ev_noloc"]

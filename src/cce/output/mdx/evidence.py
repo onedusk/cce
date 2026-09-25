@@ -64,6 +64,8 @@ def _serialize_evidence(ev: Evidence) -> dict:
         d["publishedAt"] = ev.published_at.isoformat()
     d["retrievedAt"] = ev.retrieved_at.isoformat()
     d["excerpt"] = ev.excerpt
+    if ev.locator is not None:
+        d["locator"] = ev.locator  # B12: always carried when set
     if ev.source_quality is not None:
         d["sourceQuality"] = {
             "peer_reviewed": ev.source_quality.is_peer_reviewed,

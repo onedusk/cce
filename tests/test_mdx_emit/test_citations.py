@@ -330,3 +330,77 @@ class TestEmitInvariant:
         assert len(unit.citations) == 3
         assert unit.evidence_map == pre_evidence_map
         assert unit.evidence_map[0].evidence_ids == ["ev_a", "ev_b", "ev_c"]
+
+
+# ---------------------------------------------------------------------------
+# Evidence-keyed footnotes with locators (B12, opt-in)
+# ---------------------------------------------------------------------------
+
+
+class TestEvidenceKeyed:
+    pytestmark = pytest.mark.unit
+
+    def _deck(self) -> dict:
+        return {
+            "ev_p3": make_evidence(id="ev_p3", url="doc://deck", locator="page:3"),
+            "ev_p7": make_evidence(id="ev_p7", url="doc://deck", locator="page:7"),
+        }
+
+    def test_same_url_different_locators_get_two_footnotes(self):
+        """B12 acceptance: two citations into one URL with different locators
+        give two footnotes, each carrying its locator."""
+        result = build_citation_index(
+            "A [ev:ev_p3] B [ev:ev_p7] C [ev:ev_p3].",
+            self._deck(),
+            citation_key="evidence",
+        )
+
+        assert result.content == "A [^1] B [^2] C [^1]."
+        assert [(c.index, c.id, c.locator) for c in result.citations] == [
+            (1, "ev_p3", "page:3"),
+            (2, "ev_p7", "page:7"),
+        ]
+
+    def test_prefix_fallback_reuses_the_canonical_id(self):
+        result = build_citation_index(
+            "A [ev:p3] B [ev:ev_p3].", self._deck(), citation_key="evidence"
+        )
+        assert result.content == "A [^1] B [^1]."
+        assert [c.id for c in result.citations] == ["ev_p3"]
+
+    def test_unknown_id_still_renders_placeholder(self):
+        result = build_citation_index(
+            "A [ev:ev_nope].", self._deck(), citation_key="evidence"
+        )
+        assert result.content == "A [^?]."
+
+    def test_url_mode_collapses_and_carries_no_locator(self):
+        result = build_citation_index("A [ev:ev_p3] B [ev:ev_p7].", self._deck())
+        assert result.content == "A [^1] B [^1]."
+        assert [c.locator for c in result.citations] == [None]
+
+    def test_invalid_citation_key_raises(self):
+        with pytest.raises(ValueError, match="citation_key"):
+            build_citation_index("A", {}, citation_key="page")  # type: ignore[arg-type]
+
+    def test_formatter_metadata_carries_locators_only_in_evidence_mode(self):
+        unit = make_content_unit(content="A [ev:ev_p3] B [ev:ev_p7].")
+        deck = self._deck()
+
+        evidence_mode = format_mdx_page(
+            unit, deck, "job", curated_at="t", citation_key="evidence"
+        )
+        url_mode = format_mdx_page(unit, deck, "job", curated_at="t")
+
+        assert '"locator": "page:3"' in evidence_mode
+        assert '"locator": "page:7"' in evidence_mode
+        assert '"locator"' not in url_mode
+
+    def test_client_format_threads_the_option(self):
+        from cce.output.mdx.thnklabs import format_thnklabs_page
+
+        unit = make_content_unit(content="A [ev:ev_p3] B [ev:ev_p7].")
+        page = format_thnklabs_page(
+            unit, self._deck(), topic_slug="t", citation_key="evidence"
+        )
+        assert '"locator": "page:3"' in page and '"locator": "page:7"' in page

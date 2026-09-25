@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime  # used when curated_at is None
+from typing import Literal
 
 from cce.models.content import ContentUnit
 from cce.models.evidence import Evidence
@@ -21,6 +22,7 @@ def format_mdx_page(
     *,
     topic_slug: str = "",
     curated_at: str | None = None,
+    citation_key: Literal["url", "evidence"] = "url",
 ) -> str:
     """Produce a complete page.mdx string for a single ContentUnit.
 
@@ -30,11 +32,14 @@ def format_mdx_page(
         job_id: The curation job ID (included in metadata).
         topic_slug: Topic slug for the metadata.topic field.
         curated_at: ISO 8601 timestamp. If None, uses current UTC time.
+        citation_key: Footnote keying, see ``build_citation_index`` (B12).
 
     Returns:
         A string containing the full MDX file content.
     """
-    result = build_citation_index(unit.content, evidence_by_id)
+    result = build_citation_index(
+        unit.content, evidence_by_id, citation_key=citation_key
+    )
 
     if curated_at is None:
         curated_at = datetime.now(UTC).isoformat()
@@ -88,4 +93,6 @@ def _citation_to_dict(entry: CitationEntry) -> dict:
         d["author"] = " ".join(entry.author.split())
     if entry.published_at is not None:
         d["publishedAt"] = entry.published_at
+    if entry.locator is not None:
+        d["locator"] = entry.locator
     return d

@@ -7,6 +7,7 @@
     "publishedAt": "2024-01-15T00:00:00+00:00",
     "retrievedAt": "2024-03-01T00:00:00+00:00",
     "excerpt": "Adults need seven or more hours of sleep per night.",
+    "locator": "chunk:0",
     "sourceQuality": {
       "peer_reviewed": false,
       "primary_source": true,
@@ -24,7 +25,8 @@
     "author": "A. Author",
     "publishedAt": "2024-01-15T00:00:00+00:00",
     "retrievedAt": "2024-03-01T00:00:00+00:00",
-    "excerpt": "A regular wake time anchors the body clock."
+    "excerpt": "A regular wake time anchors the body clock.",
+    "locator": "chunk:3"
   },
   {
     "id": "ev_bbbb00000001",
@@ -34,6 +36,7 @@
     "publishedAt": "2024-01-15T00:00:00+00:00",
     "retrievedAt": "2024-03-01T00:00:00+00:00",
     "excerpt": "Light exposure in the evening delays melatonin release.",
+    "locator": "chunk:1",
     "sourceQuality": {
       "peer_reviewed": true,
       "primary_source": false,

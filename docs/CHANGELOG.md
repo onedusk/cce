@@ -109,6 +109,20 @@ needs. One commit per item (B5–B13) on `feature/bubble-readiness-phase2`.
   "autopublish".
 - `cce jobs` widens the STATUS column for the new value.
 
+### Added — citation keying by evidence ID, with locators (B12)
+- **`emit-mdx --cite-by evidence`** (library: `citation_key="evidence"` on
+  `build_citation_index`, `format_mdx_page`, `format_thnklabs_page`,
+  `emit_mdx`, `emit_thnklabs`) keys footnotes by evidence ID instead of by
+  source URL, and each entry in `metadata.citations` carries its excerpt's
+  `locator` — for a source that is one long document with page or slide
+  locators, where per-URL keying collapses every citation into one footnote
+  with no page number. **The default stays per-URL** (M02), so every
+  `page.mdx` and `meta.json` is byte-identical (proven by the new golden emit
+  test, committed before this change).
+- **`_evidence.json` entries always carry `locator` when set** (user choice:
+  the plain reading of "always include"). This is the one intended change to
+  default output — an additive key per sidecar entry, in both formats.
+
 ## [Unreleased] — bubble-readiness Phase 1 (current models, citation integrity)
 
 Phase 1 of `docs/internal/bubble-readiness-plan-2026-09-23.md` (local-only):

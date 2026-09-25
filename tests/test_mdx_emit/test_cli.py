@@ -237,3 +237,46 @@ class TestEmitJobStatusGuard:
 
         assert result.exit_code == 0, result.output
         assert any(target.rglob("page.mdx"))
+
+
+class TestCiteBy:
+    """B12: --cite-by evidence keys footnotes by evidence ID with locators."""
+
+    def test_cite_by_evidence_writes_locators(self, tmp_path):
+        db_path = tmp_path / "test.db"
+        target = tmp_path / "content"
+        target.mkdir()
+        job_id, _ = asyncio.run(_seed_store(db_path))
+
+        result = _run_emit(
+            "--job", job_id, "--cite-by", "evidence", db_path=db_path, target=target
+        )
+
+        assert result.exit_code == 0, result.output
+        [page] = list(target.rglob("page.mdx"))
+        assert '"locator": "chunk:0"' in page.read_text()
+
+    def test_default_keying_has_no_locator_in_the_page(self, tmp_path):
+        db_path = tmp_path / "test.db"
+        target = tmp_path / "content"
+        target.mkdir()
+        job_id, _ = asyncio.run(_seed_store(db_path))
+
+        result = _run_emit("--job", job_id, db_path=db_path, target=target)
+
+        assert result.exit_code == 0, result.output
+        [page] = list(target.rglob("page.mdx"))
+        assert '"locator"' not in page.read_text()
+
+    def test_unknown_cite_by_is_rejected(self, tmp_path):
+        db_path = tmp_path / "test.db"
+        target = tmp_path / "content"
+        target.mkdir()
+        job_id, _ = asyncio.run(_seed_store(db_path))
+
+        result = _run_emit(
+            "--job", job_id, "--cite-by", "page", db_path=db_path, target=target
+        )
+
+        assert result.exit_code == 1
+        assert "unknown --cite-by 'page'" in result.output
