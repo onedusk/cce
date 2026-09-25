@@ -546,6 +546,10 @@ class Pipeline:
         )
 
         if all(d == GateDecision.PASS for d in final_decisions):
+            # PASS is a quality signal; the publish policy decides whether a
+            # passed job is done or waits for a person (B8).
+            if self._config.publish_policy == "human":
+                return JobStatus.READY_FOR_APPROVAL
             return JobStatus.COMPLETED
         elif any(d == GateDecision.REVIEW for d in final_decisions):
             return JobStatus.REVIEW_REQUIRED
@@ -1217,7 +1221,12 @@ class Pipeline:
         if progress is not None:
             job.progress = progress
 
-        if status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.REVIEW_REQUIRED):
+        if status in (
+            JobStatus.COMPLETED,
+            JobStatus.FAILED,
+            JobStatus.REVIEW_REQUIRED,
+            JobStatus.READY_FOR_APPROVAL,
+        ):
             job.completed_at = datetime.now(UTC)
 
         if error_msg:

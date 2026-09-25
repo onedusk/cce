@@ -43,6 +43,7 @@ _TERMINAL_STATUSES = {
     JobStatus.FAILED,
     JobStatus.CANCELLED,
     JobStatus.REVIEW_REQUIRED,
+    JobStatus.READY_FOR_APPROVAL,
 }
 
 

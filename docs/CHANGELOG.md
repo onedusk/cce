@@ -89,6 +89,26 @@ needs. One commit per item (B5–B13) on `feature/bubble-readiness-phase2`.
 - No pass/fail flag on `ContentUnit`: the per-path record, keyed by
   `unit_id`, also covers paths with no unit.
 
+### Added — publish policy: PASS is not autopublish (B8)
+- **`EngineConfig.publish_policy`** (`auto` | `human`, `CCE_PUBLISH_POLICY`,
+  YAML `publish_policy`; default `auto`, so thnklabs is unchanged). Under
+  `human`, a job whose every path passes the gate is **`READY_FOR_APPROVAL`**
+  instead of `COMPLETED` — a new `JobStatus`, terminal for `wait()` (cce has
+  no approve transition; approval happens in the consuming product). Open
+  decision 3 resolved: the name `READY_FOR_APPROVAL`, `cce curate` exits
+  **3** for it (0 stays literally "completed"), and `human` stays opt-in
+  (making it the default would stop thnklabs' `emit-mdx --all/--topic`,
+  which emit completed jobs only). Process-wide, not per request, so an API
+  client can't downgrade an operator's `human` policy.
+- **`emit-mdx --job` refuses a job whose status isn't `completed`** (review,
+  ready-for-approval, failed) unless `--force`, naming the status; `--dry-run`
+  is refused too. Before, it emitted REVIEW_REQUIRED drafts silently.
+- **`QualityGateConfig.autopublish_threshold` → `pass_threshold`**; the old key
+  is still accepted (an unaliased rename would silently drop an operator's
+  YAML threshold and reset the profile). Gate wording no longer calls PASS
+  "autopublish".
+- `cce jobs` widens the STATUS column for the new value.
+
 ## [Unreleased] — bubble-readiness Phase 1 (current models, citation integrity)
 
 Phase 1 of `docs/internal/bubble-readiness-plan-2026-09-23.md` (local-only):

@@ -1,7 +1,8 @@
 """Quality gate.
 
 Consumes the verifier's VerificationReport and makes a routing decision:
-pass (autopublish), fail (return to writer with feedback), or review
+pass (a quality signal — whether a passed job publishes is the publish
+policy's call, B8), fail (return to writer with feedback), or review
 (below threshold, needs human eyes).
 
 The gate's thresholds are driven by the risk profile in EngineConfig.
@@ -74,7 +75,7 @@ class QualityGate:
 
         Decision logic:
         1. If every inline citation marker resolves to ``evidence`` AND
-           confidence >= autopublish_threshold AND citation density is met -> PASS
+           confidence >= pass_threshold AND citation density is met -> PASS
         2. If we haven't hit max iterations AND there are fixable issues
            (including unresolved markers) -> FAIL (rewrite)
         3. Otherwise -> REVIEW (needs human)
@@ -164,7 +165,7 @@ class QualityGate:
         # Decision logic
         if (
             not unresolved
-            and confidence >= self._config.autopublish_threshold
+            and confidence >= self._config.pass_threshold
             and citation_ok
             and report.leakage == 0
         ):
@@ -172,7 +173,7 @@ class QualityGate:
             logger.info(
                 "Gate PASS: confidence=%.3f (threshold=%.2f), iteration=%d",
                 confidence,
-                self._config.autopublish_threshold,
+                self._config.pass_threshold,
                 iteration,
             )
         elif iteration < self._config.max_writer_iterations and (

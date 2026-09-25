@@ -132,3 +132,9 @@ async def test_get_package_not_found(client: httpx.AsyncClient):
 async def test_retry_nonexistent_returns_404(client: httpx.AsyncClient):
     resp = await client.post("/v1/curate/jobs/nonexistent/retry")
     assert resp.status_code == 404
+
+
+async def test_list_jobs_filters_ready_for_approval(client):
+    """B8: the new status is a valid list filter."""
+    resp = await client.get("/v1/curate/jobs?status=ready_for_approval")
+    assert resp.status_code == 200

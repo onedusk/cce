@@ -22,6 +22,10 @@ class JobStatus(StrEnum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     REVIEW_REQUIRED = "review_required"
+    # Every path passed the gate, but the publish policy is "human": a person
+    # approves before anything ships (B8). Terminal for cce, which has no
+    # approve transition — approval happens in the consuming product.
+    READY_FOR_APPROVAL = "ready_for_approval"
 
 
 class JobStage(StrEnum):

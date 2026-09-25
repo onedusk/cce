@@ -25,8 +25,11 @@ pytestmark = pytest.mark.integration
 runner = CliRunner()
 
 
-async def _seed_store(db_path: Path) -> tuple[str, str]:
-    """Seed a job store with a completed job + package. Returns (job_id, topic)."""
+async def _seed_store(
+    db_path: Path, status: JobStatus = JobStatus.COMPLETED
+) -> tuple[str, str]:
+    """Seed a job store with a job (completed by default) + package.
+    Returns (job_id, topic)."""
     store = JobStore(db_path=db_path)
     await store.connect()
     try:
@@ -37,7 +40,7 @@ async def _seed_store(db_path: Path) -> tuple[str, str]:
             citations=[Citation(evidence_id="ev_cli_1", url="https://example.com/1")],
         )
         job = make_job(
-            status=JobStatus.COMPLETED,
+            status=status,
             request=make_curation_request(
                 topic="cli test topic",
                 paths=["learn"],
@@ -192,3 +195,45 @@ class TestEmitMdxCli:
         assert result.exit_code == 0, result.output
         assert "citations" in result.output
         assert "KB" in result.output
+
+
+class TestEmitJobStatusGuard:
+    """B8: emit-mdx --job refuses a job that isn't completed unless --force."""
+
+    @pytest.mark.parametrize(
+        "status", [JobStatus.REVIEW_REQUIRED, JobStatus.READY_FOR_APPROVAL]
+    )
+    def test_non_completed_job_is_refused(self, tmp_path, status):
+        db_path = tmp_path / "test.db"
+        target = tmp_path / "content"
+        target.mkdir()
+        job_id, _ = asyncio.run(_seed_store(db_path, status))
+
+        result = _run_emit("--job", job_id, db_path=db_path, target=target)
+
+        assert result.exit_code == 1
+        assert f"job status '{status.value}'" in result.output
+        assert "--force" in result.output
+        assert list(target.iterdir()) == []
+
+    def test_dry_run_is_refused_too(self, tmp_path):
+        db_path = tmp_path / "test.db"
+        target = tmp_path / "content"
+        target.mkdir()
+        job_id, _ = asyncio.run(_seed_store(db_path, JobStatus.REVIEW_REQUIRED))
+
+        result = _run_emit("--job", job_id, "--dry-run", db_path=db_path, target=target)
+
+        assert result.exit_code == 1
+        assert "review_required" in result.output
+
+    def test_force_emits_a_review_job(self, tmp_path):
+        db_path = tmp_path / "test.db"
+        target = tmp_path / "content"
+        target.mkdir()
+        job_id, _ = asyncio.run(_seed_store(db_path, JobStatus.REVIEW_REQUIRED))
+
+        result = _run_emit("--job", job_id, "--force", db_path=db_path, target=target)
+
+        assert result.exit_code == 0, result.output
+        assert any(target.rglob("page.mdx"))

@@ -204,6 +204,47 @@ class TestInterpretTerminalDecisions:
         assert status == JobStatus.COMPLETED
 
 
+class TestPublishPolicy:
+    """B8: under publish_policy=human no job reaches COMPLETED by itself."""
+
+    def _interpret(self, by_path, policy: str) -> JobStatus:
+        pipeline = Pipeline(
+            config=make_engine_config(publish_policy=policy),
+            crawl_adapter=MockCrawlAdapter(),
+            evidence_store=None,  # type: ignore[arg-type]
+            llm=MockLLMProvider(),
+        )
+        flat = [gr for group in by_path.values() for gr in group]
+        return pipeline._interpret_terminal_decisions(flat, list(by_path), by_path)
+
+    @pytest.mark.parametrize(
+        "decisions",
+        [
+            combo
+            for n in (1, 2, 3)
+            for combo in __import__("itertools").product(
+                [GateDecision.PASS, GateDecision.FAIL, GateDecision.REVIEW, None],
+                repeat=n,
+            )
+        ],
+    )
+    def test_human_policy_never_completes(self, decisions):
+        by_path = {
+            f"p{i}": ([] if d is None else [_gate_result(d)])
+            for i, d in enumerate(decisions)
+        }
+        status = self._interpret(by_path, "human")
+        assert status != JobStatus.COMPLETED
+        if all(d == GateDecision.PASS for d in decisions):
+            assert status == JobStatus.READY_FOR_APPROVAL
+        else:
+            assert status == JobStatus.REVIEW_REQUIRED
+
+    def test_auto_policy_still_completes_on_all_pass(self):
+        status = self._interpret({"blog": [_gate_result(GateDecision.PASS)]}, "auto")
+        assert status == JobStatus.COMPLETED
+
+
 # ---------------------------------------------------------------------------
 # _score_draft — humanization gating branches
 # ---------------------------------------------------------------------------

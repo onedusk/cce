@@ -32,7 +32,9 @@ The engine config file is *opt-in* — nothing is loaded implicitly. Pass it:
 
 Top-level YAML sections mirror `EngineConfig`: `llm`, `writer`, `verifier`,
 `evidence_store`, `crawl`, `embedding`, `quality_gate`, `api`, `humanization`,
-`engine_version`. `writer.temperature` (default `0.2`) and
+`publish_policy`, `max_tokens_per_job`, `engine_version`. Quality-gate
+profiles take `pass_threshold` (renamed from `autopublish_threshold`, which is
+still accepted). `writer.temperature` (default `0.2`) and
 `verifier.temperature` (default `0.1`) are the per-agent sampling
 temperatures; like `llm.temperature` they are not sent to models that reject
 sampling parameters (Opus 4.7 and later, Sonnet 5, Fable 5).
@@ -215,6 +217,12 @@ want a copy of the old shape).
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `CCE_MAX_TOKENS_PER_JOB` | unset | Hard ceiling on accumulated LLM tokens (input + output, all paths and iterations) per job. On breach the job stops iterating and routes to `REVIEW_REQUIRED`, keeping partial drafts (ADR-003, audit-2026-06-09). Unset = unlimited. |
+
+### Publish policy
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `CCE_PUBLISH_POLICY` | `auto` | What a gate PASS on every path means (YAML `publish_policy`). `auto`: the job is `COMPLETED`. `human`: it is `READY_FOR_APPROVAL` — PASS is a quality signal and a person approves every output; `cce curate` exits 3, and `emit-mdx --job` needs `--force`. Process-wide, not per request |
 
 ### Humanization
 

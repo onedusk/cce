@@ -55,6 +55,7 @@ def test_job_status_enum_values():
     assert JobStatus.FAILED.value == "failed"
     assert JobStatus.CANCELLED.value == "cancelled"
     assert JobStatus.REVIEW_REQUIRED.value == "review_required"
+    assert JobStatus.READY_FOR_APPROVAL.value == "ready_for_approval"
 
 
 def test_curation_request_defaults():

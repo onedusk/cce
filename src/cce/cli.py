@@ -300,6 +300,11 @@ def emit_mdx_command(
         "draft",
         help="ArticleMetadata status for --format thnklabs (e.g. draft, published)",
     ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="With --job: emit even if the job status is not 'completed'",
+    ),
 ) -> None:
     """Emit MDX files from a completed curation job."""
     if sum([bool(job), bool(topic), all_jobs]) > 1:
@@ -356,6 +361,16 @@ def emit_mdx_command(
                 job_obj = await store.get_job(job)
                 if job_obj is None:
                     typer.echo(f"Error: job record not found for {job}", err=True)
+                    raise typer.Exit(1)
+                # B8: review / ready-for-approval jobs have packages too; only a
+                # completed one emits without an explicit override.
+                if job_obj.status != JobStatus.COMPLETED and not force:
+                    typer.echo(
+                        f"Error: job {job} has job status "
+                        f"'{job_obj.status.value}', not 'completed'; pass --force "
+                        "to emit it anyway",
+                        err=True,
+                    )
                     raise typer.Exit(1)
                 return [(package, None, job_obj.request.topic)]
             else:
@@ -463,7 +478,9 @@ def curate(
 ) -> None:
     """Submit a single-topic job via the embedded engine and wait.
 
-    Exits 0 on COMPLETED, 2 on REVIEW_REQUIRED, 1 on FAILED/ConfigError.
+    Exits 0 on COMPLETED, 2 on REVIEW_REQUIRED, 3 on READY_FOR_APPROVAL
+    (publish_policy: human — passed, awaiting a person), 1 on
+    FAILED/ConfigError.
     """
     from cce.config.loader import ConfigError
     from cce.engine import CurationEngine
@@ -511,7 +528,8 @@ def curate(
 
     if final_status == JobStatus.COMPLETED:
         return
-    raise typer.Exit(2 if final_status == JobStatus.REVIEW_REQUIRED else 1)
+    exit_codes = {JobStatus.REVIEW_REQUIRED: 2, JobStatus.READY_FOR_APPROVAL: 3}
+    raise typer.Exit(exit_codes.get(final_status, 1))
 
 
 @app.command()
@@ -579,13 +597,13 @@ def jobs(
             if not listed:
                 typer.echo("no jobs")
                 return
-            typer.echo(f"{'ID':<18} {'STATUS':<17} {'TOPIC':<40} CREATED")
+            typer.echo(f"{'ID':<18} {'STATUS':<18} {'TOPIC':<40} CREATED")
             for j in listed:
                 topic = j.request.topic
                 if len(topic) > 38:
                     topic = topic[:37] + "…"
                 typer.echo(
-                    f"{j.id:<18} {j.status.value:<17} {topic:<40} "
+                    f"{j.id:<18} {j.status.value:<18} {topic:<40} "
                     f"{j.created_at.isoformat()}"
                 )
         finally:

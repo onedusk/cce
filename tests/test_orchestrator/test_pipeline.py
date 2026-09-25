@@ -542,3 +542,23 @@ async def test_pipeline_wrongly_typed_writer_reply_does_not_leak(
     assert isinstance(result.error, UnparseableResponseError)
     assert sentinel not in result.job.model_dump_json()
     assert sentinel not in caplog.text
+
+
+@pytest.mark.integration
+async def test_human_publish_policy_passed_run_awaits_approval(sqlite_store):
+    """B8: a run that passes every gate under publish_policy=human stops at
+    READY_FOR_APPROVAL (terminal, package kept), never COMPLETED."""
+    pipeline = Pipeline(
+        config=make_engine_config(publish_policy="human"),
+        crawl_adapter=_make_adapter(),
+        evidence_store=sqlite_store,
+        llm=_llm(_writer_json(), _verifier_json(supported=10, total=10, gaps=0)),
+    )
+
+    result = await pipeline.run(make_curation_request(), make_source_policy())
+
+    assert result.job.status == JobStatus.READY_FOR_APPROVAL
+    assert result.job.completed_at is not None
+    assert result.package is not None
+    assert result.package.verification[0].decision == "pass"
+    assert result.succeeded is False

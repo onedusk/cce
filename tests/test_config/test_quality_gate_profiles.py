@@ -30,21 +30,21 @@ def test_medium_defaults_match_canonical():
     profiles = default_quality_gate_profiles()
     assert profiles["medium"].max_writer_iterations == 3
     assert profiles["medium"].min_citations_per_paragraph == 1
-    assert profiles["medium"].autopublish_threshold == 0.85
+    assert profiles["medium"].pass_threshold == 0.85
 
 
 def test_high_defaults_match_canonical():
     profiles = default_quality_gate_profiles()
     assert profiles["high"].max_writer_iterations == 4
     assert profiles["high"].min_citations_per_paragraph == 2
-    assert profiles["high"].autopublish_threshold == 0.95
+    assert profiles["high"].pass_threshold == 0.95
 
 
 def test_low_defaults_match_canonical():
     profiles = default_quality_gate_profiles()
     assert profiles["low"].max_writer_iterations == 2
     assert profiles["low"].min_citations_per_paragraph == 1
-    assert profiles["low"].autopublish_threshold == 0.7
+    assert profiles["low"].pass_threshold == 0.7
 
 
 def test_loader_with_empty_file_returns_canonical_defaults():
@@ -61,17 +61,17 @@ def test_loader_with_empty_file_returns_canonical_defaults():
 def test_loader_yaml_override_replaces_profile():
     result = _load_gate_config({"high": {"autopublish_threshold": 0.99}})
     # Explicit override: the overridden profile takes the new value.
-    assert result["high"].autopublish_threshold == 0.99
+    assert result["high"].pass_threshold == 0.99
     # Non-overridden profiles stay at the canonical values.
-    assert result["low"].autopublish_threshold == 0.7
-    assert result["medium"].autopublish_threshold == 0.85
+    assert result["low"].pass_threshold == 0.7
+    assert result["medium"].pass_threshold == 0.85
 
 
 def test_loader_ignores_non_dict_yaml_entries():
     """A malformed profile value (e.g. a list or scalar) is silently skipped."""
     result = _load_gate_config({"high": "not a dict"})  # type: ignore[arg-type]
     # High stays at canonical defaults.
-    assert result["high"].autopublish_threshold == 0.95
+    assert result["high"].pass_threshold == 0.95
 
 
 def test_single_source_propagates_to_engine_config_default():

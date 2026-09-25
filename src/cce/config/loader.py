@@ -106,6 +106,7 @@ def load_config(config_path: str | Path | None = None) -> EngineConfig:
         CCE_CRAWL_RATE_LIMIT    -> crawl.rate_limit_rps
         CCE_CRAWL_TIMEOUT       -> crawl.timeout_seconds
         CCE_MAX_TOKENS_PER_JOB  -> max_tokens_per_job
+        CCE_PUBLISH_POLICY      -> publish_policy
     """
     file_data: dict[str, Any] = {}
     if config_path:
@@ -120,6 +121,7 @@ def load_config(config_path: str | Path | None = None) -> EngineConfig:
             int,
             os.getenv("CCE_MAX_TOKENS_PER_JOB", file_data.get("max_tokens_per_job")),
         ),
+        publish_policy=os.getenv("CCE_PUBLISH_POLICY", file_data.get("publish_policy")),
     )
     return EngineConfig(
         llm=_load_llm_config(file_data.get("llm", {})),

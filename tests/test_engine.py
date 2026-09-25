@@ -31,6 +31,7 @@ async def _make_engine(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     llm_responses: list[str] | None = None,
+    extra_yaml: str = "",
 ) -> CurationEngine:
     """Build a CurationEngine through the real ``embedded()`` factory.
 
@@ -51,7 +52,7 @@ async def _make_engine(
         "api:\n"
         "  require_auth: false\n"
         "  max_concurrent_jobs: 2\n"
-        "engine_version: 0.1.0-test\n"
+        "engine_version: 0.1.0-test\n" + extra_yaml
     )
     policies_dir = tmp_path / "policies"
     policies_dir.mkdir(exist_ok=True)
@@ -345,5 +346,23 @@ async def test_embedded_review_package_carries_verification(
         assert "no citations" in record.feedback
         assert record.writer_gaps == ["gap"]
         assert [c.assessment for c in record.report.claims].count("uncited") == 2
+    finally:
+        await engine.close()
+
+
+async def test_embedded_wait_returns_ready_for_approval(tmp_path: Path, monkeypatch):
+    """B8: READY_FOR_APPROVAL is terminal for wait() (else it would time out)."""
+    engine = await _make_engine(
+        tmp_path,
+        monkeypatch,
+        llm_responses=[writer_json(), verifier_json(supported=10, total=10, gaps=0)],
+        extra_yaml="publish_policy: human\n",
+    )
+    try:
+        handle = await engine.curate(
+            CurationRequest(topic="test topic", paths=["blog"], policy_id="test-policy")
+        )
+        job = await handle.wait(timeout=10)
+        assert job.status == JobStatus.READY_FOR_APPROVAL
     finally:
         await engine.close()

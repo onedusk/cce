@@ -192,15 +192,15 @@ def test_load_gate_config_defaults(monkeypatch):
     config = load_config()
     gate = config.quality_gate
 
-    assert gate["low"].autopublish_threshold == 0.7
+    assert gate["low"].pass_threshold == 0.7
     assert gate["low"].min_citations_per_paragraph == 1
     assert gate["low"].max_writer_iterations == 2
 
-    assert gate["medium"].autopublish_threshold == 0.85
+    assert gate["medium"].pass_threshold == 0.85
     assert gate["medium"].min_citations_per_paragraph == 1
     assert gate["medium"].max_writer_iterations == 3
 
-    assert gate["high"].autopublish_threshold == 0.95
+    assert gate["high"].pass_threshold == 0.95
     assert gate["high"].min_citations_per_paragraph == 2
     assert gate["high"].max_writer_iterations == 4
 
@@ -214,7 +214,7 @@ def test_load_gate_config_custom_profile(monkeypatch, tmp_path):
     config = load_config(config_file)
 
     assert "ultra" in config.quality_gate
-    assert config.quality_gate["ultra"].autopublish_threshold == 0.99
+    assert config.quality_gate["ultra"].pass_threshold == 0.99
     # Defaults should still be present
     assert "low" in config.quality_gate
     assert "medium" in config.quality_gate
@@ -360,3 +360,37 @@ def test_load_api_config_from_yaml(monkeypatch, tmp_path):
 
     assert config.api.port == 9999
     assert config.api.require_auth is False
+
+
+def test_publish_policy_loads_from_yaml_and_env(monkeypatch, tmp_path):
+    """B8: default auto; YAML human; CCE_PUBLISH_POLICY overrides; invalid rejected."""
+    _clear_env(monkeypatch)
+    monkeypatch.delenv("CCE_PUBLISH_POLICY", raising=False)
+    assert load_config().publish_policy == "auto"
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump({"publish_policy": "human"}))
+    assert load_config(config_file).publish_policy == "human"
+
+    monkeypatch.setenv("CCE_PUBLISH_POLICY", "auto")
+    assert load_config(config_file).publish_policy == "auto"
+
+    monkeypatch.setenv("CCE_PUBLISH_POLICY", "autopublish")
+    with pytest.raises(ValueError):
+        load_config()
+
+
+def test_old_autopublish_threshold_key_still_loads(monkeypatch, tmp_path):
+    """B8 rename: an operator YAML with the old key keeps its threshold (a
+    silent drop would reset the profile to the default)."""
+    from cce.config.types import QualityGateConfig
+
+    assert QualityGateConfig(autopublish_threshold=0.7).pass_threshold == 0.7
+    assert "pass_threshold" in QualityGateConfig().model_dump()
+
+    _clear_env(monkeypatch)
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        yaml.dump({"quality_gate": {"high": {"autopublish_threshold": 0.99}}})
+    )
+    assert load_config(config_file).quality_gate["high"].pass_threshold == 0.99
