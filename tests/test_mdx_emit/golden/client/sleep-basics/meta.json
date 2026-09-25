@@ -1,0 +1,16 @@
+{
+  "scores": {
+    "confidence": 0.925,
+    "coverage": 0.875,
+    "sourceDiversity": 0.375
+  },
+  "lastCuratedAt": "2026-09-01T12:00:00+00:00",
+  "jobId": "job_golden",
+  "policyId": "peer-reviewed",
+  "engineVersion": "0.1.0-golden",
+  "evidenceGaps": {
+    "learn": [
+      "no data on napping"
+    ]
+  }
+}
