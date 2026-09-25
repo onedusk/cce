@@ -66,7 +66,7 @@ def _open_evidence(ev: Evidence) -> str:
 
 
 # Guidance for pinned context (B11), in the block rather than the system
-# prompts so a run without context sends exactly the prompts it did before.
+# prompts, so a run without context gets exactly the block it did before.
 _CONTEXT_GUIDANCE = {
     "writer": (
         "Settled statements supplied with the request: treat them as "
