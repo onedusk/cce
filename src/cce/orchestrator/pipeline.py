@@ -28,6 +28,7 @@ from cce.models.package import PackageLineage, PublishPackage
 from cce.models.paths import PathConfig
 from cce.models.request import CurationRequest
 from cce.models.style import StyleScores
+from cce.models.verification import PathVerification
 from cce.policy.types import SourcePolicy
 from cce.synthesis.editor import Editor
 from cce.synthesis.implied_claims import ImpliedClaimAnnotation, ImpliedClaimChecker
@@ -182,6 +183,52 @@ def _terminal_decisions(
     return decisions
 
 
+def _path_verifications(
+    paths: list[str],
+    units: list[ContentUnit],
+    gate_results_by_path: Mapping[str, list[GateResult]],
+    writer_gaps_by_path: Mapping[str, list[str]],
+) -> list[PathVerification]:
+    """One persisted verification record per requested path (B7).
+
+    Uses the same terminal rule as ``_terminal_decisions``: the gate result
+    with the highest iteration. A path with no gate result (empty draft, or
+    stopped before its first write) records a terminal "fail" with no report.
+    Built after the loop, so a budget note appended to the terminal result's
+    feedback is captured.
+    """
+    unit_ids = {u.path: u.id for u in units}
+    records: list[PathVerification] = []
+    for path in paths:
+        group = gate_results_by_path.get(path) or []
+        gaps = list(writer_gaps_by_path.get(path, []))
+        if not group:
+            records.append(
+                PathVerification(
+                    path=path,
+                    unit_id=unit_ids.get(path),
+                    decision=GateDecision.FAIL.value,
+                    writer_gaps=gaps,
+                )
+            )
+            continue
+        terminal = max(group, key=lambda gr: gr.iteration)
+        records.append(
+            PathVerification(
+                path=path,
+                unit_id=unit_ids.get(path),
+                decision=terminal.decision.value,
+                iteration=terminal.iteration,
+                confidence=terminal.confidence,
+                coverage=terminal.coverage,
+                feedback=terminal.feedback,
+                report=terminal.report.to_record(),
+                writer_gaps=gaps,
+            )
+        )
+    return records
+
+
 def _build_sibling_digest(units: list[ContentUnit]) -> str:
     """Compact digest of already-written sibling drafts, fed to the next path's writer.
 
@@ -314,6 +361,7 @@ class Pipeline:
                 all_units,
                 all_gate_results,
                 gate_results_by_path,
+                writer_gaps_by_path,
             ) = await self._run_all_paths(
                 request=request,
                 evidence=evidence,
@@ -334,6 +382,12 @@ class Pipeline:
                 request=request,
                 run_id=run_id,
                 units=all_units,
+                verification=_path_verifications(
+                    request.paths,
+                    all_units,
+                    gate_results_by_path,
+                    writer_gaps_by_path,
+                ),
                 evidence=evidence,
                 token_usage=token_usage,
             )
@@ -508,6 +562,7 @@ class Pipeline:
         units: list[ContentUnit],
         evidence: list[Evidence],
         token_usage: dict[str, int],
+        verification: list[PathVerification],
     ) -> PublishPackage:
         """Assemble the publish package and append the PUBLISH StageRecord."""
         job = self._update_job(job, JobStatus.RUNNING, JobStage.PUBLISH)
@@ -538,6 +593,7 @@ class Pipeline:
                 engine_version=self._config.engine_version,
                 stages=job.stages,
             ),
+            verification=verification,
         )
 
         job.stages.append(
@@ -563,7 +619,7 @@ class Pipeline:
         ev_lookup: dict[str, Evidence],
         job_token_usage: Mapping[str, int] | None = None,
         sibling_context: str | None = None,
-    ) -> tuple[ContentUnit | None, list[GateResult], dict[str, int]]:
+    ) -> tuple[ContentUnit | None, list[GateResult], dict[str, int], list[str]]:
         """Run one path's writer/verifier loop with a local token dict and child logger.
 
         ``sibling_context`` (M03) is threaded straight through to the writer so
@@ -580,7 +636,7 @@ class Pipeline:
             path_logger = parent_logger.getChild(path)
 
         path_tokens = _zero_tokens()
-        unit, gate_results = await self._write_verify_loop(
+        unit, gate_results, writer_gaps = await self._write_verify_loop(
             request=request,
             evidence=evidence,
             path=path,
@@ -593,7 +649,7 @@ class Pipeline:
             job_token_usage=job_token_usage,
             sibling_context=sibling_context,
         )
-        return unit, gate_results, path_tokens
+        return unit, gate_results, path_tokens, writer_gaps
 
     async def _run_all_paths(
         self,
@@ -606,7 +662,12 @@ class Pipeline:
         job_logger: logging.Logger | logging.LoggerAdapter,
         token_usage: dict[str, int],
         ev_lookup: dict[str, Evidence],
-    ) -> tuple[list[ContentUnit], list[GateResult], dict[str, list[GateResult]]]:
+    ) -> tuple[
+        list[ContentUnit],
+        list[GateResult],
+        dict[str, list[GateResult]],
+        dict[str, list[str]],
+    ]:
         """Run per-path write-verify loops SEQUENTIALLY so each path sees its
         siblings (M03, ADR-003).
 
@@ -636,13 +697,14 @@ class Pipeline:
 
         all_units: list[ContentUnit] = []
         all_gate_results: list[GateResult] = []
+        writer_gaps_by_path: dict[str, list[str]] = {}
         gate_results_by_path: dict[str, list[GateResult]] = {}
 
         for completed, path in enumerate(request.paths, start=1):
             # Build the sibling digest from prior paths' drafts (None for the
             # first path) and thread it into this path's writer prompt.
             sibling_context = _build_sibling_digest(all_units) if all_units else None
-            unit, gate_results, path_tokens = await self._run_one_path(
+            unit, gate_results, path_tokens, writer_gaps = await self._run_one_path(
                 request=request,
                 evidence=evidence,
                 path=path,
@@ -656,6 +718,7 @@ class Pipeline:
             )
             all_gate_results.extend(gate_results)
             gate_results_by_path[path] = gate_results
+            writer_gaps_by_path[path] = writer_gaps
             if unit is not None:
                 all_units.append(unit)
             _merge_tokens(token_usage, path_tokens)
@@ -669,7 +732,7 @@ class Pipeline:
                 progress=JobProgress(completed=completed, total=total),
             )
 
-        return all_units, all_gate_results, gate_results_by_path
+        return all_units, all_gate_results, gate_results_by_path, writer_gaps_by_path
 
     async def _write_verify_loop(
         self,
@@ -684,7 +747,7 @@ class Pipeline:
         ev_lookup: dict[str, Evidence] | None = None,
         job_token_usage: Mapping[str, int] | None = None,
         sibling_context: str | None = None,
-    ) -> tuple[ContentUnit | None, list[GateResult]]:
+    ) -> tuple[ContentUnit | None, list[GateResult], list[str]]:
         """Run the writer-verifier loop for a single output path.
 
         Scoring, editing, and verification live in the phase helpers below
@@ -703,6 +766,8 @@ class Pipeline:
         _tokens = token_usage  # may be None if called outside full pipeline
         gate_results: list[GateResult] = []
         feedback: str | None = None
+        # Gaps declared by the write that produced the surviving unit (B7).
+        writer_gaps: list[str] = []
         unit: ContentUnit | None = None
 
         gate_config = gate._config
@@ -807,12 +872,15 @@ class Pipeline:
 
             if not writer_output.has_content:
                 _log.warning("Writer produced no content for path '%s'", path)
+                if unit is None:
+                    writer_gaps = list(writer_output.gaps)
                 break
 
             # `has_content=True` implies the writer produced a non-None unit
             # with non-empty content. Narrow the type for pyright.
             assert writer_output.unit is not None
             unit = writer_output.unit
+            writer_gaps = list(writer_output.gaps)
 
             self._record_write_stage(job, path, iteration, write_start, writer_output)
 
@@ -858,7 +926,7 @@ class Pipeline:
 
             if gate_result.should_publish:
                 _log.info("Path '%s': PASSED at iteration %d", path, iteration)
-                return unit, gate_results
+                return unit, gate_results, writer_gaps
 
             if gate_result.should_rewrite:
                 feedback = gate_result.feedback
@@ -869,11 +937,11 @@ class Pipeline:
                 _log.info(
                     "Path '%s': routed to human review at iteration %d", path, iteration
                 )
-                return unit, gate_results
+                return unit, gate_results, writer_gaps
 
         # Exhausted iterations without passing
         _log.info("Path '%s': exhausted %d iterations", path, max_iters)
-        return unit, gate_results
+        return unit, gate_results, writer_gaps
 
     # --- _write_verify_loop phase helpers (M07 — bodies lifted verbatim per
     # ADR-005; finding 1.2). Token accumulation threads the per-path dict

@@ -148,3 +148,55 @@ def test_pre_m07_stored_package_json_still_parses():
 
     assert package.units[0].draft_source == "writer"
     assert package.lineage.stages[0].path is None
+
+
+# ---------------------------------------------------------------------------
+# Verification records on the package (B7)
+# ---------------------------------------------------------------------------
+
+
+def _verified_package() -> PublishPackage:
+    from cce.models.verification import (
+        ClaimVerdict,
+        PathVerification,
+        SourceContradiction,
+        VerificationRecord,
+    )
+
+    record = PathVerification(
+        path="blog",
+        unit_id="cu_1",
+        decision="review",
+        iteration=3,
+        confidence=0.6,
+        coverage=0.6,
+        feedback="2 factual claim(s) have no citations.",
+        report=VerificationRecord(
+            claims=[ClaimVerdict(claim="c", assessment="uncited", explanation="e")],
+            total_claims=1,
+            uncited=1,
+            contradictions=[SourceContradiction(topic="t", evidence_ids=["ev_1"])],
+        ),
+        writer_gaps=["gap"],
+    )
+    return make_publish_package().model_copy(update={"verification": [record]})
+
+
+def test_package_verification_round_trips_through_json():
+    package = _verified_package()
+    assert PublishPackage.model_validate_json(package.model_dump_json()) == package
+
+
+def test_pre_b7_stored_package_parses_with_empty_verification():
+    package_dict = make_publish_package().model_dump(mode="json")
+    package_dict.pop("verification")
+
+    assert PublishPackage.model_validate(package_dict).verification == []
+
+
+def test_verification_records_are_frozen():
+    record = _verified_package().verification[0]
+    with pytest.raises(ValidationError):
+        record.decision = "pass"  # type: ignore[misc]
+    with pytest.raises(ValidationError):
+        record.report.claims[0].assessment = "supported"  # type: ignore[misc,union-attr]

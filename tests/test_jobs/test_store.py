@@ -207,3 +207,27 @@ async def test_delete_api_key(job_store: JobStore):
 
 async def test_delete_api_key_nonexistent(job_store: JobStore):
     assert await job_store.delete_api_key("nope") is False
+
+
+async def test_package_verification_survives_the_store(job_store: JobStore):
+    """B7: per-path verification records persist with the package."""
+    from cce.models.verification import PathVerification, VerificationRecord
+
+    pkg = make_publish_package(job_id="job_ver").model_copy(
+        update={
+            "verification": [
+                PathVerification(
+                    path="blog",
+                    decision="review",
+                    feedback="needs a citation",
+                    report=VerificationRecord(uncited=1, total_claims=1),
+                )
+            ]
+        }
+    )
+    await job_store.create_job(make_job(id="job_ver"))
+    await job_store.store_package("job_ver", pkg)
+
+    loaded = await job_store.get_package("job_ver")
+    assert loaded is not None
+    assert loaded.verification == pkg.verification

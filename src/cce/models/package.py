@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from cce.models.content import ContentScores, ContentUnit
 from cce.models.evidence import Evidence
 from cce.models.job import StageRecord
+from cce.models.verification import PathVerification
 
 
 class PackageLineage(BaseModel):
@@ -39,5 +40,13 @@ class PublishPackage(BaseModel):
     )
     scores: ContentScores = Field(description="Aggregate scores across all units")
     lineage: PackageLineage
+    verification: list[PathVerification] = Field(
+        default_factory=list,
+        description=(
+            "Per requested path: the terminal gate decision and feedback, the "
+            "verifier's per-claim verdicts and the writer's gaps (B7). Empty "
+            "on packages stored before B7."
+        ),
+    )
 
     model_config = {"frozen": True}

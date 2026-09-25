@@ -30,6 +30,11 @@ from cce.llm.base import (
 from cce.llm.retry import with_llm_retry
 from cce.models.content import ContentUnit
 from cce.models.evidence import Evidence
+from cce.models.verification import (
+    ClaimVerdict,
+    SourceContradiction,
+    VerificationRecord,
+)
 from cce.parsing import extract_json
 
 logger = logging.getLogger(__name__)
@@ -246,6 +251,45 @@ class VerificationReport:
                 self.total_claims,
             )
         return min(1.0, ratio)
+
+    def to_record(self) -> VerificationRecord:
+        """Frozen snapshot for the package (B7), without raw reply or usage.
+
+        Coerces rather than trusts field types: the shape check only
+        guarantees objects and integer counts, and a strict model would raise
+        a ValidationError whose message quotes the reply into the job record.
+        """
+        return VerificationRecord(
+            claims=[
+                ClaimVerdict(
+                    claim=str(c.claim),
+                    citation_ids=_str_list(c.citation_ids),
+                    assessment=str(c.assessment),
+                    explanation=str(c.explanation),
+                    suggestion=str(c.suggestion),
+                )
+                for c in self.claims
+            ],
+            total_claims=int(self.total_claims),
+            supported=int(self.supported),
+            unsupported=int(self.unsupported),
+            uncited=int(self.uncited),
+            leakage=int(self.leakage),
+            conflicts=int(self.conflicts),
+            gaps_acknowledged=int(self.gaps_acknowledged),
+            contradictions=[
+                SourceContradiction(
+                    topic=str(c.topic), evidence_ids=_str_list(c.evidence_ids)
+                )
+                for c in self.contradictions
+            ],
+            overall_feedback=str(self.overall_feedback),
+            confidence_score=float(self.confidence_score),
+        )
+
+
+def _str_list(value: object) -> list[str]:
+    return [str(v) for v in value] if isinstance(value, list) else []
 
 
 _SUMMARY_COUNTS = (

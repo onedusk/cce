@@ -354,3 +354,43 @@ async def test_every_cited_id_resolves_through_the_evidence_endpoint(tmp_path: P
 
     await job_store.close()
     await evidence_store.close()
+
+
+async def test_review_package_verification_over_the_api(tmp_path: Path):
+    """B7 round trip, API: GET /jobs/{id}/package carries the verification
+    records of a REVIEW job."""
+    from tests.test_orchestrator.test_pipeline_verification_records import (
+        uncited_report,
+        writer_reply,
+    )
+
+    app, job_store, evidence_store = await _make_lifecycle_app(
+        tmp_path, llm_responses=[writer_reply(), uncited_report()] * 3
+    )
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/v1/curate/jobs",
+                json={
+                    "topic": "test topic",
+                    "paths": ["blog"],
+                    "policy_id": "test-policy",
+                },
+            )
+            job_id = resp.json()["data"]["id"]
+            data = await wait_for_job_status(
+                client, job_id, {"completed", "failed", "review_required"}
+            )
+            assert data["status"] == "review_required"
+
+            pkg = (await client.get(f"/v1/curate/jobs/{job_id}/package")).json()["data"]
+            [record] = pkg["verification"]
+            assert record["decision"] == "review"
+            assert "Max iterations" in record["feedback"]
+            assessments = [c["assessment"] for c in record["report"]["claims"]]
+            assert assessments.count("uncited") == 2
+
+    await job_store.close()
+    await evidence_store.close()

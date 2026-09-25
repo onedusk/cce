@@ -69,6 +69,26 @@ needs. One commit per item (B5–B13) on `feature/bubble-readiness-phase2`.
   proves the test sees store routing); engines with injected stores keep
   separate job lists.
 
+### Added — verification results on the package (B7)
+- **`PublishPackage.verification`**: one `PathVerification` per requested
+  path — the terminal gate decision (`pass`/`fail`/`review`, independent of
+  any publish policy), iteration, confidence, coverage and feedback (including
+  a token-budget note), the verifier's `VerificationRecord` with per-claim
+  `ClaimVerdict`s and `SourceContradiction`s, and the writer's gaps for the
+  draft that survived. A path that produced no unit is recorded too
+  (`unit_id=None`, terminal `fail`, no report). New frozen models in
+  `models/verification.py`; `VerificationReport.to_record()` converts.
+- Exposed through `GET /jobs/{id}/package`, the embedded and remote
+  `JobHandle.package()`, and the job store with no schema or OpenAPI change;
+  packages stored before B7 parse with `verification=[]`. Emit reads only
+  its existing fields, so MDX output is unchanged.
+- Writer gaps used to be dropped inside the write-verify loop; they now
+  travel with the path. Raw reply text and token usage are not persisted,
+  and the converter coerces field types, so a reply that passes the shape
+  check with odd types can't fail the job with a ValidationError quoting it.
+- No pass/fail flag on `ContentUnit`: the per-path record, keyed by
+  `unit_id`, also covers paths with no unit.
+
 ## [Unreleased] — bubble-readiness Phase 1 (current models, citation integrity)
 
 Phase 1 of `docs/internal/bubble-readiness-plan-2026-09-23.md` (local-only):

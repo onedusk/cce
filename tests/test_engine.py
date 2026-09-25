@@ -317,3 +317,33 @@ async def test_embedded_uses_injected_stores_and_leaves_them_open(
         assert await jobs.list_jobs() is not None
         await ev.close()
         await jobs.close()
+
+
+async def test_embedded_review_package_carries_verification(
+    tmp_path: Path, monkeypatch
+):
+    """B7 round trip, embedded: the stored package of a REVIEW job holds the
+    per-claim verdicts and the gate's reasons."""
+    from tests.test_orchestrator.test_pipeline_verification_records import (
+        uncited_report,
+        writer_reply,
+    )
+
+    script = [writer_reply(gaps=["gap"]), uncited_report()] * 3
+    engine = await _make_engine(tmp_path, monkeypatch, llm_responses=script)
+    try:
+        handle = await engine.curate(
+            CurationRequest(topic="test topic", paths=["blog"], policy_id="test-policy")
+        )
+        job = await handle.wait(timeout=10)
+        assert job.status == JobStatus.REVIEW_REQUIRED
+
+        package = await handle.package()
+        assert package is not None
+        [record] = package.verification
+        assert record.decision == "review"
+        assert "no citations" in record.feedback
+        assert record.writer_gaps == ["gap"]
+        assert [c.assessment for c in record.report.claims].count("uncited") == 2
+    finally:
+        await engine.close()

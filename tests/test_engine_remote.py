@@ -217,3 +217,17 @@ async def test_remote_rejects_bad_api_key(remote_app: FastAPI):
         assert exc_info.value.response.status_code == 401
     finally:
         await eng.close()
+
+
+async def test_remote_package_carries_verification(engine: CurationEngine):
+    """B7 round trip, remote: the wire PublishPackage keeps the records."""
+    handle = await engine.curate(make_curation_request())
+    await handle.wait(timeout=10)
+
+    package = await handle.package()
+    assert package is not None
+    [record] = package.verification
+    assert record.path == package.units[0].path
+    assert record.unit_id == package.units[0].id
+    assert record.decision == "pass"
+    assert record.report is not None
