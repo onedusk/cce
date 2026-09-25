@@ -568,8 +568,9 @@ class Pipeline:
 
         A copy ``put_many`` skipped because the same (url, excerpt_hash) was
         already stored (e.g. by a concurrent job) takes the stored row's ID
-        before anything is written, so every cited ID exists in the store
-        (B6). Only the ID changes: URL and verbatim excerpt are identical.
+        before anything is written, so every cited discovered ID exists in the
+        store (B6; pinned context is never stored, B11). Only the ID changes:
+        URL and verbatim excerpt are identical.
         """
         inserted = await self._evidence_store.put_many(evidence)
         job_logger.info(

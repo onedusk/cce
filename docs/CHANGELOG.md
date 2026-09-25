@@ -32,7 +32,8 @@ needs. One commit per item (B5–B13) on `feature/bubble-readiness-phase2`.
   fakes instead of monkeypatching `build_pipeline`.
 
 ### Fixed — stored evidence IDs; per-tenant stores (B6)
-- **Every cited evidence ID now exists in the store.** The store was
+- **Every cited discovered evidence ID now exists in the store** (pinned
+  context, B11, is carried on the job instead). The store was
   UNIQUE on `excerpt_hash` alone, so an excerpt already stored under another
   URL (syndicated text) was silently not stored, yet cited under a fresh ID
   that `GET /evidence/{id}` couldn't find. Open decision 2 resolved as the
@@ -62,8 +63,8 @@ needs. One commit per item (B5–B13) on `feature/bubble-readiness-phase2`.
   longer takes a store, and `ImpliedClaimChecker(...)` drops
   `evidence_store`.
 - Acceptance tests: a syndicated excerpt and a same-URL race both cite only
-  stored IDs (both fail without the fix); every cited ID resolves through
-  `GET /evidence/{id}`; two Pipelines sharing one `ComponentSet` with two
+  stored IDs (both fail without the fix); every cited discovered ID resolves
+  through `GET /evidence/{id}`; two Pipelines sharing one `ComponentSet` with two
   stores never see each other's rows (a token planted in tenant A reaches none
   of tenant B's prompts, package or store; a positive control on tenant A
   proves the test sees store routing); engines with injected stores keep
