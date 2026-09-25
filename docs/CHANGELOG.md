@@ -126,6 +126,9 @@ needs. One commit per item (B5–B13) on `feature/bubble-readiness-phase2`.
 - **`_evidence.json` entries always carry `locator` when set** (user choice:
   the plain reading of "always include"). This is the one intended change to
   default output — an additive key per sidecar entry, in both formats.
+- The client format's rebuilt "Curated Resources" list keeps one bullet per
+  source URL, with its first footnote, so evidence-ID keying doesn't list a
+  document once per cited excerpt (final review; a no-op per-URL).
 
 ### Fixed — configurable trust heuristics (B9)
 - **Marketing filter:** the seven hard-coded phrases become

@@ -28,7 +28,11 @@ from cce.models.content import ContentUnit
 from cce.models.evidence import Evidence
 from cce.models.package import PublishPackage
 from cce.output.mdx import EmitResult, _strip_evidence_gaps, slugify
-from cce.output.mdx.citations import build_citation_index
+from cce.output.mdx.citations import (
+    CitationEntry,
+    _canonical_url,
+    build_citation_index,
+)
 from cce.output.mdx.escape import escape_mdx_body, escape_mdx_inline
 from cce.output.mdx.evidence import export_evidence
 from cce.output.mdx.formatter import _citation_to_dict, _derive_title
@@ -82,9 +86,14 @@ def _rebuild_resources_section(body: str, citations) -> str:
     nxt = re.search(r"^#{2,3}[ \t]+", rest, re.MULTILINE)
     end = m.end() + nxt.start() if nxt else len(body)
 
+    # One bullet per source: keyed by evidence ID (B12), several footnotes
+    # can share a URL, and the list would repeat the source for each.
+    sources: dict[str, CitationEntry] = {}
+    for c in citations:
+        sources.setdefault(_canonical_url(c.url), c)
     bullets = "\n".join(
         f"- **{escape_mdx_inline(c.title or c.url or '')}** [^{c.index}]"
-        for c in citations
+        for c in sources.values()
     )
     new_section = f"## Curated Resources\n\n{bullets}\n"
     tail = body[end:]

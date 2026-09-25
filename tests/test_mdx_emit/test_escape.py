@@ -146,3 +146,29 @@ def test_page_body_is_escaped_and_metadata_derived_from_raw_text(fmt):
 
     _no_mdx_syntax(rendered)
     assert meta["title"] == "Sleep {x} <b>now</b>"
+
+
+def test_evidence_keyed_resources_list_each_source_once():
+    """Final review of B12: keyed by evidence ID, two excerpts of one report
+    gave two identical resources bullets."""
+    body = (
+        "## Report\n\nFirst [ev:ev_p3]. Second [ev:ev_p9].\n\n"
+        "## Curated Resources\n\n- x\n"
+    )
+    lookup = {
+        ev_id: make_evidence(
+            id=ev_id,
+            url="https://doc.example.org/report.pdf",
+            title="Annual Sleep Report",
+            locator=locator,
+        )
+        for ev_id, locator in (("ev_p3", "page:3"), ("ev_p9", "page:9"))
+    }
+    mdx = format_thnklabs_page(
+        _unit(body), lookup, topic_slug="t", citation_key="evidence"
+    )
+    _, rendered = _split(mdx)
+
+    bullets = [ln for ln in rendered.splitlines() if ln.startswith("- ")]
+    assert bullets == ["- **Annual Sleep Report** [^1]"]
+    assert "Second [^2]." in rendered  # both footnotes kept in the body
