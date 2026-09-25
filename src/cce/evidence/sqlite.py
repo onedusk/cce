@@ -117,7 +117,11 @@ class SQLiteEvidenceStore:
             logger.warning("sqlite-vec not available: %s", e)
             self._vec_available = False
 
-        await self._ensure_schema()
+        try:
+            await self._ensure_schema()
+        except BaseException:
+            await self.close()
+            raise
 
     async def close(self) -> None:
         if self._db:
@@ -415,19 +419,29 @@ class SQLiteEvidenceStore:
         if not await self._has_hash_only_unique():
             return
         columns = ", ".join(_EVIDENCE_COLUMNS)
-        logger.info("Migrating evidence table to v4: UNIQUE(url, excerpt_hash)")
         await self._db.commit()
-        await self._db.executescript(
-            "BEGIN;\n"
-            "DROP TABLE IF EXISTS evidence_v4;\n"
-            + _EVIDENCE_TABLE_DDL.format(table="evidence_v4")
-            + f"INSERT INTO evidence_v4 ({columns}) SELECT {columns} FROM evidence;\n"
-            "DROP TABLE evidence;\n"
-            "ALTER TABLE evidence_v4 RENAME TO evidence;\n"
-            "COMMIT;\n"
-        )
-        for idx_sql in CREATE_INDEXES:
-            await self._db.execute(idx_sql)
+        # IMMEDIATE takes the write lock up front, so a concurrent opener
+        # waits out the busy timeout instead of failing on a stale read
+        # snapshot, then finds the table already rebuilt.
+        await self._db.execute("BEGIN IMMEDIATE")
+        try:
+            if not await self._has_hash_only_unique():
+                await self._db.rollback()
+                return
+            logger.info("Migrating evidence table to v4: UNIQUE(url, excerpt_hash)")
+            for sql in (
+                "DROP TABLE IF EXISTS evidence_v4",
+                _EVIDENCE_TABLE_DDL.format(table="evidence_v4"),
+                f"INSERT INTO evidence_v4 ({columns}) SELECT {columns} FROM evidence",
+                "DROP TABLE evidence",
+                "ALTER TABLE evidence_v4 RENAME TO evidence",
+                *CREATE_INDEXES,
+            ):
+                await self._db.execute(sql)
+            await self._db.commit()
+        except BaseException:
+            await self._db.rollback()
+            raise
 
     async def _has_hash_only_unique(self) -> bool:
         """True when a unique index covers exactly (excerpt_hash)."""

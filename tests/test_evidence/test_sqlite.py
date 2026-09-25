@@ -670,3 +670,87 @@ CREATE TABLE evidence (
         assert old is not None and old.tags == [] and old.dimension_signals == {}
     finally:
         await store.close()
+
+
+async def test_concurrent_first_opens_of_a_v3_database_all_succeed(tmp_path, caplog):
+    """Review of B6: the rebuild used a deferred BEGIN, so a second opener
+    racing the first failed with 'database is locked' instead of waiting."""
+    import asyncio
+    import logging
+
+    from cce.config.types import EvidenceStoreConfig
+    from cce.evidence.sqlite import SQLiteEvidenceStore
+
+    db_path = tmp_path / "legacy.db"
+    rows = [
+        _legacy_row(f"ev_old{i:09d}", f"https://a.example/{i}", f"Excerpt {i}.")
+        for i in range(1000)  # a rebuild long enough to overlap (9/10 before)
+    ]
+    # WAL, as every store-created file is: a rollback-journal file would race
+    # on the journal-mode switch in connect() instead.
+    await _seed_legacy_db(db_path, "PRAGMA journal_mode=WAL;\n" + _V3_DDL, rows)
+    stores = [
+        SQLiteEvidenceStore(EvidenceStoreConfig(sqlite_path=db_path)) for _ in range(3)
+    ]
+
+    with caplog.at_level(logging.INFO, logger="cce.evidence.sqlite"):
+        results = await asyncio.gather(
+            *(s.connect() for s in stores), return_exceptions=True
+        )
+    try:
+        assert [r for r in results if isinstance(r, BaseException)] == []
+        rebuilds = [
+            r for r in caplog.records if "Migrating evidence table" in r.message
+        ]
+        assert len(rebuilds) == 1
+        for store in stores:
+            assert not store._db.in_transaction
+            assert await store.count() == 1000
+        assert await _unique_index_columns(stores[0]) == [("url", "excerpt_hash")]
+    finally:
+        for store in stores:
+            await store.close()
+
+
+async def test_opener_that_saw_the_old_shape_does_not_rebuild_again(tmp_path, caplog):
+    """Deterministic form of the race: another opener migrates between this
+    opener's shape check and its transaction. The check is repeated inside
+    the (IMMEDIATE) transaction, so the table is rebuilt once."""
+    import logging
+
+    from cce.config.types import EvidenceStoreConfig
+    from cce.evidence.sqlite import SQLiteEvidenceStore
+
+    db_path = tmp_path / "legacy.db"
+    await _seed_legacy_db(
+        db_path,
+        "PRAGMA journal_mode=WAL;\n" + _V3_DDL,
+        [_legacy_row("ev_old000000001", "https://a.example/x", "E.")],
+    )
+    config = EvidenceStoreConfig(sqlite_path=db_path)
+    first, late = SQLiteEvidenceStore(config), SQLiteEvidenceStore(config)
+    real_check = late._has_hash_only_unique
+    calls = 0
+
+    async def stale_check() -> bool:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            await first.connect()  # migrates while `late` is between steps
+            return True
+        return await real_check()
+
+    late._has_hash_only_unique = stale_check  # type: ignore[method-assign]
+    with caplog.at_level(logging.INFO, logger="cce.evidence.sqlite"):
+        await late.connect()
+    try:
+        rebuilds = [
+            r for r in caplog.records if "Migrating evidence table" in r.message
+        ]
+        assert len(rebuilds) == 1
+        assert not late._db.in_transaction
+        assert await late.count() == 1
+        assert await _unique_index_columns(late) == [("url", "excerpt_hash")]
+    finally:
+        await first.close()
+        await late.close()
