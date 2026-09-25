@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 
 from cce.config.types import EngineConfig, QualityGateConfig
@@ -188,14 +188,16 @@ def _path_verifications(
     units: list[ContentUnit],
     gate_results_by_path: Mapping[str, list[GateResult]],
     writer_gaps_by_path: Mapping[str, list[str]],
+    stages: Sequence[StageRecord] = (),
 ) -> list[PathVerification]:
     """One persisted verification record per requested path (B7).
 
     Uses the same terminal rule as ``_terminal_decisions``: the gate result
     with the highest iteration. A path with no gate result (empty draft, or
-    stopped before its first write) records a terminal "fail" with no report.
-    Built after the loop, so a budget note appended to the terminal result's
-    feedback is captured.
+    stopped before its first write) records a terminal "fail" with no report;
+    when the token budget stopped it, the feedback says so (from the WRITE
+    ``StageRecord`` in ``stages``). Built after the loop, so a budget note
+    appended to the terminal result's feedback is captured.
     """
     unit_ids = {u.path: u.id for u in units}
     records: list[PathVerification] = []
@@ -208,6 +210,7 @@ def _path_verifications(
                     path=path,
                     unit_id=unit_ids.get(path),
                     decision=GateDecision.FAIL.value,
+                    feedback=_budget_stop_note(path, stages),
                     writer_gaps=gaps,
                 )
             )
@@ -227,6 +230,23 @@ def _path_verifications(
             )
         )
     return records
+
+
+def _budget_stop_note(path: str, stages: Sequence[StageRecord]) -> str:
+    """The budget-stop reason for a path that never reached the gate."""
+    for rec in stages:
+        m = rec.metrics or {}
+        if (
+            rec.stage == JobStage.WRITE
+            and rec.path == path
+            and m.get("budget_exceeded")
+        ):
+            return (
+                "Token budget exceeded: stopped before iteration "
+                f"{m['stopped_before_iteration']} (spent {m['tokens_spent']:,} of "
+                f"{m['max_tokens_per_job']:,} tokens) (ADR-003)."
+            )
+    return ""
 
 
 def _build_sibling_digest(units: list[ContentUnit]) -> str:
@@ -390,6 +410,7 @@ class Pipeline:
                     all_units,
                     gate_results_by_path,
                     writer_gaps_by_path,
+                    job.stages,
                 ),
                 evidence=evidence,
                 token_usage=token_usage,

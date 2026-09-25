@@ -88,6 +88,10 @@ needs. One commit per item (B5–B13) on `feature/bubble-readiness-phase2`.
   check with odd types can't fail the job with a ValidationError quoting it.
 - No pass/fail flag on `ContentUnit`: the per-path record, keyed by
   `unit_id`, also covers paths with no unit.
+- Review follow-ups: a path the token budget stopped before its first
+  write now has the budget note as its feedback (it was empty), and
+  `CurationRequest.paths` drops repeated paths, keeping order (`["blog",
+  "blog"]` ran the path twice and recorded only the second unit).
 
 ### Added — publish policy: PASS is not autopublish (B8)
 - **`EngineConfig.publish_policy`** (`auto` | `human`, `CCE_PUBLISH_POLICY`,

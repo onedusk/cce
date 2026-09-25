@@ -211,3 +211,48 @@ async def test_wrongly_typed_claim_fields_are_coerced_not_fatal(sqlite_store):
     assert claim.citation_ids == []
     assert claim.assessment == "7"
     assert claim.explanation == "None"
+
+
+async def test_path_stopped_by_the_budget_before_writing_says_why(sqlite_store):
+    """Review of B7: path 2 stopped at its first checkpoint had an empty
+    record; the feedback now names the budget stop."""
+    from tests.test_orchestrator.test_pipeline_budget import (
+        ONE_ITERATION_TOKENS,
+        VERIFIER_USAGE,
+        WRITER_USAGE,
+        _llm_with_usage,
+    )
+
+    llm = _llm_with_usage(
+        (writer_reply(), WRITER_USAGE),
+        (verifier_json(supported=10, total=10, gaps=0), VERIFIER_USAGE),
+    )
+    result = await _pipeline(
+        sqlite_store, llm, max_tokens_per_job=ONE_ITERATION_TOKENS
+    ).run(make_curation_request(paths=["blog", "summary"]), make_source_policy())
+
+    blog, summary = result.package.verification
+    assert blog.decision == "pass"
+    assert summary.path == "summary"
+    assert summary.decision == "fail"
+    assert summary.feedback == (
+        "Token budget exceeded: stopped before iteration 1 "
+        f"(spent {ONE_ITERATION_TOKENS:,} of {ONE_ITERATION_TOKENS:,} tokens) "
+        "(ADR-003)."
+    )
+
+
+async def test_duplicate_request_paths_run_once(sqlite_store):
+    """Review of B7: ["blog", "blog"] ran the path twice and recorded only
+    the second unit. Paths are de-duplicated on the request."""
+    request = make_curation_request(paths=["blog", "blog"])
+    assert request.paths == ["blog"]
+
+    result = await _pipeline(
+        sqlite_store,
+        _llm(writer_reply(), verifier_json(supported=10, total=10, gaps=0)),
+    ).run(request, make_source_policy())
+
+    [record] = result.package.verification
+    [unit] = result.package.units
+    assert record.unit_id == unit.id

@@ -74,6 +74,13 @@ class CurationRequest(BaseModel):
         description="Maps to quality gate thresholds: low, medium, high",
     )
 
+    @field_validator("paths")
+    @classmethod
+    def _paths_unique(cls, v: list[str]) -> list[str]:
+        # Everything downstream is keyed by path; a repeat would leave one
+        # draft unrecorded (review of B7). Dropped, order kept.
+        return list(dict.fromkeys(v))
+
     @field_validator("subtopics")
     @classmethod
     def _subtopic_elements_bounded(cls, v: list[str]) -> list[str]:
