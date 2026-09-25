@@ -16,6 +16,9 @@ from cce.models.evidence import Evidence
 # An ID has to fit inside a [ev:ID] marker (parsing.EV_MARKER_RE), and the
 # gate reads a "," inside one as several IDs.
 _CITABLE_ID_RE = re.compile(r"[^\s\[\],]+")
+# The form of the engine's own evidence IDs (discoverer.py); reserved, so a
+# context ID never names a stored row.
+_ENGINE_ID_RE = re.compile(r"ev_[0-9a-f]{12}")
 
 
 class CurationConstraints(BaseModel):
@@ -86,10 +89,12 @@ class CurationRequest(BaseModel):
         description=(
             "Pinned evidence (B11): settled statements the caller already "
             "knows. Skips discovery, the 50-character fragment minimum and "
-            "every cap; shown to the writer and verifier as settled context, "
-            "citable as [ev:ID] and stored under the caller's IDs. IDs must "
-            "be unique and contain no whitespace, '[', ']' or ','; "
-            "excerpt_hash must be the SHA-256 hex of the excerpt."
+            "every cap; shown to the writer and verifier as settled context "
+            "and citable as [ev:ID]. Carried on the job and its package, not "
+            "written to the evidence store. IDs must be unique, contain no "
+            "whitespace, '[', ']' or ',', and not take the engine's "
+            "ev_<12 hex> form; excerpt_hash must be the SHA-256 hex of the "
+            "excerpt."
         ),
     )
 
@@ -109,6 +114,10 @@ class CurationRequest(BaseModel):
                 raise ValueError(
                     f"context id {ev.id[:50]!r} can't be cited as [ev:ID]: no "
                     "whitespace, '[', ']' or ','"
+                )
+            if _ENGINE_ID_RE.fullmatch(ev.id):
+                raise ValueError(
+                    f"context id {ev.id!r} takes the engine's ev_<12 hex> form"
                 )
             if ev.id in seen:
                 raise ValueError(f"duplicate context id {ev.id!r}")

@@ -223,8 +223,9 @@ August audit 2.2 and 2.5. The contract is in the new root `SECURITY.md`
   passed through by the API route and remote mode): settled statements the
   caller already knows. They skip discovery, the 50-character fragment
   minimum, the evidence caps and the per-path `max_evidence` cap, and are
-  never tagged. Defaults to `[]`, which leaves every prompt, stage record and
-  output byte-identical.
+  never tagged. Defaults to `[]`, which leaves every evidence block, stage
+  record and output byte-identical (the writer system prompt changed once,
+  with B13's clause below).
 - The writer and verifier see them first, under `=== CONTEXT (settled) ===`
   with a one-line guidance, and the discovered excerpts under
   `=== SOURCES ===`, both inside the cached evidence block (system prompts
@@ -233,14 +234,18 @@ August audit 2.2 and 2.5. The contract is in the new root `SECURITY.md`
   tags, and the guidance says the trust weighting doesn't apply to it.
 - Context is citable as `[ev:ID]`, checked by the gate like any evidence (B4),
   and part of `PublishPackage.evidence`, so emit resolves it.
-- **Stored under the caller's IDs, never remapped:** context is stored
-  before discovered evidence, so a discovered copy of a pinned excerpt (same
-  URL and text) takes the context ID and is dropped, counted as
-  `context_duplicates` on the DISCOVER stage record (only for runs with
-  context). A context ID already stored with other content, or a pinned
-  excerpt already stored at that URL under another ID, fails the job.
-- Validation: IDs unique and free of whitespace, `[`, `]` and `,` (the
-  marker grammar), `excerpt_hash` equal to the SHA-256 of the excerpt. A
+- **Not written to the evidence store:** context is caller data, carried on
+  the job's request and its package (so `GET /jobs/{id}/package` has it, and
+  `GET /evidence/{id}` does not). A stored copy used to come back to later
+  runs as the crawled content of its URL, so the page was never fetched and
+  one caller's pinned text was cited as that source in another caller's job
+  (final review). A discovered excerpt that repeats a pinned one (same URL,
+  same text) is dropped from the run, counted as `context_duplicates` on the
+  DISCOVER stage record (only for runs with context); the crawl itself is
+  stored as usual.
+- Validation: IDs unique, free of whitespace, `[`, `]` and `,` (the marker
+  grammar), and not in the engine's `ev_<12 hex>` form (so a context ID never
+  names a stored row); `excerpt_hash` equal to the SHA-256 of the excerpt. A
   request the model rejects is now a 422 `invalid_request` from
   `POST /v1/curate/jobs`, naming the rule without echoing the input (it was
   a 500).

@@ -131,8 +131,8 @@ async def test_context_is_cited_beside_a_source_and_passes(sqlite_store):
     assert {c.evidence_id for c in unit.citations} >= {"ctx_b"}
     index = build_citation_index(unit.content, {e.id: e for e in package.evidence})
     assert "[^?]" not in index.content
-    stored = await sqlite_store.get("ctx_b")
-    assert stored is not None and stored.excerpt == "Plans cost $12."
+    # Carried on the package, never written to the evidence store.
+    assert await sqlite_store.get("ctx_b") is None
     assert _discover_metrics(result)["context_duplicates"] == 0
 
 
@@ -150,9 +150,10 @@ async def test_context_only_run_proceeds_when_discovery_finds_nothing(sqlite_sto
 
 
 async def test_discovered_copy_of_a_pinned_excerpt_is_dropped(sqlite_store):
-    """Context pins the page's own text at its URL: the discovered chunk
-    takes the context ID when stored (B6) and is dropped, so the writer sees
-    the excerpt once, under CONTEXT."""
+    """Context pins the page's own text at its URL: the discovered chunk is
+    the same excerpt at the same URL and is dropped from the run, so the
+    writer sees it once, under CONTEXT. The crawl is still stored, under its
+    own ID."""
     pinned = make_evidence(id="ctx_page", url=PAGE_URL, excerpt=PAGE_TEXT)
     llm = _llm(
         _writer("## Page\n\nA claim [ev:ctx_page].", ["ctx_page"]),
@@ -166,18 +167,41 @@ async def test_discovered_copy_of_a_pinned_excerpt_is_dropped(sqlite_store):
     assert [ev.id for ev in result.package.evidence] == ["ctx_page"]
     assert _discover_metrics(result)["context_duplicates"] == 1
     assert llm.calls[0]["messages"][0].content.count(PAGE_TEXT) == 1
+    assert await sqlite_store.get("ctx_page") is None
+    assert await sqlite_store.count() == 1
 
 
-async def test_context_id_stored_with_other_text_fails_the_job(sqlite_store):
-    await sqlite_store.put(
-        make_evidence(id="ctx_a", url="consumer://acme/canon", excerpt="Old text.")
+async def test_context_never_reaches_a_later_run_as_a_crawl(sqlite_store):
+    """Final review of B11: stored context came back to the next run (another
+    caller, no context) as the already-crawled content of its URL, so the
+    page was never fetched and the pinned text was cited as that source."""
+    secret = make_evidence(
+        id="ctx_secret", url=PAGE_URL, excerpt="CONFIDENTIAL tenant note: 30% off."
     )
-    result = await _pipeline(sqlite_store, _llm()).run(
-        make_curation_request(context=_context()), make_source_policy()
+    first = await _pipeline(
+        sqlite_store,
+        _llm(
+            _writer("## Note\n\nA claim [ev:ctx_secret].", ["ctx_secret"]),
+            _verifier_all_supported(["ctx_secret"]),
+        ),
+        adapter=MockCrawlAdapter(search_map={}, url_map={}),
+    ).run(make_curation_request(context=[secret]), make_source_policy())
+    assert first.job.status == JobStatus.COMPLETED
+
+    from tests.test_orchestrator.conftest import verifier_json
+    from tests.test_orchestrator.test_pipeline_verification_records import (
+        writer_reply,
     )
 
-    assert result.job.status == JobStatus.FAILED
-    assert "context 'ctx_a' conflicts with stored evidence" in result.job.error.message
+    llm = _llm(writer_reply(), verifier_json(supported=10, total=10, gaps=0))
+    second = await _pipeline(sqlite_store, llm).run(
+        make_curation_request(), make_source_policy()
+    )
+
+    prompt = llm.calls[0]["messages"][0].content
+    assert "CONFIDENTIAL" not in prompt
+    assert PAGE_TEXT in prompt  # the page was crawled
+    assert "ctx_secret" not in {ev.id for ev in second.package.evidence}
 
 
 async def test_runs_without_context_carry_no_context_metric(sqlite_store):

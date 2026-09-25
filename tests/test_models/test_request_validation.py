@@ -108,6 +108,10 @@ class TestPinnedContext:
         with pytest.raises(ValidationError, match="can't be cited"):
             CurationRequest(**_valid(context=[self._ctx(ev_id=bad_id)]))
 
+    def test_rejects_the_engine_id_form(self):
+        with pytest.raises(ValidationError, match="engine's ev_<12 hex> form"):
+            CurationRequest(**_valid(context=[self._ctx(ev_id="ev_0123456789ab")]))
+
     def test_rejects_a_wrong_excerpt_hash(self):
         bad = self._ctx().model_copy(update={"excerpt_hash": "0" * 64})
         with pytest.raises(ValidationError, match="excerpt_hash is not the SHA-256"):

@@ -12,7 +12,10 @@ the repository owner rather than in a public issue.
   forwarded third-party content should treat hostile input as the normal
   case.
 - **Trusted operator input:** the curation request (topic, subtopics, paths,
-  audience), source policies, path configs, taxonomies and engine config.
+  audience, pinned `context`), source policies, path configs, taxonomies and
+  engine config. Pinned context still reaches prompts only as data, defanged
+  like any excerpt, and is not written to the evidence store, so it can't
+  surface in another job.
 - **Fetching:** CCE does not fetch source pages itself. The crawl adapter
   (Firecrawl, a hosted service with a fixed base URL) does, so there is no
   local SSRF surface. Which hosts may be used is set by the source policy's

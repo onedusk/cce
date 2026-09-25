@@ -235,19 +235,21 @@ def _path_verifications(
 def _drop_context_duplicates(
     context: list[Evidence],
     evidence: list[Evidence],
-    ev_lookup: dict[str, Evidence],
     job: Job,
     job_logger: logging.Logger | logging.LoggerAdapter,
 ) -> tuple[list[Evidence], dict[str, Evidence]]:
-    """Drop discovered items that are a pinned context item (B11).
-
-    After storing, a discovered item carries a context ID only when it is
-    the same stored row (reused by URL, or the same excerpt at the same URL),
-    so context wins. The count goes on the DISCOVER record as
+    """Drop discovered items that repeat a pinned context item (B11): the
+    same excerpt at the same URL (a corroborating copy elsewhere is kept).
+    Context wins. The count goes on the DISCOVER record as
     ``context_duplicates``, only for runs with context.
     """
+    pinned = {(ev.url, ev.excerpt_hash) for ev in context}
     context_ids = {ev.id for ev in context}
-    kept = [ev for ev in evidence if ev.id not in context_ids]
+    kept = [
+        ev
+        for ev in evidence
+        if (ev.url, ev.excerpt_hash) not in pinned and ev.id not in context_ids
+    ]
     dropped = len(evidence) - len(kept)
     if dropped:
         job_logger.info("Dropped %d discovered duplicate(s) of pinned context", dropped)
@@ -406,14 +408,13 @@ class Pipeline:
                 evidence = await self._run_tagging(evidence, job, job_logger)
 
             # --- Stage 2: Store evidence ---
-            # Context first, under the caller's IDs (never remapped), so a
-            # discovered copy of a pinned excerpt takes the context ID.
-            if context:
-                await self._store_context(context)
+            # Pinned context is not stored: it is caller data, lives on the
+            # request and the package, and must never come back to a later
+            # run as a crawl of its URL (B11, final review).
             evidence, ev_lookup = await self._store_evidence(evidence, job_logger)
             if context:
                 evidence, ev_lookup = _drop_context_duplicates(
-                    context, evidence, ev_lookup, job, job_logger
+                    context, evidence, job, job_logger
                 )
 
             # --- Stage 3: Write + Verify loop (per output path, run sequentially) ---
@@ -591,26 +592,6 @@ class Pipeline:
         # iteration of every path — O(paths × iterations) sweeps over the
         # same list.
         return evidence, {ev.id: ev for ev in evidence}
-
-    async def _store_context(self, context: list[Evidence]) -> None:
-        """Persist pinned context under the caller's IDs (B11), so they resolve
-        through ``GET /evidence/{id}``. Fails the job when an ID is already
-        stored with other content, or the excerpt is stored at that URL under
-        another ID: either way the cited ID would not show what was verified.
-        """
-        await self._evidence_store.put_many(context)
-        stored = {
-            ev.id: ev
-            for ev in await self._evidence_store.get_many([ev.id for ev in context])
-        }
-        for ev in context:
-            row = stored.get(ev.id)
-            if row is None or (row.url, row.excerpt_hash) != (ev.url, ev.excerpt_hash):
-                raise ValueError(
-                    f"context {ev.id!r} conflicts with stored evidence: the ID is "
-                    "stored with a different excerpt or URL, or this excerpt and "
-                    "URL are stored under another ID"
-                )
 
     def _interpret_terminal_decisions(
         self,

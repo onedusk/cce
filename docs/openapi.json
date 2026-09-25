@@ -850,7 +850,7 @@
             },
             "type": "array",
             "title": "Context",
-            "description": "Pinned evidence (B11): settled statements the caller already knows. Skips discovery, the 50-character fragment minimum and every cap; shown to the writer and verifier as settled context, citable as [ev:ID] and stored under the caller's IDs. IDs must be unique and contain no whitespace, '[', ']' or ','; excerpt_hash must be the SHA-256 hex of the excerpt."
+            "description": "Pinned evidence (B11): settled statements the caller already knows. Skips discovery, the 50-character fragment minimum and every cap; shown to the writer and verifier as settled context and citable as [ev:ID]. Carried on the job and its package, not written to the evidence store. IDs must be unique, contain no whitespace, '[', ']' or ',', and not take the engine's ev_<12 hex> form; excerpt_hash must be the SHA-256 hex of the excerpt."
           }
         },
         "type": "object",
