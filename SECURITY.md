@@ -26,12 +26,15 @@ model-written text:
 
 - The body, including code spans and fences, is written with `{`, `}` and
   `<` as character references (`&#123;`, `&#125;`, `&lt;`), and a line
-  starting with `import` or `export` gets its first letter as one. MDX and
-  CommonMark render these as the literal characters. Clean prose is
-  unchanged byte for byte.
+  starting with `import` or `export` gets its first letter as one (line
+  endings are normalised first, so a lone CR can't start a line the check
+  misses). MDX and CommonMark render these as the literal characters in
+  text; inside code spans and fences references aren't decoded, so code
+  containing those characters shows the reference. Clean prose is unchanged
+  byte for byte.
 - A crawled title in the rebuilt "Curated Resources" list is also kept to one
   line, with `\`, backticks, `*`, `[`, `]` and `>` escaped, so it can't
-  close the bold around it or make a link, code span or new block.
+  close the bold around it or make a markdown link, code span or new block.
 - The `export const metadata = {...}` block is a JSON literal
   (`json.dumps`), so its strings can't break out of their quotes.
 
@@ -39,8 +42,10 @@ Implementation: `src/cce/output/mdx/escape.py`.
 
 **Still the consumer's job:**
 
-- Markdown links written by the model are kept as links. Sanitise link and
-  image destinations (for example `javascript:` URLs) in your renderer. A
+- Markdown links written by the model are kept as links, and with GFM
+  autolink literals enabled a `www.`, `http(s)://` or email address in body
+  text or a crawled title becomes a link. Sanitise link and image
+  destinations (for example `javascript:` URLs) in your renderer. A
   sanitising rehype step such as `rehype-sanitize` is recommended whatever
   CCE guarantees.
 - The metadata values, `_evidence.json` and `meta.json` hold raw text: see

@@ -16,6 +16,7 @@ _BODY_TABLE = str.maketrans({"{": "&#123;", "}": "&#125;", "<": "&lt;"})
 # The keyword, not a longer word ("exporting"): import"x", export{a}, import(
 _ESM_RE = re.compile(r"^([ \t]*)(import|export)(?![\w$])", re.MULTILINE)
 _INLINE_PUNCT_RE = re.compile(r"([\\`*\[\]])")
+_CR_RE = re.compile(r"\r\n?")
 
 
 def escape_mdx_body(markdown: str) -> str:
@@ -24,10 +25,15 @@ def escape_mdx_body(markdown: str) -> str:
     ``{``, ``}`` and ``<`` become character references everywhere, code
     included (writer output is prose; skipping code spans would open a gap
     wherever this module and the MDX parser disagree on where code starts).
-    A line that starts with ``import`` or ``export`` gets its first letter as
-    a character reference. ``>`` (blockquotes), ``&``, ``[^N]`` footnotes and
-    backslashes are left alone.
+    Inside code spans and fences references are not decoded, so such code
+    shows ``&#123;``, ``&#125;`` or ``&lt;`` verbatim. A line that starts
+    with ``import`` or ``export`` gets its first letter as a character
+    reference. ``>`` (blockquotes), ``&``, ``[^N]`` footnotes and backslashes
+    are left alone.
     """
+    # A lone CR ends a line for MDX but not for the ESM regex's "^", so line
+    # endings are normalised first (review of B13: "\r\rexport ..." was live).
+    markdown = _CR_RE.sub("\n", markdown)
     # ESM first, on the raw text, so "export{" is seen before "{" is replaced.
     neutralised = _ESM_RE.sub(
         lambda m: f"{m.group(1)}&#{ord(m.group(2)[0])};{m.group(2)[1:]}", markdown

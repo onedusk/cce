@@ -41,6 +41,24 @@ def _no_mdx_syntax(text: str) -> None:
     assert not _ESM_LINE_RE.search(text)
 
 
+@pytest.mark.parametrize("fmt", ["generic", "client"])
+@pytest.mark.parametrize("eol", ["\r\r", "\r\n\r\n", "\r"])
+def test_lone_cr_line_endings_cannot_start_an_esm_statement(fmt, eol):
+    """Review of B13: MDX treats a lone CR as a line ending; the ESM regex
+    did not, so "\\r\\rexport ..." compiled to a live statement."""
+    body = f"## Sleep{eol}Adults need sleep [ev:ev_1].{eol}export const pwned = 1{eol}x"
+    lookup = {"ev_1": make_evidence(id="ev_1")}
+    if fmt == "generic":
+        mdx = format_mdx_page(_unit(body), lookup, "job_1", curated_at="t")
+    else:
+        mdx = format_thnklabs_page(_unit(body), lookup, topic_slug="t")
+    _, rendered = _split(mdx)
+
+    assert "\r" not in rendered
+    _no_mdx_syntax(rendered)
+    assert "&#101;xport const pwned = 1" in rendered
+
+
 def test_body_escaper_removes_expressions_tags_and_esm():
     out = escape_mdx_body(HOSTILE_BODY)
 
