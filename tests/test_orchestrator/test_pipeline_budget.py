@@ -9,11 +9,12 @@ over the budget.
 """
 
 import logging
+from unittest.mock import AsyncMock
 
 import pytest
 
 from cce.llm.base import LLMResponse
-from cce.models.job import JobStatus
+from cce.models.job import JobStage, JobStatus
 from cce.orchestrator.pipeline import Pipeline
 from cce.verification.gate import GateDecision
 from tests.conftest import (
@@ -225,3 +226,39 @@ async def test_budget_none_or_unreached_is_behavior_neutral(sqlite_store, budget
     assert not any(
         rec.metrics and rec.metrics.get("budget_exceeded") for rec in result.job.stages
     )
+
+
+# ---------------------------------------------------------------------------
+# A resent (discarded) attempt's tokens still count
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_discarded_writer_attempt_counts_toward_job_totals(
+    sqlite_store, monkeypatch
+):
+    """First writer reply unparseable, resend fine: the job totals include
+    both writer attempts plus the verifier (the discarded reply was paid for)."""
+    monkeypatch.setattr("cce.llm.retry.asyncio.sleep", AsyncMock())
+    discarded_usage = {"input_tokens": 1000, "output_tokens": 50}
+    llm = _llm_with_usage(
+        ("not json", discarded_usage),
+        (_writer_json(), WRITER_USAGE),
+        (_verifier_json(), VERIFIER_USAGE),
+    )
+    pipeline = Pipeline(
+        config=make_engine_config(),
+        crawl_adapter=_make_adapter(),
+        evidence_store=sqlite_store,
+        llm=llm,
+    )
+
+    result = await pipeline.run(make_curation_request(), make_source_policy())
+
+    assert len(llm.calls) == 3
+    assert result.package is not None
+    publish = [rec for rec in result.job.stages if rec.stage == JobStage.PUBLISH]
+    assert publish[0].metrics is not None
+    totals = publish[0].metrics["token_usage"]
+    assert totals["input_tokens"] == 1000 + 1200 + 400
+    assert totals["output_tokens"] == 50 + 300 + 100

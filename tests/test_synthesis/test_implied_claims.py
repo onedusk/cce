@@ -141,6 +141,28 @@ async def test_release_valve_suppresses_low_ratio_counter(markers):
     assert annotations == []
 
 
+async def test_release_valve_log_clips_model_supplied_topic(markers, caplog):
+    topic = "sleeping pills" + "A" * 20 + "\nINJECTED log line " + "B" * 100
+    checker, _llm, _store = _make_checker(
+        markers=markers,
+        counter_evidence=[make_evidence()],
+        extracted_topics=[topic],
+    )
+
+    with caplog.at_level("INFO"):
+        await checker.check(
+            "Unlike sleeping pills, CBT-I works.",
+            evidence_store=_store,
+            cited_evidence=[make_evidence() for _ in range(10)],
+        )
+
+    (record,) = [r for r in caplog.records if "Release valve" in r.message]
+    assert "\n" not in record.message
+    assert "INJECTED" not in record.message
+    assert "BBBB" not in record.message
+    assert repr(topic[:40]) in record.message
+
+
 async def test_release_valve_does_not_suppress_when_cited_empty(markers):
     """Empty cited pool → no denominator; do NOT auto-suppress (v1 design)."""
     counter = [make_evidence()]

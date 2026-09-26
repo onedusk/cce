@@ -22,6 +22,7 @@ from cce.llm.base import (
     LLMResponse,
     UnparseableResponseError,
     ensure_complete,
+    sum_usage,
 )
 from cce.llm.retry import with_llm_retry
 from cce.models.content import (
@@ -34,7 +35,7 @@ from cce.models.content import (
 from cce.models.evidence import Evidence
 from cce.models.paths import PathConfig
 from cce.models.request import CurationRequest
-from cce.parsing import extract_json, resolve_evidence_id
+from cce.parsing import clip_for_log, extract_json, resolve_evidence_id
 
 logger = logging.getLogger(__name__)
 
@@ -243,6 +244,8 @@ exists, and mark remaining gaps as [INSUFFICIENT EVIDENCE].
         if path_config is not None:
             system_prompt += self._build_path_addendum(path_config)
 
+        attempt_usage: list[dict] = []
+
         async def _attempt() -> WriterOutput:
             response = await self._llm.complete(
                 messages,
@@ -250,11 +253,13 @@ exists, and mark remaining gaps as [INSUFFICIENT EVIDENCE].
                 temperature=self._config.temperature,
                 output_schema=WRITER_OUTPUT_SCHEMA,
             )
+            attempt_usage.append(response.usage)
             ensure_complete(response, role="writer")
             output = self._parse_response(
                 response, evidence, path, lineage, ev_lookup=ev_lookup
             )
-            output.token_usage = response.usage
+            # A discarded (resent) attempt was paid for too: count it.
+            output.token_usage = sum_usage(attempt_usage)
             return output
 
         # One resend on an unparseable reply, then the error propagates.
@@ -326,7 +331,9 @@ exists, and mark remaining gaps as [INSUFFICIENT EVIDENCE].
             if ev is not None:
                 citations.append(Citation(evidence_id=eid, url=ev.url))
             else:
-                logger.warning("Writer cited unknown evidence ID: %s", eid_raw)
+                logger.warning(
+                    "Writer cited unknown evidence ID: %s", clip_for_log(eid_raw)
+                )
 
         # Parse evidence map
         evidence_map_raw = parsed.get("evidence_map", [])

@@ -20,6 +20,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `xhigh`/`max` on it (which used to be dropped silently) now raise
   `ConfigError` when the provider is built.
 
+### Fixed: LLM retry keeps every unparseable attempt
+- `with_llm_retry` chains each failed attempt's error to the previous one
+  (`__cause__`, unless it already has a cause). When both writer (or
+  verifier) replies are unparseable, the raised `UnparseableResponseError`
+  now leads back to the first one, so a caller can reach both
+  `raw_response` values.
+
+### Fixed: a resent LLM attempt's tokens count toward the job
+- The writer and verifier now report the summed usage of every attempt
+  (new `cce.llm.base.sum_usage`), so a reply discarded as unparseable and
+  resent is included in the job totals, the WRITE stage metrics and the
+  `CCE_MAX_TOKENS_PER_JOB` checkpoint.
+
+### Fixed: model-supplied IDs and topics are clipped in logs
+- The writer's unknown-citation warning, the editor's citation-drift
+  warning and the implied-claim release-valve log now pass model-written
+  text through `cce.parsing.clip_for_log` (first 40 chars, repr-quoted),
+  so a reply can't smuggle its text or a forged line into the logs.
+
 ## [Unreleased] — runtime model limits and follow-ups
 
 Follow-ups from the Phase 2 todo list, on `feature/runtime-model-limits`.
