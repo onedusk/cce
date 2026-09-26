@@ -94,6 +94,15 @@ with only `llm` injected raises). An injected LLM or crawl adapter needs no
 usage keys (the token budget reads them). Configuration itself still loads
 only through the registry.
 
+**Reading a failed run's error in memory.** In embedded mode,
+`JobHandle.error` holds the exception that failed the job's last run (None
+until then or when no exception failed it, as with no evidence; cleared by
+`retry()`; always None in remote mode). For an
+unreadable writer or verifier reply it is an `UnparseableResponseError`
+whose `raw_response` is the reply text, for the caller to persist where it
+sees fit. cce never logs or stores that text: the job store and the API only
+carry `job.error` (code, message and stage).
+
 **New configuration surfaces must enter through the registry** — add a field
 to `ConfigRegistry`, load it in `load()`, and consume it from
 `build_components`. Do not add `load_*` calls to `engine.py` or

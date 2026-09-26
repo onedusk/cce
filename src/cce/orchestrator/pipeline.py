@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from cce.config.types import EngineConfig, QualityGateConfig
@@ -20,7 +21,11 @@ from cce.discovery.discoverer import Discoverer
 from cce.discovery.embeddings import EmbeddingProvider
 from cce.evidence.formatting import format_evidence_for_prompt
 from cce.evidence.store import EvidenceStore
-from cce.llm.base import LLMProvider
+from cce.llm.base import (
+    IncompleteResponseError,
+    LLMProvider,
+    UnparseableResponseError,
+)
 from cce.models.content import ContentLineage, ContentScores, ContentUnit
 from cce.models.evidence import DiscoveryResult, Evidence
 from cce.models.job import Job, JobError, JobProgress, JobStage, JobStatus, StageRecord
@@ -282,6 +287,43 @@ def _budget_stop_note(path: str, stages: Sequence[StageRecord]) -> str:
     return ""
 
 
+# Stage a failing LLM role runs in; the implied-claim checker runs inside the
+# edit step, before the editor call.
+_ROLE_STAGES: dict[str, JobStage] = {
+    "writer": JobStage.WRITE,
+    "verifier": JobStage.VERIFY,
+    "editor": JobStage.EDIT,
+    "implied-claim checker": JobStage.EDIT,
+}
+
+
+def _error_code_and_stage(
+    error: BaseException, fallback: JobStage
+) -> tuple[str, JobStage]:
+    """JobError code and stage for the exception that failed a run.
+
+    An incomplete or unparseable LLM reply gets its own code and the stage of
+    the role that produced it; anything else stays ``pipeline_error`` at
+    ``fallback`` (the job's current stage).
+    """
+    if isinstance(error, IncompleteResponseError):
+        return "incomplete_response", _ROLE_STAGES.get(error.role, fallback)
+    if isinstance(error, UnparseableResponseError):
+        return "unparseable_response", _ROLE_STAGES.get(error.role, fallback)
+    return "pipeline_error", fallback
+
+
+@dataclass
+class _PathRuns:
+    """What the per-path loops have produced so far, filled path by path so a
+    run that fails on a later path still has its completed siblings."""
+
+    units: list[ContentUnit] = field(default_factory=list)
+    gate_results: list[GateResult] = field(default_factory=list)
+    gate_results_by_path: dict[str, list[GateResult]] = field(default_factory=dict)
+    writer_gaps_by_path: dict[str, list[str]] = field(default_factory=dict)
+
+
 def _build_sibling_digest(units: list[ContentUnit]) -> str:
     """Compact digest of already-written sibling drafts, fed to the next path's writer.
 
@@ -388,11 +430,14 @@ class Pipeline:
             engine_version=self._config.engine_version,
         )
 
+        runs = _PathRuns()
+        evidence: list[Evidence] = []
+        context = list(request.context)  # pinned evidence (B11)
+
         try:
             # --- Stage 1: Discover ---
             discovery = await self._run_discovery(request, policy, job, job_logger)
             evidence = discovery.evidence
-            context = list(request.context)  # pinned evidence (B11)
 
             if not evidence and not context:
                 return PipelineResult(
@@ -418,12 +463,7 @@ class Pipeline:
                 )
 
             # --- Stage 3: Write + Verify loop (per output path, run sequentially) ---
-            (
-                all_units,
-                all_gate_results,
-                gate_results_by_path,
-                writer_gaps_by_path,
-            ) = await self._run_all_paths(
+            await self._run_all_paths(
                 request=request,
                 penalize_coi=policy.resolve_for_topic(
                     request.topic
@@ -435,22 +475,23 @@ class Pipeline:
                 job_logger=job_logger,
                 token_usage=token_usage,
                 ev_lookup=ev_lookup,
+                runs=runs,
             )
 
             # --- Stage 4: Build publish package ---
             final_status = self._interpret_terminal_decisions(
-                all_gate_results, request.paths, gate_results_by_path
+                runs.gate_results, request.paths, runs.gate_results_by_path
             )
             package = self._build_output_package(
                 job=job,
                 request=request,
                 run_id=run_id,
-                units=all_units,
+                units=runs.units,
                 verification=_path_verifications(
                     request.paths,
-                    all_units,
-                    gate_results_by_path,
-                    writer_gaps_by_path,
+                    runs.units,
+                    runs.gate_results_by_path,
+                    runs.writer_gaps_by_path,
                     job.stages,
                 ),
                 evidence=[*context, *evidence],
@@ -468,17 +509,57 @@ class Pipeline:
             )
 
             return PipelineResult(
-                package=package, job=job, gate_results=all_gate_results
+                package=package, job=job, gate_results=runs.gate_results
             )
 
         except Exception as e:
             # Paths now run sequentially (M03), so a failing path raises its
             # exception directly — no grouped-exception unwrap needed.
             job_logger.exception("Pipeline run %s failed: %s", run_id, e)
+            failed_stage = job.stage
+            code, error_stage = _error_code_and_stage(
+                e, failed_stage or JobStage.DISCOVER
+            )
+            # The job still fails, but paths that finished before the failing
+            # one keep their units and verification records in the package.
+            package = None
+            if runs.units:
+                try:
+                    package = self._build_output_package(
+                        job=job,
+                        request=request,
+                        run_id=run_id,
+                        units=runs.units,
+                        verification=_path_verifications(
+                            [
+                                p
+                                for p in request.paths
+                                if p in runs.gate_results_by_path
+                            ],
+                            runs.units,
+                            runs.gate_results_by_path,
+                            runs.writer_gaps_by_path,
+                            job.stages,
+                        ),
+                        evidence=[*context, *evidence],
+                        token_usage=token_usage,
+                    )
+                except Exception:
+                    # Never let the partial package replace the run's error.
+                    job_logger.exception(
+                        "Pipeline run %s: partial package not built", run_id
+                    )
             return PipelineResult(
-                package=None,
-                job=self._update_job(job, JobStatus.FAILED, error_msg=str(e)),
-                gate_results=[],
+                package=package,
+                job=self._update_job(
+                    job,
+                    JobStatus.FAILED,
+                    stage=failed_stage,
+                    error_msg=str(e),
+                    error_code=code,
+                    error_stage=error_stage,
+                ),
+                gate_results=runs.gate_results,
                 error=e,
             )
 
@@ -735,12 +816,8 @@ class Pipeline:
         job_logger: logging.Logger | logging.LoggerAdapter,
         token_usage: dict[str, int],
         ev_lookup: dict[str, Evidence],
-    ) -> tuple[
-        list[ContentUnit],
-        list[GateResult],
-        dict[str, list[GateResult]],
-        dict[str, list[str]],
-    ]:
+        runs: _PathRuns,
+    ) -> None:
         """Run per-path write-verify loops SEQUENTIALLY so each path sees its
         siblings (M03, ADR-003).
 
@@ -757,7 +834,9 @@ class Pipeline:
         path's local token dict is merged into ``token_usage`` as it finishes, so
         a later path's budget checkpoint sees every prior path's spend.
 
-        Returns ``(units, flat gate results, gate results grouped by path)``.
+        Fills ``runs`` (units, flat gate results, gate results and writer gaps
+        by path) as each path finishes, so a later path's exception leaves the
+        completed paths' results in place for ``run()``.
         """
         total = len(request.paths)
         job = self._update_job(
@@ -768,15 +847,10 @@ class Pipeline:
         )
         job_logger.info("Starting write-verify across %d path(s) sequentially", total)
 
-        all_units: list[ContentUnit] = []
-        all_gate_results: list[GateResult] = []
-        writer_gaps_by_path: dict[str, list[str]] = {}
-        gate_results_by_path: dict[str, list[GateResult]] = {}
-
         for completed, path in enumerate(request.paths, start=1):
             # Build the sibling digest from prior paths' drafts (None for the
             # first path) and thread it into this path's writer prompt.
-            sibling_context = _build_sibling_digest(all_units) if all_units else None
+            sibling_context = _build_sibling_digest(runs.units) if runs.units else None
             unit, gate_results, path_tokens, writer_gaps = await self._run_one_path(
                 request=request,
                 penalize_coi=penalize_coi,
@@ -790,11 +864,11 @@ class Pipeline:
                 job_token_usage=token_usage,
                 sibling_context=sibling_context,
             )
-            all_gate_results.extend(gate_results)
-            gate_results_by_path[path] = gate_results
-            writer_gaps_by_path[path] = writer_gaps
+            runs.gate_results.extend(gate_results)
+            runs.gate_results_by_path[path] = gate_results
+            runs.writer_gaps_by_path[path] = writer_gaps
             if unit is not None:
-                all_units.append(unit)
+                runs.units.append(unit)
             _merge_tokens(token_usage, path_tokens)
             job_logger.info(
                 "Progress: %d/%d paths complete (finished '%s')", completed, total, path
@@ -805,8 +879,6 @@ class Pipeline:
                 JobStage.WRITE,
                 progress=JobProgress(completed=completed, total=total),
             )
-
-        return all_units, all_gate_results, gate_results_by_path, writer_gaps_by_path
 
     async def _write_verify_loop(
         self,
@@ -1294,8 +1366,13 @@ class Pipeline:
         stage: JobStage | None = None,
         error_msg: str | None = None,
         progress: JobProgress | None = None,
+        error_code: str = "pipeline_error",
+        error_stage: JobStage | None = None,
     ) -> Job:
-        """Update job tracking fields."""
+        """Update job tracking fields.
+
+        ``error_stage`` defaults to the job's current stage (DISCOVER if none).
+        """
         job.status = status
         job.updated_at = datetime.now(UTC)
 
@@ -1315,9 +1392,9 @@ class Pipeline:
 
         if error_msg:
             job.error = JobError(
-                code="pipeline_error",
+                code=error_code,
                 message=error_msg,
-                stage=job.stage or JobStage.DISCOVER,
+                stage=error_stage or job.stage or JobStage.DISCOVER,
             )
 
         return job

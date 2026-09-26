@@ -39,6 +39,37 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   text through `cce.parsing.clip_for_log` (first 40 chars, repr-quoted),
   so a reply can't smuggle its text or a forged line into the logs.
 
+### Changed: typed error codes for incomplete and unparseable LLM replies
+- A job failed by `IncompleteResponseError` now records
+  `JobError.code="incomplete_response"`, and one failed by
+  `UnparseableResponseError` records `"unparseable_response"` (both were
+  `"pipeline_error"`). `JobError.stage` names the failing role's stage:
+  writer WRITE, verifier VERIFY, editor and implied-claim checker EDIT
+  (the job's own stage stayed WRITE for the whole loop, so a verifier
+  failure read as a write failure). Other failures keep `"pipeline_error"`.
+  The message is unchanged and never carries reply text.
+
+### Changed: a failing path no longer drops its completed siblings
+- When a path raises (an unparseable writer reply, say), the job is still
+  FAILED with the error recorded, but `PipelineResult.package` now carries
+  the units of the paths that finished before it, with a
+  `PublishPackage.verification` record for each of them (none for the
+  failing or unstarted paths). The engine stores that package, so
+  `GET /v1/curate/jobs/{id}/package` on such a job returns it (as it does
+  for REVIEW_REQUIRED jobs). `emit-mdx --all` / `--topic` only read
+  completed jobs and `emit-mdx --job` still refuses a failed one without
+  `--force`. A run that fails before any path completes has no package, as
+  before. The failing path's own token spend is not in the package's
+  PUBLISH record.
+
+### Added: `JobHandle.error` for embedded callers
+- In embedded mode the exception that failed a job's last run is on
+  `JobHandle.error` (in memory only; None in remote mode, cleared by
+  `retry()`), set before the terminal status is stored so it is there once
+  `wait()` returns. An `UnparseableResponseError` keeps the reply text on
+  `raw_response`. The reply text never reaches the job store, the logs or
+  the API (which passes no error callback to `run_pipeline_task`).
+
 ## [Unreleased] — runtime model limits and follow-ups
 
 Follow-ups from the Phase 2 todo list, on `feature/runtime-model-limits`.
