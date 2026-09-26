@@ -29,6 +29,13 @@ Follow-ups from the Phase 2 todo list, on `feature/runtime-model-limits`.
   `set -a; . ./.env`. The entry point is `cce.cli:main`; the Typer `app`
   itself (and so every `CliRunner` test) doesn't read `.env`.
 
+### Fixed — `cce batch` exit codes
+- `cce batch` exited 0 whatever its jobs did. It now exits with the worst
+  job outcome in `cce curate`'s codes: 1 if any job failed (or was still
+  running at the wait timeout), else 2 for any REVIEW_REQUIRED, else 3 for
+  any READY_FOR_APPROVAL, else 0. Skipped malformed entries still don't
+  fail the batch.
+
 ## [Unreleased] — bubble-readiness Phase 2 (multi-tenant Pipeline use)
 
 Phase 2 of `docs/internal/bubble-readiness-plan-2026-09-23.md` (local-only):

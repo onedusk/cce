@@ -49,7 +49,7 @@ uv add --dev <package>
 # Run a single topic through the embedded engine and wait (exit 0 COMPLETED / 2 REVIEW_REQUIRED / 3 READY_FOR_APPROVAL / 1 FAILED)
 uv run cce curate "sleep hygiene" --policy-id peer-reviewed --path learn
 
-# Run the pipeline over a YAML topics file
+# Run the pipeline over a YAML topics file (exits with the worst job outcome, in curate's codes)
 uv run cce batch --topics-file policies/examples/topics-batch.yaml --policy-id peer-reviewed
 
 # Inspect job state without the API server (reads the jobs store directly)

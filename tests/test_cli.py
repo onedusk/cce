@@ -330,6 +330,52 @@ def test_batch_happy_path_skips_malformed_entry(tmp_path, monkeypatch):
     assert "completed: second topic" in result.output
 
 
+@pytest.mark.parametrize(
+    ("statuses", "code"),
+    [
+        (["completed", "completed"], 0),
+        (["completed", "ready_for_approval"], 3),
+        (["ready_for_approval", "review_required"], 2),
+        (["review_required", "failed"], 1),
+    ],
+)
+def test_batch_exits_with_the_worst_job_outcome(tmp_path, monkeypatch, statuses, code):
+    """cce batch always exited 0; it now uses curate's codes, worst wins."""
+    from cce.engine import CurationEngine
+    from cce.models.job import JobStatus
+    from tests.conftest import make_job
+
+    outcomes = iter(JobStatus(s) for s in statuses)
+
+    class _Handle:
+        def __init__(self, request):
+            self._request = request
+
+        async def wait(self, timeout: float = 600):
+            return make_job(request=self._request, status=next(outcomes))
+
+    class _Engine:
+        async def curate(self, request):
+            return _Handle(request)
+
+        async def close(self) -> None:
+            pass
+
+    async def _fake_embedded(*args, **kwargs):
+        return _Engine()
+
+    monkeypatch.setattr(CurationEngine, "embedded", _fake_embedded)
+    topics_file = tmp_path / "topics.yaml"
+    topics_file.write_text(
+        "- topic: first topic\n  paths: [blog]\n- topic: second topic\n  paths: [blog]\n"
+    )
+
+    result = runner.invoke(
+        app, ["batch", "--topics-file", str(topics_file), "--policy-id", "p"]
+    )
+    assert result.exit_code == code, result.output
+
+
 # ---------------------------------------------------------------------------
 # emit-mdx — error branches (T-04.05)
 # ---------------------------------------------------------------------------
