@@ -30,6 +30,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before. The failing path's own token spend is not in the package's
   PUBLISH record.
 
+### Added: `JobHandle.error` for embedded callers
+- In embedded mode the exception that failed a job's last run is on
+  `JobHandle.error` (in memory only; None in remote mode, cleared by
+  `retry()`), set before the terminal status is stored so it is there once
+  `wait()` returns. An `UnparseableResponseError` keeps the reply text on
+  `raw_response`. The reply text never reaches the job store, the logs or
+  the API (which passes no error callback to `run_pipeline_task`).
+
 ## [Unreleased] — runtime model limits and follow-ups
 
 Follow-ups from the Phase 2 todo list, on `feature/runtime-model-limits`.
