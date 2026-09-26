@@ -5,6 +5,14 @@ All notable changes to the Content Curation Engine (CCE).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] todo sweep
+
+### Fixed: implied-claim checker sent topic-less fragments to the LLM
+- `rather than ` and `by contrast` match only frame keywords, so the
+  topic-extraction call got a fragment naming nothing (live reply: "I don't
+  see an actual fragment to analyze"). Frames with no word besides the frame
+  keywords are now skipped before the LLM call. Scorer counts are unchanged.
+
 ## [Unreleased] — runtime model limits and follow-ups
 
 Follow-ups from the Phase 2 todo list, on `feature/runtime-model-limits`.

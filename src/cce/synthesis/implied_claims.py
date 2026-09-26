@@ -20,6 +20,7 @@ rather than a full spectrum rewrite.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 
 from cce.config.markers import ContrastiveSubtype, HumanizationMarkers
@@ -84,6 +85,22 @@ Return JSON: {"dismissed_topic": "<topic>", "rationale": "<why>"}\
 """
 
 
+# Words the contrastive patterns themselves supply ("unlike", "rather than",
+# "by contrast", "it's not about", ...). A matched fragment made only of these
+# names no dismissed topic, so the extractor has nothing to return: "rather
+# than " and "by contrast" match that way on every hit.
+_FRAME_KEYWORDS = frozenset(
+    {"unlike", "not", "just", "only", "but", "rather", "than", "it", "its", "s"}
+    | {"about", "by", "contrast"}
+)
+_WORD_RE = re.compile(r"[a-z]+")
+
+
+def _names_a_topic(fragment: str) -> bool:
+    """Return True when the fragment has a word besides the frame keywords."""
+    return any(w not in _FRAME_KEYWORDS for w in _WORD_RE.findall(fragment.lower()))
+
+
 class ImpliedClaimChecker:
     """Find contrastive frames whose dismissed side has supporting evidence."""
 
@@ -128,6 +145,10 @@ class ImpliedClaimChecker:
             # extraction saves one request per parasitic frame and avoids
             # the fragment-too-short warnings the extractor logs on them.
             if frame.kind == "parasitic":
+                continue
+            # Keyword-only matches carry no topic; asking the LLM for one
+            # just spends a request on "I don't see a fragment" replies.
+            if not _names_a_topic(frame.matched_text):
                 continue
             dismissed = await self._extract_dismissed_topic(frame)
             if not dismissed:

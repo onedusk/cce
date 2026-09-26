@@ -7,13 +7,14 @@ import json
 import pytest
 
 from cce.config.markers import HumanizationMarkers, load_markers
-from cce.config.types import ImpliedClaimsConfig
+from cce.config.types import HumanizationThresholds, ImpliedClaimsConfig
 from cce.llm.base import IncompleteResponseError, LLMResponse
 from cce.models.evidence import Evidence
 from cce.synthesis.implied_claims import (
     ContrastiveFrame,
     ImpliedClaimChecker,
 )
+from cce.synthesis.scoring import Scorer
 from tests.conftest import MockLLMProvider, make_evidence
 
 pytestmark = pytest.mark.unit
@@ -333,3 +334,34 @@ async def test_topic_extraction_raises_on_truncated_reply(markers):
         )
 
     assert len(llm.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Choose a routine rather than a pill.",
+        "By contrast, CBT-I changes habits.",
+    ],
+)
+async def test_check_skips_keyword_only_frames_no_llm_call(markers, body):
+    """'rather than ' and 'by contrast' match only frame keywords, so the
+    fragment names no dismissed topic: no extraction call, no store search,
+    and the scorer still counts the frame."""
+    llm = MockLLMProvider([])  # no scripted responses: any call would raise
+    store = StubStore(results=[make_evidence()])
+    checker = ImpliedClaimChecker(
+        llm=llm,
+        config=ImpliedClaimsConfig(enabled=True),
+        markers=markers,
+    )
+    assert checker._detect_frames(body), "fixture must contain a detected frame"
+
+    annotations = await checker.check(
+        body, evidence_store=store, cited_evidence=[make_evidence()]
+    )
+
+    assert annotations == []
+    assert llm.calls == []
+    assert store.search_calls == []
+    scores = Scorer(thresholds=HumanizationThresholds(), markers=markers).score(body)
+    assert scores.contrastive_frame_count == 1
