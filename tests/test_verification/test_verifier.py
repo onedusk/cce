@@ -370,6 +370,33 @@ async def test_verify_passes_structured_output_schema():
 
 
 @pytest.mark.integration
+async def test_verify_token_usage_includes_the_discarded_attempt(monkeypatch):
+    monkeypatch.setattr("cce.llm.retry.asyncio.sleep", AsyncMock())
+    llm = MockLLMProvider(
+        [
+            LLMResponse(
+                content="bad one",
+                model="m",
+                usage={"input_tokens": 40, "output_tokens": 5},
+                stop_reason="end_turn",
+            ),
+            LLMResponse(
+                content=_make_valid_verifier_json(),
+                model="m",
+                usage={"input_tokens": 45, "output_tokens": 20},
+                stop_reason="end_turn",
+            ),
+        ]
+    )
+
+    report = await Verifier(llm).verify(
+        make_content_unit(content="Claim [ev:ev_001]."), [make_evidence(id="ev_001")]
+    )
+
+    assert report.token_usage == {"input_tokens": 85, "output_tokens": 25}
+
+
+@pytest.mark.integration
 async def test_verify_resends_once_then_raises_on_unparseable(monkeypatch):
     """No zero-score verdict: one resend, then UnparseableResponseError."""
     monkeypatch.setattr("cce.llm.retry.asyncio.sleep", AsyncMock())

@@ -6,6 +6,7 @@ know or care which provider is behind it.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
@@ -26,6 +27,15 @@ class LLMResponse:
     model: str = ""
     usage: dict = field(default_factory=dict)  # token counts
     stop_reason: str = ""
+
+
+def sum_usage(usages: Iterable[Mapping[str, int]]) -> dict[str, int]:
+    """Add token-usage dicts key by key (e.g. every attempt of one call)."""
+    total: dict[str, int] = {}
+    for usage in usages:
+        for key, count in usage.items():
+            total[key] = total.get(key, 0) + count
+    return total
 
 
 # Stop reasons after which the reply is incomplete and must not be parsed.

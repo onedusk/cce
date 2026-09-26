@@ -497,6 +497,33 @@ async def test_write_resends_once_on_unparseable_reply(monkeypatch):
 
 
 @pytest.mark.integration
+async def test_write_token_usage_includes_the_discarded_attempt(monkeypatch):
+    monkeypatch.setattr("cce.llm.retry.asyncio.sleep", AsyncMock())
+    llm = MockLLMProvider(
+        [
+            LLMResponse(
+                content="not json",
+                model="mock",
+                usage={"input_tokens": 100, "output_tokens": 7},
+                stop_reason="end_turn",
+            ),
+            LLMResponse(
+                content=_make_writer_json(),
+                model="mock",
+                usage={"input_tokens": 120, "output_tokens": 30},
+                stop_reason="end_turn",
+            ),
+        ]
+    )
+
+    output = await Writer(llm).write(
+        make_curation_request(), [make_evidence(id="ev_001")], "blog"
+    )
+
+    assert output.token_usage == {"input_tokens": 220, "output_tokens": 37}
+
+
+@pytest.mark.integration
 async def test_write_raises_after_second_unparseable_reply(monkeypatch):
     """Retry once, then fail: no raw-markdown fallback, no third call."""
     monkeypatch.setattr("cce.llm.retry.asyncio.sleep", AsyncMock())

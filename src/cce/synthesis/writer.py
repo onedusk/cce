@@ -22,6 +22,7 @@ from cce.llm.base import (
     LLMResponse,
     UnparseableResponseError,
     ensure_complete,
+    sum_usage,
 )
 from cce.llm.retry import with_llm_retry
 from cce.models.content import (
@@ -243,6 +244,8 @@ exists, and mark remaining gaps as [INSUFFICIENT EVIDENCE].
         if path_config is not None:
             system_prompt += self._build_path_addendum(path_config)
 
+        attempt_usage: list[dict] = []
+
         async def _attempt() -> WriterOutput:
             response = await self._llm.complete(
                 messages,
@@ -250,11 +253,13 @@ exists, and mark remaining gaps as [INSUFFICIENT EVIDENCE].
                 temperature=self._config.temperature,
                 output_schema=WRITER_OUTPUT_SCHEMA,
             )
+            attempt_usage.append(response.usage)
             ensure_complete(response, role="writer")
             output = self._parse_response(
                 response, evidence, path, lineage, ev_lookup=ev_lookup
             )
-            output.token_usage = response.usage
+            # A discarded (resent) attempt was paid for too: count it.
+            output.token_usage = sum_usage(attempt_usage)
             return output
 
         # One resend on an unparseable reply, then the error propagates.

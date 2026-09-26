@@ -14,6 +14,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   now leads back to the first one, so a caller can reach both
   `raw_response` values.
 
+### Fixed: a resent LLM attempt's tokens count toward the job
+- The writer and verifier now report the summed usage of every attempt
+  (new `cce.llm.base.sum_usage`), so a reply discarded as unparseable and
+  resent is included in the job totals, the WRITE stage metrics and the
+  `CCE_MAX_TOKENS_PER_JOB` checkpoint.
+
 ## [Unreleased] — runtime model limits and follow-ups
 
 Follow-ups from the Phase 2 todo list, on `feature/runtime-model-limits`.
