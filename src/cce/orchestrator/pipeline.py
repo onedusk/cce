@@ -1152,7 +1152,6 @@ class Pipeline:
             annotations = await self._implied_claim_checker.check(
                 unit.content,
                 cited_evidence=path_evidence,
-                evidence_store=self._evidence_store,
             )
             log.info(
                 "ImpliedClaimChecker: %d annotation(s) for path '%s' iter %d",

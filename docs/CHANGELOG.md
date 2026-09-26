@@ -13,6 +13,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   see an actual fragment to analyze"). Frames with no word besides the frame
   keywords are now skipped before the LLM call. Scorer counts are unchanged.
 
+### Fixed: implied-claim hints named evidence the path could not cite
+- The counter-evidence search ran store-wide, so hints could name other
+  jobs' evidence IDs; citing one is editor citation drift, so the edit was
+  discarded after paying for it. The checker now searches only the path's
+  evidence (same case-insensitive title/excerpt match, same limit), and
+  `ImpliedClaimChecker.check` no longer takes `evidence_store`. The release
+  valve ratio now reads as the share of the path's own evidence that
+  supports the dismissed side.
+
 ## [Unreleased] — runtime model limits and follow-ups
 
 Follow-ups from the Phase 2 todo list, on `feature/runtime-model-limits`.
