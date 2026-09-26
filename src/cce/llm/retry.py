@@ -46,12 +46,19 @@ async def with_llm_retry(
 
     Backoff is exponential with jitter: attempt N waits
     ``base_delay * 2^(N-1) * (1 + rand()*JITTER_FRACTION)`` seconds.
+
+    Each failed attempt's error is chained (``__cause__``) to the previous
+    attempt's, unless it already has a cause, so the error finally raised
+    leads back to every attempt (e.g. each UnparseableResponseError's
+    ``raw_response``).
     """
     last_error: BaseException | None = None
     for attempt in range(1, max_attempts + 1):
         try:
             return await fn(*args, **kwargs)
         except RETRYABLE_EXCEPTIONS as e:
+            if last_error is not None and last_error is not e and e.__cause__ is None:
+                e.__cause__ = last_error
             last_error = e
             if attempt < max_attempts:
                 delay = _with_jitter(base_delay * (2 ** (attempt - 1)))

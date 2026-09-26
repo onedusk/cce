@@ -5,6 +5,15 @@ All notable changes to the Content Curation Engine (CCE).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] todo sweep
+
+### Fixed: LLM retry keeps every unparseable attempt
+- `with_llm_retry` chains each failed attempt's error to the previous one
+  (`__cause__`, unless it already has a cause). When both writer (or
+  verifier) replies are unparseable, the raised `UnparseableResponseError`
+  now leads back to the first one, so a caller can reach both
+  `raw_response` values.
+
 ## [Unreleased] — runtime model limits and follow-ups
 
 Follow-ups from the Phase 2 todo list, on `feature/runtime-model-limits`.

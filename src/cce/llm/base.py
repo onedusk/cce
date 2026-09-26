@@ -70,7 +70,8 @@ class UnparseableResponseError(ValueError):
     Raised by the writer and verifier instead of falling back to raw
     markdown or a zero-score verdict. A ValueError, so ``with_llm_retry``
     resends; both callers allow one resend, then the error propagates and
-    the pipeline fails the job.
+    the pipeline fails the job. The first attempt's error is chained on as
+    ``__cause__``, so both replies stay reachable.
 
     The reply text is kept on ``raw_response`` for the caller to persist
     where it sees fit: direct Writer/Verifier callers catch the error, and

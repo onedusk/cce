@@ -380,10 +380,14 @@ async def test_verify_resends_once_then_raises_on_unparseable(monkeypatch):
         ]
     )
 
-    with pytest.raises(UnparseableResponseError):
+    with pytest.raises(UnparseableResponseError) as exc:
         await Verifier(llm).verify(
             make_content_unit(content="Claim [ev:ev_001]."),
             [make_evidence(id="ev_001")],
         )
 
     assert len(llm.calls) == 2
+    assert exc.value.raw_response == "bad two"
+    # The first attempt is chained, so a caller can reach both replies.
+    assert isinstance(exc.value.__cause__, UnparseableResponseError)
+    assert exc.value.__cause__.raw_response == "bad one"

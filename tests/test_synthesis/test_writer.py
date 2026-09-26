@@ -514,6 +514,9 @@ async def test_write_raises_after_second_unparseable_reply(monkeypatch):
 
     assert len(llm.calls) == 2
     assert exc.value.raw_response == "second bad"
+    # The first attempt is chained, so a caller can reach both replies.
+    assert isinstance(exc.value.__cause__, UnparseableResponseError)
+    assert exc.value.__cause__.raw_response == "first bad"
 
 
 @pytest.mark.unit
