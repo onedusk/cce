@@ -261,7 +261,7 @@ want a copy of the old shape).
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `CCE_HUMANIZATION_ENABLED` | `false` | Master switch for scorer/editor/checker |
+| `CCE_HUMANIZATION_ENABLED` | `true` | Master switch for scorer/editor/checker (on by default since 2026-06-24; set `false` to skip all three) |
 | `CCE_HUMANIZATION_MARKERS_PATH` | `config/humanization_markers.yaml` | Marker lists |
 
 Granular humanization thresholds are deliberately YAML-only (reviewable in

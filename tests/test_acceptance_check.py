@@ -14,6 +14,7 @@ import pytest
 
 from cce.discovery.embeddings import EmbeddingResult, EmbeddingUnavailableError
 from cce.llm.base import LLMResponse
+from tests.conftest import MockLLMProvider
 
 # The harness lives in scripts/research/, outside the importable package. Add it
 # to sys.path the same way the script reuses run_score_sweep.
@@ -203,6 +204,22 @@ async def test_judge_repetition_uses_temperature_zero_and_fixed_rubric() -> None
     assert len(llm.calls) == 1
     assert llm.calls[0]["temperature"] == 0.0
     assert llm.calls[0]["system"] == rac._JUDGE_RUBRIC
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("stop_reason", ["max_tokens", "refusal"])
+async def test_judge_repetition_reports_incomplete_reply(stop_reason: str) -> None:
+    # A truncated or refused reply is reported as such, not as bad JSON, and
+    # the reply text stays out of the report.
+    llm = MockLLMProvider(
+        [LLMResponse(content='{"verdict": "pa SECRET', stop_reason=stop_reason)]
+    )
+    result = await rac.judge_repetition({"learn": "L", "explore": "E"}, llm)
+    assert result["verdict"] == "error"
+    assert result["offending_passages"] == []
+    assert stop_reason in result["rationale"]
+    assert "JSON" not in result["rationale"]
+    assert "SECRET" not in result["rationale"]
 
 
 # --------------------------------------------------------------------------- #
