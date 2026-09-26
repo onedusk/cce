@@ -17,6 +17,18 @@ logger = logging.getLogger(__name__)
 #   [ev_abc123]     — bare ID in brackets (common LLM output)
 EV_MARKER_RE = re.compile(r"\[ev:([^\]]+)\]|\[(ev_[^\]]+)\]")
 
+LOG_CLIP_CHARS = 40
+
+
+def clip_for_log(value: object) -> str:
+    """Model-supplied text made safe for a log line.
+
+    Cut to LOG_CLIP_CHARS, then repr-quoted so newlines and control
+    characters are escaped: a reply can't smuggle its text into the logs or
+    forge a log line through an ID or topic the model wrote.
+    """
+    return repr(str(value)[:LOG_CLIP_CHARS])
+
 
 def resolve_evidence_id(
     ev_id_raw: str, evidence_by_id: dict[str, Evidence]

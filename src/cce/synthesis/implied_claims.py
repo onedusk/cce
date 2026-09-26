@@ -29,7 +29,7 @@ from cce.evidence.store import EvidenceStore
 from cce.llm.base import LLMMessage, LLMProvider, ensure_complete
 from cce.llm.retry import with_llm_retry
 from cce.models.evidence import Evidence
-from cce.parsing import extract_json
+from cce.parsing import clip_for_log, extract_json
 
 logger = logging.getLogger(__name__)
 
@@ -138,8 +138,8 @@ class ImpliedClaimChecker:
             if self._below_release_valve(counter, cited_evidence):
                 logger.info(
                     "Release valve suppressed implied-claim annotation for "
-                    "topic=%r (counter=%d, cited=%d)",
-                    dismissed,
+                    "topic=%s (counter=%d, cited=%d)",
+                    clip_for_log(dismissed),
                     len(counter),
                     len(cited_evidence),
                 )

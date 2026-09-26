@@ -20,6 +20,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   resent is included in the job totals, the WRITE stage metrics and the
   `CCE_MAX_TOKENS_PER_JOB` checkpoint.
 
+### Fixed: model-supplied IDs and topics are clipped in logs
+- The writer's unknown-citation warning, the editor's citation-drift
+  warning and the implied-claim release-valve log now pass model-written
+  text through `cce.parsing.clip_for_log` (first 40 chars, repr-quoted),
+  so a reply can't smuggle its text or a forged line into the logs.
+
 ## [Unreleased] — runtime model limits and follow-ups
 
 Follow-ups from the Phase 2 todo list, on `feature/runtime-model-limits`.

@@ -222,6 +222,23 @@ class TestParseResponse:
         assert len(output.unit.citations) == 1
         assert output.unit.citations[0].evidence_id == "ev_001"
 
+    def test_parse_response_unknown_citation_id_is_clipped_in_log(self, caplog):
+        """A model-supplied ID can't smuggle reply text or a forged line into logs."""
+        smuggled = "ev_" + "A" * 30 + "\nINJECTED log line " + "B" * 100
+        raw = _make_writer_json(citations_used=["ev_001", smuggled])
+        response = LLMResponse(content=raw, model="mock")
+
+        with caplog.at_level("WARNING"):
+            self._writer()._parse_response(
+                response, [make_evidence(id="ev_001")], "blog", self._lineage()
+            )
+
+        (record,) = [r for r in caplog.records if "unknown evidence ID" in r.message]
+        assert "\n" not in record.message
+        assert "INJECTED" not in record.message
+        assert "BBBB" not in record.message
+        assert repr(smuggled[:40]) in record.message
+
     def test_parse_response_empty_claims_filtered(self):
         ev = make_evidence(id="ev_001")
         raw = _make_writer_json(
