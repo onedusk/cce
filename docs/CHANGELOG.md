@@ -12,6 +12,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `CCE_HUMANIZATION_ENABLED` row in `docs/configuration.md` shows the real
   default (`true`, since 2026-06-24).
 
+### Fixed: acceptance-check judge reports truncated or refused replies
+- `scripts/research/run_acceptance_check.py`: the repetition judge now calls
+  `ensure_complete` before parsing, so a reply that stopped at `max_tokens`
+  or was refused comes back as a `verdict: "error"` naming the stop reason,
+  instead of "not valid JSON" (or "Could not locate JSON") with a snippet of
+  the partial reply.
+
 ## [Unreleased] — runtime model limits and follow-ups
 
 Follow-ups from the Phase 2 todo list, on `feature/runtime-model-limits`.
