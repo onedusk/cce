@@ -15,6 +15,7 @@ import logging
 
 import anthropic
 
+from cce.config.loader import ConfigError
 from cce.config.types import LLMConfig
 from cce.llm.base import LLMMessage, LLMResponse
 
@@ -31,8 +32,8 @@ _EVIDENCE_END_MARKERS = [
 # legacy set, so any model not matched is treated as current and a new
 # release needs no code change.
 #
-# Models without adaptive thinking or effort (Haiku 4.5 and older): the
-# `thinking` / `output_config.effort` settings are never sent to them (B2).
+# Models without adaptive thinking (Opus 4.5, Haiku 4.5 and older): the
+# `thinking` setting is never sent to them (B2).
 _PRE_ADAPTIVE_MODEL_PREFIXES: tuple[str, ...] = (
     "claude-3",
     "claude-opus-4-0",
@@ -44,6 +45,13 @@ _PRE_ADAPTIVE_MODEL_PREFIXES: tuple[str, ...] = (
     "claude-sonnet-4-5",
     "claude-haiku-4-5",
 )
+# Models without effort: the pre-adaptive set minus Opus 4.5, which accepts
+# `output_config.effort` (low/medium/high) though not adaptive thinking.
+_NO_EFFORT_MODEL_PREFIXES: tuple[str, ...] = tuple(
+    p for p in _PRE_ADAPTIVE_MODEL_PREFIXES if p != "claude-opus-4-5"
+)
+# Models with effort that reject `xhigh` / `max` with a 400.
+_NO_XHIGH_EFFORT_MODEL_PREFIXES: tuple[str, ...] = ("claude-opus-4-5",)
 # Models that still accept sampling parameters (B1): the pre-adaptive set
 # plus the 4.6 family. Every model from Opus 4.7 on (Opus 4.7/4.8/5,
 # Sonnet 5, Fable 5) rejects `temperature` with a 400.
@@ -61,6 +69,47 @@ _NO_STRUCTURED_OUTPUT_MODEL_PREFIXES: tuple[str, ...] = (
     "claude-sonnet-4-0",
     "claude-sonnet-4-2025",
 )
+# Models that reject `thinking: {type: "disabled"}` with a 400: Fable 5 /
+# 5.1, Mythos 5 / 5.1 and Opus 5.5 at every effort, Opus 5 only at effort
+# xhigh/max. Any other model gets the setting passed through.
+_NO_DISABLED_THINKING_MODEL_PREFIXES: tuple[str, ...] = (
+    "claude-fable-5",
+    "claude-mythos-5",
+    "claude-opus-5-5",
+)
+_NO_DISABLED_THINKING_AT_HIGH_EFFORT_MODEL_PREFIXES: tuple[str, ...] = (
+    "claude-opus-5",
+)
+
+
+def _check_disabled_thinking(config: LLMConfig) -> None:
+    """Raise ConfigError when ``thinking: disabled`` would 400 on every call."""
+    if config.thinking != "disabled":
+        return
+    model = config.model
+    if model.startswith(_NO_DISABLED_THINKING_MODEL_PREFIXES):
+        raise ConfigError(
+            f"thinking: disabled is rejected by {model} (thinking is always on); "
+            "unset thinking and lower effort instead."
+        )
+    if model.startswith(
+        _NO_DISABLED_THINKING_AT_HIGH_EFFORT_MODEL_PREFIXES
+    ) and config.effort in ("xhigh", "max"):
+        raise ConfigError(
+            f"thinking: disabled is rejected by {model} at effort "
+            f"{config.effort}; use effort high or lower, or unset thinking."
+        )
+
+
+def _check_effort(config: LLMConfig) -> None:
+    """Raise ConfigError when ``effort`` would 400 on every call."""
+    if config.effort in ("xhigh", "max") and config.model.startswith(
+        _NO_XHIGH_EFFORT_MODEL_PREFIXES
+    ):
+        raise ConfigError(
+            f"effort: {config.effort} is rejected by {config.model}, which "
+            "takes only low/medium/high."
+        )
 
 
 # Used when ``max_tokens`` is unset and the Models API lookup fails: the old
@@ -80,6 +129,8 @@ class AnthropicProvider:
     """
 
     def __init__(self, config: LLMConfig) -> None:
+        _check_disabled_thinking(config)
+        _check_effort(config)
         self._config = config
         self._client = anthropic.AsyncAnthropic(api_key=config.api_key, max_retries=2)
         self._accepts_adaptive = not config.model.startswith(
@@ -90,6 +141,7 @@ class AnthropicProvider:
         self._accepts_sampling = (
             config.model.startswith(_SAMPLING_MODEL_PREFIXES) and not thinking_on
         )
+        self._accepts_effort = not config.model.startswith(_NO_EFFORT_MODEL_PREFIXES)
         self._accepts_output_schema = not config.model.startswith(
             _NO_STRUCTURED_OUTPUT_MODEL_PREFIXES
         )
@@ -126,11 +178,10 @@ class AnthropicProvider:
                 temperature if temperature is not None else self._config.temperature
             )
         output_config: dict = {}
-        if self._accepts_adaptive:
-            if self._config.thinking is not None:
-                kwargs["thinking"] = {"type": self._config.thinking}
-            if self._config.effort is not None:
-                output_config["effort"] = self._config.effort
+        if self._accepts_adaptive and self._config.thinking is not None:
+            kwargs["thinking"] = {"type": self._config.thinking}
+        if self._accepts_effort and self._config.effort is not None:
+            output_config["effort"] = self._config.effort
         if output_schema is not None and self._accepts_output_schema:
             # Structured outputs: the reply is constrained to valid JSON
             # matching the schema, so it always parses.

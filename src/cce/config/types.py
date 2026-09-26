@@ -54,19 +54,20 @@ class LLMConfig(BaseModel):
             "the param and take the model default (Sonnet 5 / Opus 5 think "
             "adaptively; 4.6 models do not think). Never sent to models "
             "without adaptive thinking (Opus 4.5, Haiku 4.5 and older). "
-            "Otherwise passed through as set: the API rejects `disabled` on "
-            "Fable 5 / Opus 5.5, and on Opus 5 at effort xhigh/max."
+            "Otherwise passed through as set, except `disabled` on Fable 5 / "
+            "Opus 5.5, or on Opus 5 at effort xhigh/max, which the API "
+            "rejects: that raises ConfigError when the provider is built."
         ),
     )
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = Field(
         default=None,
         description=(
             "Sent as `output_config.effort` (B2). None = omit (model "
-            "default, `high` on most models). Sent only to models with "
-            "adaptive thinking (4.6 and later) — so also omitted on Opus 4.5, "
-            "which does accept effort. `xhigh` needs Opus 4.7+ / Sonnet 5; "
-            "the API rejects it on the 4.6 models. Lowering effort is the "
-            "lever when thinking crowds out the reply."
+            "default, `high` on most models). Sent to Opus 4.5 and the 4.6 "
+            "and later models; omitted on Haiku 4.5 / Sonnet 4.5 and older. "
+            "Opus 4.5 takes only low/medium/high (others raise ConfigError), and `xhigh` needs Opus "
+            "4.7+ / Sonnet 5 (the API rejects it on the 4.6 models). "
+            "Lowering effort is the lever when thinking crowds out the reply."
         ),
     )
 
