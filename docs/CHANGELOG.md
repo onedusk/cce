@@ -17,6 +17,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   failure read as a write failure). Other failures keep `"pipeline_error"`.
   The message is unchanged and never carries reply text.
 
+### Changed: a failing path no longer drops its completed siblings
+- When a path raises (an unparseable writer reply, say), the job is still
+  FAILED with the error recorded, but `PipelineResult.package` now carries
+  the units of the paths that finished before it, with a
+  `PublishPackage.verification` record for each of them (none for the
+  failing or unstarted paths). The engine stores that package, so
+  `GET /v1/curate/jobs/{id}/package` on such a job returns it (as it does
+  for REVIEW_REQUIRED jobs). `emit-mdx --all` / `--topic` only read
+  completed jobs and `emit-mdx --job` still refuses a failed one without
+  `--force`. A run that fails before any path completes has no package, as
+  before. The failing path's own token spend is not in the package's
+  PUBLISH record.
+
 ## [Unreleased] — runtime model limits and follow-ups
 
 Follow-ups from the Phase 2 todo list, on `feature/runtime-model-limits`.

@@ -201,7 +201,13 @@ class TestEmitJobStatusGuard:
     """B8: emit-mdx --job refuses a job that isn't completed unless --force."""
 
     @pytest.mark.parametrize(
-        "status", [JobStatus.REVIEW_REQUIRED, JobStatus.READY_FOR_APPROVAL]
+        "status",
+        [
+            JobStatus.REVIEW_REQUIRED,
+            JobStatus.READY_FOR_APPROVAL,
+            # A failed job can carry the package of the paths that completed.
+            JobStatus.FAILED,
+        ],
     )
     def test_non_completed_job_is_refused(self, tmp_path, status):
         db_path = tmp_path / "test.db"

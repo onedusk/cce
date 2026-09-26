@@ -442,6 +442,72 @@ async def test_trio_gate_attribution_completes_and_citations_resolve(sqlite_stor
 
 
 @pytest.mark.integration
+async def test_trio_later_path_failure_keeps_completed_paths(sqlite_store, monkeypatch):
+    """A path that raises fails the job, but the package keeps the units and
+    verification records of the paths that finished before it."""
+    monkeypatch.setattr("cce.llm.retry._with_jitter", lambda delay: 0.0)
+    llm = _PathDispatchLLM(
+        writer_by_path={
+            "learn": _trio_writer_json("learn"),
+            "explore": "not json at all",
+            "apply": _trio_writer_json("apply"),
+        },
+        verifier_by_path={
+            "learn": [_verifier_json(supported=10, total=10, gaps=0)],
+            "apply": [_verifier_json(supported=10, total=10, gaps=0)],
+        },
+    )
+    pipeline = Pipeline(
+        config=make_engine_config(),
+        crawl_adapter=_make_adapter(),
+        evidence_store=sqlite_store,
+        llm=llm,
+    )
+
+    result = await pipeline.run(
+        make_curation_request(paths=_TRIO), make_source_policy()
+    )
+
+    assert result.job.status == JobStatus.FAILED
+    assert result.job.error is not None
+    assert result.job.error.code == "unparseable_response"
+    assert result.job.error.stage == JobStage.WRITE
+    assert result.job.stage == JobStage.WRITE
+    assert isinstance(result.error, UnparseableResponseError)
+    assert ("writer", "apply") not in llm.calls
+    assert result.package is not None
+    assert [u.path for u in result.package.units] == ["learn"]
+    [record] = result.package.verification
+    assert record.path == "learn"
+    assert record.decision == "pass"
+    assert record.unit_id == result.package.units[0].id
+    assert result.package.evidence
+
+
+@pytest.mark.integration
+async def test_first_path_failure_has_no_package(sqlite_store, monkeypatch):
+    """Nothing finished before the failure: no partial package."""
+    monkeypatch.setattr("cce.llm.retry._with_jitter", lambda delay: 0.0)
+    llm = _PathDispatchLLM(
+        writer_by_path={p: "not json at all" for p in _TRIO},
+        verifier_by_path={},
+    )
+    pipeline = Pipeline(
+        config=make_engine_config(),
+        crawl_adapter=_make_adapter(),
+        evidence_store=sqlite_store,
+        llm=llm,
+    )
+
+    result = await pipeline.run(
+        make_curation_request(paths=_TRIO), make_source_policy()
+    )
+
+    assert result.job.status == JobStatus.FAILED
+    assert result.package is None
+
+
+@pytest.mark.integration
 async def test_trio_empty_content_path_routes_to_review(sqlite_store):
     """An empty-content path contributes zero gate results → terminal FAIL,
     so the job routes to REVIEW_REQUIRED and yields no unit for that path."""

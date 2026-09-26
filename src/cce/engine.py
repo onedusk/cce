@@ -60,7 +60,9 @@ async def run_pipeline_task(
     """Shared background pipeline execution.
 
     Used by both the API route layer and CurationEngine embedded mode.
-    Updates job status through the lifecycle, stores the package on success.
+    Updates job status through the lifecycle and stores the package whenever
+    the pipeline produced one: also for a FAILED job whose earlier paths
+    completed (their units only; emit-mdx still refuses it without --force).
     """
     job: Job | None = None
     try:
