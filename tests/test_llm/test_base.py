@@ -78,3 +78,16 @@ def test_unparseable_error_keeps_reply_off_the_message() -> None:
 def test_unparseable_error_is_retryable() -> None:
     """Unlike a truncated reply, an unparseable one is worth one resend."""
     assert issubclass(UnparseableResponseError, RETRYABLE_EXCEPTIONS)
+
+
+def test_sum_usage_treats_a_null_count_as_zero():
+    """The SDK types cache counts as Optional; a null must not crash the sum."""
+    from cce.llm.base import sum_usage
+
+    total = sum_usage(
+        [
+            {"input_tokens": 5, "cache_read_input_tokens": None},
+            {"input_tokens": 7, "cache_read_input_tokens": 3},
+        ]
+    )
+    assert total == {"input_tokens": 12, "cache_read_input_tokens": 3}

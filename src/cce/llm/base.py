@@ -34,7 +34,8 @@ def sum_usage(usages: Iterable[Mapping[str, int]]) -> dict[str, int]:
     total: dict[str, int] = {}
     for usage in usages:
         for key, count in usage.items():
-            total[key] = total.get(key, 0) + count
+            # The SDK types cache counts as Optional; None counts as 0.
+            total[key] = total.get(key, 0) + (count or 0)
     return total
 
 

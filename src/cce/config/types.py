@@ -407,9 +407,10 @@ class ImpliedClaimsConfig(BaseModel):
         default="llm_extract",
         description=(
             "How to find counter-evidence for a dismissed side. v1: extract "
-            "counter-topic via LLM, then call EvidenceStore.search(topic=...). "
-            "'embedding' is a future upgrade once Phase-2 vectors are addressable "
-            "per-claim."
+            "the counter-topic via LLM, then match it (case-insensitive "
+            "substring of title or excerpt) against the path's own evidence, "
+            "so hints only name IDs the path can cite. 'embedding' is a future "
+            "upgrade once Phase-2 vectors are addressable per-claim."
         ),
     )
     dismissal_release_valve_ratio: float = Field(

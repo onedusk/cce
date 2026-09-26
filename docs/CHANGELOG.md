@@ -105,6 +105,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   passing an allow list for `example.com`) while a browser loads
   `reddit.com`.
 
+### Fixed: review follow-ups on the sweep
+- `cce api start` exits with one "Configuration error" line (not a
+  lifespan traceback) when the registry load or a provider raises
+  `ConfigError`, as it already did for a missing key.
+- `sum_usage` counts a null cache-token count as 0 (the SDK types those
+  fields as optional).
+- The `search_strategy` description and CLAUDE.md now say counter-evidence
+  is matched against the path's own evidence.
+
 ## [Unreleased] — runtime model limits and follow-ups
 
 Follow-ups from the Phase 2 todo list, on `feature/runtime-model-limits`.
