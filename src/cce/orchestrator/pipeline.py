@@ -20,7 +20,11 @@ from cce.discovery.discoverer import Discoverer
 from cce.discovery.embeddings import EmbeddingProvider
 from cce.evidence.formatting import format_evidence_for_prompt
 from cce.evidence.store import EvidenceStore
-from cce.llm.base import LLMProvider
+from cce.llm.base import (
+    IncompleteResponseError,
+    LLMProvider,
+    UnparseableResponseError,
+)
 from cce.models.content import ContentLineage, ContentScores, ContentUnit
 from cce.models.evidence import DiscoveryResult, Evidence
 from cce.models.job import Job, JobError, JobProgress, JobStage, JobStatus, StageRecord
@@ -282,6 +286,32 @@ def _budget_stop_note(path: str, stages: Sequence[StageRecord]) -> str:
     return ""
 
 
+# Stage a failing LLM role runs in; the implied-claim checker runs inside the
+# edit step, before the editor call.
+_ROLE_STAGES: dict[str, JobStage] = {
+    "writer": JobStage.WRITE,
+    "verifier": JobStage.VERIFY,
+    "editor": JobStage.EDIT,
+    "implied-claim checker": JobStage.EDIT,
+}
+
+
+def _error_code_and_stage(
+    error: BaseException, fallback: JobStage
+) -> tuple[str, JobStage]:
+    """JobError code and stage for the exception that failed a run.
+
+    An incomplete or unparseable LLM reply gets its own code and the stage of
+    the role that produced it; anything else stays ``pipeline_error`` at
+    ``fallback`` (the job's current stage).
+    """
+    if isinstance(error, IncompleteResponseError):
+        return "incomplete_response", _ROLE_STAGES.get(error.role, fallback)
+    if isinstance(error, UnparseableResponseError):
+        return "unparseable_response", _ROLE_STAGES.get(error.role, fallback)
+    return "pipeline_error", fallback
+
+
 def _build_sibling_digest(units: list[ContentUnit]) -> str:
     """Compact digest of already-written sibling drafts, fed to the next path's writer.
 
@@ -475,9 +505,16 @@ class Pipeline:
             # Paths now run sequentially (M03), so a failing path raises its
             # exception directly — no grouped-exception unwrap needed.
             job_logger.exception("Pipeline run %s failed: %s", run_id, e)
+            code, error_stage = _error_code_and_stage(e, job.stage or JobStage.DISCOVER)
             return PipelineResult(
                 package=None,
-                job=self._update_job(job, JobStatus.FAILED, error_msg=str(e)),
+                job=self._update_job(
+                    job,
+                    JobStatus.FAILED,
+                    error_msg=str(e),
+                    error_code=code,
+                    error_stage=error_stage,
+                ),
                 gate_results=[],
                 error=e,
             )
@@ -1294,8 +1331,13 @@ class Pipeline:
         stage: JobStage | None = None,
         error_msg: str | None = None,
         progress: JobProgress | None = None,
+        error_code: str = "pipeline_error",
+        error_stage: JobStage | None = None,
     ) -> Job:
-        """Update job tracking fields."""
+        """Update job tracking fields.
+
+        ``error_stage`` defaults to the job's current stage (DISCOVER if none).
+        """
         job.status = status
         job.updated_at = datetime.now(UTC)
 
@@ -1315,9 +1357,9 @@ class Pipeline:
 
         if error_msg:
             job.error = JobError(
-                code="pipeline_error",
+                code=error_code,
                 message=error_msg,
-                stage=job.stage or JobStage.DISCOVER,
+                stage=error_stage or job.stage or JobStage.DISCOVER,
             )
 
         return job

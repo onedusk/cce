@@ -5,6 +5,18 @@ All notable changes to the Content Curation Engine (CCE).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] todo sweep
+
+### Changed: typed error codes for incomplete and unparseable LLM replies
+- A job failed by `IncompleteResponseError` now records
+  `JobError.code="incomplete_response"`, and one failed by
+  `UnparseableResponseError` records `"unparseable_response"` (both were
+  `"pipeline_error"`). `JobError.stage` names the failing role's stage:
+  writer WRITE, verifier VERIFY, editor and implied-claim checker EDIT
+  (the job's own stage stayed WRITE for the whole loop, so a verifier
+  failure read as a write failure). Other failures keep `"pipeline_error"`.
+  The message is unchanged and never carries reply text.
+
 ## [Unreleased] — runtime model limits and follow-ups
 
 Follow-ups from the Phase 2 todo list, on `feature/runtime-model-limits`.
