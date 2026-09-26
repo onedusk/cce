@@ -20,7 +20,7 @@ import logging
 from dataclasses import dataclass
 
 from cce.config.registry import ConfigRegistry
-from cce.config.types import EngineConfig
+from cce.config.types import EngineConfig, LLMConfig, RoleLLMSettings
 from cce.discovery.adapters.base import CrawlAdapter
 from cce.discovery.embeddings import EmbeddingProvider, EmbeddingUnavailableError
 from cce.evidence.store import EvidenceStore
@@ -98,6 +98,18 @@ def build_components(
             "verifier_llm as well — building the verifier from config would "
             "bypass the injected provider."
         )
+    if o.llm is not None:
+        # Per-role settings configure providers built from config; with an
+        # injected llm they would be silently ignored.
+        roles = [("writer", config.writer), ("editor", config.humanization.editor)]
+        if o.verifier_llm is None:
+            roles.append(("verifier", config.verifier))
+        for name, role in roles:
+            if _role_overrides(role):
+                raise ValueError(
+                    f"{name} model/max_tokens/thinking/effort are set but the llm "
+                    "is injected; configure them on the injected provider instead."
+                )
 
     # Concrete adapters are imported lazily so importing cce.components
     # (engine.py does, at module level) doesn't pull the anthropic/firecrawl
@@ -113,17 +125,35 @@ def build_components(
         if o.crawl_adapter is not None
         else FirecrawlAdapter(config.crawl)
     )
-    llm: LLMProvider = o.llm if o.llm is not None else AnthropicProvider(config.llm)
-    # Verifier-specific model (B3): same credentials and settings, its own
-    # model ID. Unset -> the verifier shares the writer's provider.
-    verifier_llm: LLMProvider = llm
-    if o.verifier_llm is not None:
-        verifier_llm = o.verifier_llm
-    elif o.llm is None and config.verifier.model:
-        verifier_llm = AnthropicProvider(
-            config.llm.model_copy(update={"model": config.verifier.model})
+    # One provider per role with its own settings (model, max_tokens,
+    # thinking, effort over `llm`); a role without any shares the writer's.
+    # The writer's provider also serves the implied-claim checker.
+    llm: LLMProvider = (
+        o.llm
+        if o.llm is not None
+        else AnthropicProvider(_role_llm_config(config.llm, config.writer))
+    )
+
+    def _role_provider(name: str, role: RoleLLMSettings) -> LLMProvider:
+        if o.llm is not None or not _role_overrides(role):
+            return llm
+        role_config = _role_llm_config(config.llm, role)
+        logger.info(
+            "%s model: %s (max_tokens=%s, thinking=%s, effort=%s)",
+            name.capitalize(),
+            role_config.model,
+            role_config.max_tokens or "model maximum",
+            role_config.thinking,
+            role_config.effort,
         )
-        logger.info("Verifier model: %s", config.verifier.model)
+        return AnthropicProvider(role_config)
+
+    verifier_llm: LLMProvider = (
+        o.verifier_llm
+        if o.verifier_llm is not None
+        else _role_provider("verifier", config.verifier)
+    )
+    editor_llm = _role_provider("editor", config.humanization.editor)
 
     # Embedding provider (optional)
     embedding_provider = o.embedding
@@ -172,7 +202,7 @@ def build_components(
 
         # Editor (M03, optional). Double-gate: master + per-stage switch.
         if config.humanization.editor.enabled:
-            editor = Editor(llm=llm, config=config.humanization.editor)
+            editor = Editor(llm=editor_llm, config=config.humanization.editor)
             logger.info(
                 "Humanization editor ready (temp=%s)",
                 config.humanization.editor.temperature,
@@ -256,3 +286,16 @@ def build_pipeline(
         editor=components.editor,
         implied_claim_checker=components.implied_claims,
     )
+
+
+_ROLE_FIELDS = ("model", "max_tokens", "thinking", "effort")
+
+
+def _role_overrides(role: RoleLLMSettings) -> dict:
+    """The role's settings that differ from `llm` (the ones it set)."""
+    return {k: v for k in _ROLE_FIELDS if (v := getattr(role, k)) is not None}
+
+
+def _role_llm_config(base: LLMConfig, role: RoleLLMSettings) -> LLMConfig:
+    """`llm` with the role's own model / max_tokens / thinking / effort."""
+    return base.model_copy(update=_role_overrides(role))

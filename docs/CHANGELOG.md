@@ -9,6 +9,26 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Follow-ups from the Phase 2 todo list, on `feature/runtime-model-limits`.
 
+### Changed — streamed requests, model-sized token caps, per-role settings
+- **Requests are streamed** (`messages.stream` + `get_final_message`). The
+  SDK refuses a non-streaming request whose `max_tokens` implies over ten
+  minutes of generation (~21,333 tokens), which is why every cap sat at
+  21000 whatever the model allowed.
+- **`llm.max_tokens` defaults to the model's maximum output**, read from the
+  Anthropic Models API once per process (128000 on the 4.6 and 5.x models,
+  64000 on the 4.5 ones; 21000 if the lookup fails). An explicit value
+  (`CCE_LLM_MAX_TOKENS`, YAML) wins. `verifier.max_tokens` now inherits it.
+  Note: a higher cap lets a runaway reply spend more; `CCE_MAX_TOKENS_PER_JOB`
+  still bounds a job.
+- **Per-role `model`, `max_tokens`, `thinking` and `effort`** for the writer,
+  verifier and editor (YAML `writer.*`, `verifier.*`,
+  `humanization.editor.*`; env `CCE_{WRITER,VERIFIER,EDITOR}_{MODEL,
+  MAX_TOKENS,THINKING,EFFORT}`), inheriting `llm` when unset. A role with any
+  setting gets its own provider; the implied-claim checker uses the
+  writer's. `EditorConfig.model`, never read before, now works. With an
+  injected `llm` these settings raise `ValueError` rather than being
+  ignored.
+
 ### Fixed — date-only published dates skipped the recency filter
 - A `published_date` without a time or offset (`"2019-05-01"`, common in
   crawl metadata) parsed as a naive datetime, so `recency.max_age_days`

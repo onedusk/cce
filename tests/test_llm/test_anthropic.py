@@ -9,6 +9,7 @@ import pytest
 from cce.config.types import LLMConfig
 from cce.llm.anthropic import AnthropicProvider
 from cce.llm.base import LLMMessage
+from tests.conftest import route_stream_to_create
 
 pytestmark = pytest.mark.unit
 
@@ -64,6 +65,7 @@ def _mock_response(
 async def test_complete_success(mock_cls: MagicMock) -> None:
     """complete() returns LLMResponse with correct content, model, usage."""
     mock_client = MagicMock()
+    route_stream_to_create(mock_client)
     mock_client.messages.create = AsyncMock(
         return_value=_mock_response(
             text="Test output",
@@ -92,6 +94,7 @@ async def test_complete_success(mock_cls: MagicMock) -> None:
 async def test_system_prompt_passed(mock_cls: MagicMock) -> None:
     """Explicit system kwarg is forwarded to the SDK call."""
     mock_client = MagicMock()
+    route_stream_to_create(mock_client)
     mock_client.messages.create = AsyncMock(return_value=_mock_response())
     mock_cls.return_value = mock_client
 
@@ -113,6 +116,7 @@ async def test_system_prompt_passed(mock_cls: MagicMock) -> None:
 async def test_temperature_override(mock_cls: MagicMock) -> None:
     """Explicit temperature overrides the config default."""
     mock_client = MagicMock()
+    route_stream_to_create(mock_client)
     mock_client.messages.create = AsyncMock(return_value=_mock_response())
     mock_cls.return_value = mock_client
 
@@ -133,6 +137,7 @@ async def test_temperature_override(mock_cls: MagicMock) -> None:
 async def test_config_defaults_used(mock_cls: MagicMock) -> None:
     """When no overrides are given, temp and max_tokens come from config."""
     mock_client = MagicMock()
+    route_stream_to_create(mock_client)
     mock_client.messages.create = AsyncMock(return_value=_mock_response())
     mock_cls.return_value = mock_client
 
@@ -177,6 +182,7 @@ async def test_sampling_params_follow_model_capability(
     so the rule applies to the final kwarg, not just the caller's value.
     """
     mock_client = MagicMock()
+    route_stream_to_create(mock_client)
     mock_client.messages.create = AsyncMock(return_value=_mock_response())
     mock_cls.return_value = mock_client
 
@@ -220,6 +226,7 @@ async def test_thinking_and_effort_follow_model_capability(
     """B2: explicit thinking/effort are sent only to models that support
     adaptive thinking and effort; Haiku 4.5 and older get neither."""
     mock_client = MagicMock()
+    route_stream_to_create(mock_client)
     mock_client.messages.create = AsyncMock(return_value=_mock_response())
     mock_cls.return_value = mock_client
 
@@ -245,6 +252,7 @@ async def test_thinking_and_effort_omitted_by_default(
     """B2: unset thinking/effort leave the params out (model default), so
     the 4.6 models keep today's no-thinking behaviour."""
     mock_client = MagicMock()
+    route_stream_to_create(mock_client)
     mock_client.messages.create = AsyncMock(return_value=_mock_response())
     mock_cls.return_value = mock_client
 
@@ -267,6 +275,7 @@ async def test_adaptive_thinking_drops_temperature_on_4_6(
     """With thinking on, the API rejects any temperature but 1 even on the
     4.6 models (live 400, 2026-09-23), so the provider omits it there too."""
     mock_client = MagicMock()
+    route_stream_to_create(mock_client)
     mock_client.messages.create = AsyncMock(return_value=_mock_response())
     mock_cls.return_value = mock_client
 
@@ -285,6 +294,7 @@ async def test_adaptive_thinking_drops_temperature_on_4_6(
 @patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
 async def test_disabled_thinking_passes_through(mock_cls: MagicMock) -> None:
     mock_client = MagicMock()
+    route_stream_to_create(mock_client)
     mock_client.messages.create = AsyncMock(return_value=_mock_response())
     mock_cls.return_value = mock_client
 
@@ -300,6 +310,7 @@ async def test_disabled_thinking_passes_through(mock_cls: MagicMock) -> None:
 async def test_sdk_exception_propagates(mock_cls: MagicMock) -> None:
     """RuntimeError raised by the SDK propagates to the caller."""
     mock_client = MagicMock()
+    route_stream_to_create(mock_client)
     mock_client.messages.create = AsyncMock(side_effect=RuntimeError("API down"))
     mock_cls.return_value = mock_client
 
@@ -314,6 +325,7 @@ async def test_sdk_exception_propagates(mock_cls: MagicMock) -> None:
 async def test_system_message_extracted_from_list(mock_cls: MagicMock) -> None:
     """LLMMessage with role='system' becomes the system kwarg and is excluded from api_messages."""
     mock_client = MagicMock()
+    route_stream_to_create(mock_client)
     mock_client.messages.create = AsyncMock(return_value=_mock_response())
     mock_cls.return_value = mock_client
 
@@ -399,6 +411,7 @@ def test_split_for_cache_no_suffix() -> None:
 async def test_cache_tokens_reported(mock_cls: MagicMock) -> None:
     """Cache token fields are included in the usage dict."""
     mock_client = MagicMock()
+    route_stream_to_create(mock_client)
     mock_client.messages.create = AsyncMock(
         return_value=_mock_response(
             cache_creation_input_tokens=500,
@@ -443,6 +456,7 @@ async def test_output_schema_sent_as_structured_output(
     """output_schema becomes output_config.format on models with structured
     outputs (every model the Models API lists); retired ones get none."""
     mock_client = MagicMock()
+    route_stream_to_create(mock_client)
     mock_client.messages.create = AsyncMock(return_value=_mock_response())
     mock_cls.return_value = mock_client
 
@@ -463,6 +477,7 @@ async def test_output_schema_sent_as_structured_output(
 @patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
 async def test_output_schema_merges_with_effort(mock_cls: MagicMock) -> None:
     mock_client = MagicMock()
+    route_stream_to_create(mock_client)
     mock_client.messages.create = AsyncMock(return_value=_mock_response())
     mock_cls.return_value = mock_client
 
@@ -480,6 +495,7 @@ async def test_output_schema_merges_with_effort(mock_cls: MagicMock) -> None:
 @patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
 async def test_no_output_config_without_schema_or_effort(mock_cls: MagicMock) -> None:
     mock_client = MagicMock()
+    route_stream_to_create(mock_client)
     mock_client.messages.create = AsyncMock(return_value=_mock_response())
     mock_cls.return_value = mock_client
 
@@ -487,3 +503,68 @@ async def test_no_output_config_without_schema_or_effort(mock_cls: MagicMock) ->
     await AnthropicProvider(config).complete([LLMMessage(role="user", content="Hi")])
 
     assert "output_config" not in mock_client.messages.create.call_args[1]
+
+
+# ---------------------------------------------------------------------------
+# Streaming and the model's own max_tokens
+# ---------------------------------------------------------------------------
+
+
+@patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
+async def test_requests_are_streamed(mock_cls: MagicMock) -> None:
+    """Non-streaming requests above ~21,333 max_tokens are refused by the SDK,
+    so every request goes through messages.stream."""
+    mock_client = MagicMock()
+    route_stream_to_create(mock_client)
+    mock_client.messages.create = AsyncMock(return_value=_mock_response())
+    mock_cls.return_value = mock_client
+    config = _config().model_copy(update={"max_tokens": 64000})
+
+    result = await AnthropicProvider(config).complete(
+        [LLMMessage(role="user", content="hi")]
+    )
+
+    assert result.content == "Hello, world!"
+    assert mock_client.messages.create.call_args[1]["max_tokens"] == 64000
+
+
+@patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
+async def test_unset_max_tokens_uses_the_models_maximum(mock_cls: MagicMock) -> None:
+    from cce.llm import anthropic as provider_module
+
+    provider_module._MODEL_MAX_TOKENS.clear()
+    mock_client = MagicMock()
+    route_stream_to_create(mock_client)
+    mock_client.messages.create = AsyncMock(return_value=_mock_response())
+    mock_client.models.retrieve = AsyncMock(return_value=MagicMock(max_tokens=128000))
+    mock_cls.return_value = mock_client
+    provider = AnthropicProvider(_config().model_copy(update={"max_tokens": None}))
+
+    for _ in range(2):
+        await provider.complete([LLMMessage(role="user", content="hi")])
+
+    assert mock_client.messages.create.call_args[1]["max_tokens"] == 128000
+    mock_client.models.retrieve.assert_awaited_once_with("claude-sonnet-4-6")
+    provider_module._MODEL_MAX_TOKENS.clear()
+
+
+@patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
+async def test_failed_model_lookup_falls_back(mock_cls: MagicMock, caplog) -> None:
+    from cce.llm import anthropic as provider_module
+
+    provider_module._MODEL_MAX_TOKENS.clear()
+    mock_client = MagicMock()
+    route_stream_to_create(mock_client)
+    mock_client.messages.create = AsyncMock(return_value=_mock_response())
+    mock_client.models.retrieve = AsyncMock(side_effect=RuntimeError("offline"))
+    mock_cls.return_value = mock_client
+    provider = AnthropicProvider(_config().model_copy(update={"max_tokens": None}))
+
+    await provider.complete([LLMMessage(role="user", content="hi")])
+
+    assert (
+        mock_client.messages.create.call_args[1]["max_tokens"]
+        == provider_module.FALLBACK_MAX_TOKENS
+    )
+    assert "Could not read max_tokens" in caplog.text
+    provider_module._MODEL_MAX_TOKENS.clear()

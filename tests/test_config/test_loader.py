@@ -37,6 +37,11 @@ _ENV_VARS = [
     "CCE_API_MAX_CONCURRENT_JOBS",
     "CCE_MAX_TOKENS_PER_JOB",
     "CCE_PUBLISH_POLICY",
+    *(
+        f"CCE_{role}_{knob}"
+        for role in ("WRITER", "VERIFIER", "EDITOR")
+        for knob in ("MODEL", "MAX_TOKENS", "THINKING", "EFFORT")
+    ),
 ]
 
 
@@ -110,13 +115,14 @@ def test_load_writer_verifier_temperature_from_yaml(monkeypatch, tmp_path):
 
 def test_load_thinking_effort_and_verifier_budget(monkeypatch, tmp_path):
     """B2: thinking/effort default to None (param omitted); max_tokens
-    defaults high enough for thinking; all three load from YAML and env."""
+    defaults to None (the model's maximum, looked up by the provider);
+    all three load from YAML and env."""
     _clear_env(monkeypatch)
     defaults = load_config()
     assert defaults.llm.thinking is None
     assert defaults.llm.effort is None
-    assert defaults.llm.max_tokens == 21000
-    assert defaults.verifier.max_tokens == 21000
+    assert defaults.llm.max_tokens is None
+    assert defaults.verifier.max_tokens is None
 
     config_file = tmp_path / "config.yaml"
     config_file.write_text(
@@ -395,3 +401,29 @@ def test_old_autopublish_threshold_key_still_loads(monkeypatch, tmp_path):
         yaml.dump({"quality_gate": {"high": {"autopublish_threshold": 0.99}}})
     )
     assert load_config(config_file).quality_gate["high"].pass_threshold == 0.99
+
+
+def test_role_settings_load_from_yaml_and_env(monkeypatch, tmp_path):
+    """Per-role model / max_tokens / thinking / effort; env beats YAML."""
+    _clear_env(monkeypatch)
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        yaml.dump(
+            {
+                "writer": {"model": "claude-opus-5", "effort": "high"},
+                "humanization": {"editor": {"effort": "low", "max_tokens": 9000}},
+            }
+        )
+    )
+    monkeypatch.setenv("CCE_EDITOR_EFFORT", "medium")
+    monkeypatch.setenv("CCE_VERIFIER_THINKING", "adaptive")
+    monkeypatch.setenv("CCE_WRITER_MAX_TOKENS", "64000")
+
+    config = load_config(config_file)
+
+    assert (config.writer.model, config.writer.effort) == ("claude-opus-5", "high")
+    assert config.writer.max_tokens == 64000
+    assert config.humanization.editor.effort == "medium"  # env wins
+    assert config.humanization.editor.max_tokens == 9000
+    assert config.verifier.thinking == "adaptive"
+    assert config.verifier.model is None  # unset: inherits llm.model

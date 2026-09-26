@@ -34,17 +34,17 @@ class LLMConfig(BaseModel):
             "Sonnet 5) — B1."
         ),
     )
-    max_tokens: int = Field(
-        default=21000,
+    max_tokens: int | None = Field(
+        default=None,
         ge=1,
         description=(
-            "Max tokens per LLM call, thinking included. 21000 (was 8192, "
-            "was 4096): the writer's long learn/explore essays wrapped in "
-            "JSON exceed 4096, and on current models thinking counts against "
-            "this cap — a Sonnet 5 editor call used 15.8k of 16.4k in the "
-            "2026-09-23 smoke run (B2). 21000 sits just under the SDK's "
-            "non-streaming ceiling (~21,333); going higher needs streaming. "
-            "A reply that hits the cap raises IncompleteResponseError."
+            "Max tokens per LLM call, thinking included. None = the model's "
+            "maximum output, read from the Anthropic Models API once per "
+            "process (128000 on the 4.6 and 5.x models, 64000 on the 4.5 "
+            "ones), or 21000 if that lookup fails. Requests are streamed, so "
+            "the SDK's ~21,333 non-streaming ceiling no longer applies. On "
+            "current models thinking counts against this cap; a reply that "
+            "hits it raises IncompleteResponseError."
         ),
     )
     thinking: Literal["adaptive", "disabled"] | None = Field(
@@ -71,8 +71,34 @@ class LLMConfig(BaseModel):
     )
 
 
-class WriterConfig(BaseModel):
-    """Writer agent call settings."""
+class RoleLLMSettings(BaseModel):
+    """Per-role overrides of LLMConfig. None (the default) inherits the
+    ``llm`` value; credentials and the provider are always shared. A role
+    with any override gets its own provider built from ``llm`` plus these."""
+
+    model: str | None = Field(
+        default=None, description="Model for this role. None = LLMConfig.model."
+    )
+    max_tokens: int | None = Field(
+        default=None,
+        ge=1,
+        description="Per-call output cap for this role. None = LLMConfig.max_tokens.",
+    )
+    thinking: Literal["adaptive", "disabled"] | None = Field(
+        default=None, description="Thinking mode for this role. None = LLMConfig."
+    )
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = Field(
+        default=None,
+        description=(
+            "Effort for this role, e.g. `medium` for the editor so thinking "
+            "doesn't crowd out a long rewrite. None = LLMConfig.effort."
+        ),
+    )
+
+
+class WriterConfig(RoleLLMSettings):
+    """Writer agent call settings. The implied-claim checker uses the
+    writer's provider, so these settings apply to it too."""
 
     temperature: float = Field(
         default=0.2,
@@ -85,7 +111,7 @@ class WriterConfig(BaseModel):
     )
 
 
-class VerifierConfig(BaseModel):
+class VerifierConfig(RoleLLMSettings):
     """Verifier agent call settings."""
 
     model: str | None = Field(
@@ -107,14 +133,13 @@ class VerifierConfig(BaseModel):
             "models that reject sampling params (B1)."
         ),
     )
-    max_tokens: int = Field(
-        default=21000,
+    max_tokens: int | None = Field(
+        default=None,
         ge=1,
         description=(
             "Per-call output cap for the claim-by-claim report (thinking "
-            "included). Replaces the VERIFIER_MAX_TOKENS=16384 literal, "
-            "raised because thinking now shares the cap on current models "
-            "(B2). Just under the SDK's non-streaming ceiling (~21,333)."
+            "included). None = LLMConfig.max_tokens (the model's maximum "
+            "unless set)."
         ),
     )
 
@@ -349,16 +374,12 @@ class HumanizationThresholds(BaseModel):
     )
 
 
-class EditorConfig(BaseModel):
+class EditorConfig(RoleLLMSettings):
     """Editor agent configuration (H3)."""
 
     enabled: bool = Field(
         default=True,
         description="Independent kill-switch — set False to ship H1+H2 without H3.",
-    )
-    model: str | None = Field(
-        default=None,
-        description="Optional model override. None = inherit from LLMConfig.model.",
     )
     temperature: float = Field(
         default=0.4,
