@@ -34,7 +34,7 @@ from cce.models.content import (
 from cce.models.evidence import Evidence
 from cce.models.paths import PathConfig
 from cce.models.request import CurationRequest
-from cce.parsing import extract_json
+from cce.parsing import extract_json, resolve_evidence_id
 
 logger = logging.getLogger(__name__)
 
@@ -321,11 +321,12 @@ exists, and mark remaining gaps as [INSUFFICIENT EVIDENCE].
         # Parse citations — warn if LLM cited unknown evidence IDs
         citations_used = parsed.get("citations_used", [])
         citations = []
-        for eid in citations_used:
-            if eid in ev_lookup:
-                citations.append(Citation(evidence_id=eid, url=ev_lookup[eid].url))
+        for eid_raw in citations_used:
+            eid, ev = resolve_evidence_id(eid_raw, ev_lookup)
+            if ev is not None:
+                citations.append(Citation(evidence_id=eid, url=ev.url))
             else:
-                logger.warning("Writer cited unknown evidence ID: %s", eid)
+                logger.warning("Writer cited unknown evidence ID: %s", eid_raw)
 
         # Parse evidence map
         evidence_map_raw = parsed.get("evidence_map", [])
@@ -333,7 +334,12 @@ exists, and mark remaining gaps as [INSUFFICIENT EVIDENCE].
             ClaimMapping(
                 claim=item.get("claim", ""),
                 evidence_ids=[
-                    eid for eid in item.get("evidence_ids", []) if eid in ev_lookup
+                    eid
+                    for eid, ev in (
+                        resolve_evidence_id(raw, ev_lookup)
+                        for raw in item.get("evidence_ids", [])
+                    )
+                    if ev is not None
                 ],
             )
             for item in evidence_map_raw
@@ -344,10 +350,7 @@ exists, and mark remaining gaps as [INSUFFICIENT EVIDENCE].
         content_text = parsed.get("content", "")
 
         # Calculate basic source diversity
-        unique_urls = set()
-        for eid in citations_used:
-            if eid in ev_lookup:
-                unique_urls.add(ev_lookup[eid].url)
+        unique_urls = {c.url for c in citations}
         unique_available = {ev.url for ev in evidence}
 
         # Defensive guard: should never happen since ev_lookup is built from evidence

@@ -29,6 +29,17 @@ api_app.add_typer(key_app)
 app.add_typer(emit_app, name="emit-mdx")
 
 
+def main() -> None:
+    """The ``cce`` entry point: load ``./.env`` (process env vars win, as
+    documented in docs/configuration.md), then run the CLI. Kept out of the
+    Typer app so tests that invoke ``app`` never read a developer's .env.
+    """
+    from cce import load_env_file
+
+    load_env_file(".env")
+    app()
+
+
 @app.callback()
 def _main_callback() -> None:
     """CCE CLI — runs once before every subcommand.
@@ -70,11 +81,16 @@ def batch_command(
 
     Consolidated alternative to the per-developer run_*.py scripts — topics
     are data, not code, so editing them shouldn't require Python.
+
+    Exits with the worst job outcome, in curate's codes: 1 if any job
+    FAILED, else 2 if any is REVIEW_REQUIRED, else 3 if any is
+    READY_FOR_APPROVAL, else 0. Skipped (malformed) entries don't change it.
     """
     import yaml
 
     from cce.config.loader import ConfigError
     from cce.engine import CurationEngine
+    from cce.models.job import JobStatus
     from cce.models.request import CurationRequest
 
     entries = yaml.safe_load(topics_file.read_text()) or []
@@ -84,6 +100,8 @@ def batch_command(
             err=True,
         )
         raise typer.Exit(1)
+
+    statuses: list[JobStatus] = []
 
     async def _run() -> None:
         engine = await CurationEngine.embedded()
@@ -118,6 +136,7 @@ def batch_command(
                 typer.echo(f"[{i}/{len(entries)}] Starting: {topic}")
                 handle = await engine.curate(request)
                 job = await handle.wait(timeout=1800)
+                statuses.append(job.status)
                 typer.echo(
                     f"[{i}/{len(entries)}] {job.status.value}: {topic}"
                     + (f" — {job.error.message}" if job.error else "")
@@ -130,6 +149,16 @@ def batch_command(
     except ConfigError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1) from None
+
+    # Worst outcome wins; any other status (FAILED, or a job still running
+    # at the wait timeout) is a failure, as in curate.
+    ok = {JobStatus.COMPLETED, JobStatus.REVIEW_REQUIRED, JobStatus.READY_FOR_APPROVAL}
+    if any(s not in ok for s in statuses):
+        raise typer.Exit(1)
+    if JobStatus.REVIEW_REQUIRED in statuses:
+        raise typer.Exit(2)
+    if JobStatus.READY_FOR_APPROVAL in statuses:
+        raise typer.Exit(3)
 
 
 @api_app.command("start")

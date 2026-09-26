@@ -15,9 +15,10 @@ For engine tuning values, three layers apply. Higher wins:
    single source of defaults (audit-2026-06-09 finding 1.4)
 
 A `.env` file at the repo root (gitignored) is the conventional place for
-layer 1 — `cp .env.example .env` and edit. The CLI and engine read it via
-`cce.load_env_file()`-style helpers and plain process environment; the loader
-itself only consults `os.environ`. Note the `.env` parser splits on the first
+layer 1 — `cp .env.example .env` and edit. The `cce` CLI loads `./.env` from
+the working directory at start-up (variables already set in the environment
+win); the runner scripts do the same via `cce.load_env_file()`. The embedded
+engine and the library don't read `.env`: they only consult `os.environ`. Note the `.env` parser splits on the first
 `=` and does **not** strip inline comments, so keep comments on their own line.
 
 ## Passing a YAML config file
@@ -152,7 +153,7 @@ effective values when neither env var nor YAML provides one.
 | `ANTHROPIC_MODEL` | — | Fallback alias for `CCE_LLM_MODEL` |
 | `CCE_LLM_API_KEY` | — | Overrides `ANTHROPIC_API_KEY` when set |
 | `CCE_LLM_TEMPERATURE` | `0.2` | Fallback sampling temperature; not sent to models that reject sampling params (Opus 4.7+, Sonnet 5, Fable 5) |
-| `CCE_LLM_MAX_TOKENS` | `21000` | Per-call output token cap, thinking included. A reply that hits it fails the job with an `IncompleteResponseError` naming the role and model instead of being parsed. The default sits just under the SDK's non-streaming ceiling (~21,333); if thinking crowds out replies, lower `CCE_LLM_EFFORT` |
+| `CCE_LLM_MAX_TOKENS` | unset | Per-call output token cap, thinking included. Unset = the model's maximum output, read from the Anthropic Models API once per process (128000 on the 4.6 and 5.x models, 64000 on the 4.5 ones), or 21000 if that lookup fails. Requests are streamed, so the SDK's ~21,333 non-streaming ceiling doesn't apply. A reply that hits the cap fails the job with an `IncompleteResponseError` naming the role and model; if thinking crowds out replies, lower the role's effort |
 | `CCE_LLM_THINKING` | unset | `adaptive` or `disabled`, sent as `thinking: {type: ...}`. Unset = omit the param (model default: Sonnet 5 / Opus 5 think adaptively, the 4.6 models do not). Never sent to Opus 4.5, Haiku 4.5 or older. `adaptive` also drops `temperature` on the 4.6 models (the API rejects any value but 1 while thinking is on). Otherwise passed through as set: the API rejects `disabled` on Fable 5 / Opus 5.5, and on Opus 5 at effort `xhigh`/`max` |
 | `CCE_LLM_EFFORT` | unset | `low` / `medium` / `high` / `xhigh` / `max`, sent as `output_config.effort`. Unset = model default. Sent only to models with adaptive thinking (4.6 and later), so also omitted on Opus 4.5; `xhigh` needs Opus 4.7+ / Sonnet 5 |
 
@@ -165,7 +166,22 @@ An unreadable reply is resent once, then fails the job.
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `CCE_VERIFIER_MODEL` | unset | Separate model for the verifier (YAML `verifier.model`), so writer and verifier blind spots aren't correlated. Credentials and the other `llm` settings are inherited, including `CCE_LLM_THINKING` / `CCE_LLM_EFFORT`, so those must also be valid for the verifier's model (e.g. effort `xhigh` fails on a 4.6 verifier); unset = the verifier uses `CCE_LLM_MODEL` |
-| `CCE_VERIFIER_MAX_TOKENS` | `21000` | Per-call output cap for the verifier's claim-by-claim report (YAML `verifier.max_tokens`) |
+| `CCE_VERIFIER_MAX_TOKENS` | unset | Per-call output cap for the verifier's claim-by-claim report (YAML `verifier.max_tokens`); unset = `CCE_LLM_MAX_TOKENS` |
+
+### Per-role model settings
+
+The writer, verifier and editor each take `model`, `max_tokens`, `thinking`
+and `effort` (YAML `writer.*`, `verifier.*`, `humanization.editor.*`; env
+`CCE_WRITER_*`, `CCE_VERIFIER_*`, `CCE_EDITOR_*` with the suffixes
+`_MODEL`, `_MAX_TOKENS`, `_THINKING`, `_EFFORT`). Unset values inherit the
+`CCE_LLM_*` ones, and credentials are always shared. A role with any setting
+gets its own provider; the implied-claim checker uses the writer's. The
+values must suit that role's model (e.g. effort `xhigh` fails on a 4.6
+model). With an injected `llm` (`ComponentOverrides`), setting any of these
+raises `ValueError`: configure the injected provider instead.
+
+A common tuning on Sonnet 5, where adaptive thinking can crowd out a long
+rewrite: `CCE_EDITOR_EFFORT=medium`.
 
 ### Evidence store
 

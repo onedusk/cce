@@ -97,8 +97,8 @@ def load_config(config_path: str | Path | None = None) -> EngineConfig:
         CCE_LLM_MAX_TOKENS      -> llm.max_tokens
         CCE_LLM_THINKING        -> llm.thinking
         CCE_LLM_EFFORT          -> llm.effort
-        CCE_VERIFIER_MODEL      -> verifier.model
-        CCE_VERIFIER_MAX_TOKENS -> verifier.max_tokens
+        CCE_{WRITER,VERIFIER,EDITOR}_{MODEL,MAX_TOKENS,THINKING,EFFORT}
+                                -> writer.* / verifier.* / humanization.editor.*
         CCE_EVIDENCE_BACKEND    -> evidence_store.backend
         CCE_EVIDENCE_SQLITE_PATH -> evidence_store.sqlite_path
         CCE_CRAWL_ADAPTER       -> crawl.adapter
@@ -125,7 +125,7 @@ def load_config(config_path: str | Path | None = None) -> EngineConfig:
     )
     return EngineConfig(
         llm=_load_llm_config(file_data.get("llm", {})),
-        writer=WriterConfig(**(file_data.get("writer") or {})),
+        writer=WriterConfig(**_role_settings("WRITER", file_data.get("writer") or {})),
         verifier=_load_verifier_config(file_data.get("verifier") or {}),
         evidence_store=_load_evidence_config(file_data.get("evidence_store", {})),
         crawl=_load_crawl_config(file_data.get("crawl", {})),
@@ -162,16 +162,20 @@ def _load_llm_config(file: dict) -> LLMConfig:
     )
 
 
-def _load_verifier_config(file: dict) -> VerifierConfig:
-    return VerifierConfig(
-        **_explicit(
-            model=os.getenv("CCE_VERIFIER_MODEL", file.get("model")),
-            temperature=_opt(float, file.get("temperature")),
-            max_tokens=_opt(
-                int, os.getenv("CCE_VERIFIER_MAX_TOKENS", file.get("max_tokens"))
-            ),
-        )
+def _role_settings(role: str, file: dict) -> dict:
+    """A role section (writer, verifier, humanization.editor) with the
+    CCE_<ROLE>_{MODEL,MAX_TOKENS,THINKING,EFFORT} env vars overlaid."""
+    env = _explicit(
+        model=os.getenv(f"CCE_{role}_MODEL"),
+        max_tokens=_opt(int, os.getenv(f"CCE_{role}_MAX_TOKENS")),
+        thinking=os.getenv(f"CCE_{role}_THINKING"),
+        effort=os.getenv(f"CCE_{role}_EFFORT"),
     )
+    return {**file, **env}
+
+
+def _load_verifier_config(file: dict) -> VerifierConfig:
+    return VerifierConfig(**_role_settings("VERIFIER", file))
 
 
 def _load_evidence_config(file: dict) -> EvidenceStoreConfig:
@@ -257,7 +261,7 @@ def _load_humanization_config(file: dict) -> HumanizationConfig:
     operators can flip humanization on/off without editing YAML.
     """
     thresholds_data = file.get("thresholds", {}) or {}
-    editor_data = file.get("editor", {}) or {}
+    editor_data = _role_settings("EDITOR", file.get("editor", {}) or {})
     implied_data = file.get("implied_claims", {}) or {}
 
     return HumanizationConfig(

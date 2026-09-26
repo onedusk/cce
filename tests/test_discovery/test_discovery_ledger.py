@@ -302,3 +302,21 @@ def test_negative_source_cap_is_rejected():
 
     with pytest.raises(ValidationError, match="max_sources_per_run"):
         make_source_policy(max_sources_per_run=-1)
+
+
+@pytest.mark.parametrize("published", ["1990-01-01", "1990-01-01T00:00:00"])
+async def test_date_only_published_date_is_filtered_by_recency(published):
+    """A date-only (naive) published_date used to fail open in the recency
+    filter; it is now read as UTC."""
+    url = "https://old.gov/page"
+    adapter = MockCrawlAdapter(
+        search_map={"test topic": [url]},
+        url_map={url: _page(url, _para("old"), published_date=published)},
+    )
+    result = await _discoverer(adapter).discover(
+        make_curation_request(),
+        make_source_policy(recency=RecencyRule(max_age_days=3650, prefer_recent=False)),
+    )
+
+    assert result.evidence == []
+    assert result.metrics["dropped_date"] == 1

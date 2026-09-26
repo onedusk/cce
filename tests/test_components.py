@@ -52,6 +52,7 @@ from tests.conftest import (
     MockLLMProvider,
     make_curation_request,
     make_source_policy,
+    route_stream_to_create,
 )
 
 pytestmark = pytest.mark.integration
@@ -276,6 +277,52 @@ async def test_verifier_model_gets_its_own_provider(tmp_path: Path):
     assert components.implied_claims._llm is components.llm
 
 
+async def test_role_settings_build_per_role_providers(tmp_path: Path):
+    """Per-role model / max_tokens / thinking / effort over llm: the writer's
+    settings shape the main provider (the implied-claim checker shares it),
+    the editor and verifier get their own, and unset fields inherit."""
+    from cce.config.types import EditorConfig, WriterConfig
+
+    config = _b3_config(tmp_path, verifier_model=None).model_copy(
+        update={
+            "writer": WriterConfig(max_tokens=64000),
+            "verifier": VerifierConfig(effort="high"),
+            "humanization": HumanizationConfig(
+                enabled=True, editor=EditorConfig(effort="medium", max_tokens=32000)
+            ),
+        }
+    )
+    components = build_components(config, ConfigRegistry.load(Path("."), engine=config))
+
+    writer_cfg = components.llm._config
+    assert (writer_cfg.model, writer_cfg.max_tokens) == ("claude-sonnet-4-6", 64000)
+    assert components.implied_claims._llm is components.llm
+    editor_cfg = components.editor._llm._config
+    assert (editor_cfg.effort, editor_cfg.max_tokens) == ("medium", 32000)
+    assert editor_cfg.model == "claude-sonnet-4-6"
+    verifier_cfg = components.verifier_llm._config
+    assert (verifier_cfg.effort, verifier_cfg.max_tokens) == ("high", None)
+    assert verifier_cfg.api_key == "test-key"
+
+
+def test_role_settings_with_an_injected_llm_raise(tmp_path: Path):
+    from cce.config.types import EditorConfig
+
+    config = _b3_config(tmp_path, verifier_model=None).model_copy(
+        update={
+            "humanization": HumanizationConfig(
+                enabled=True, editor=EditorConfig(effort="medium")
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="editor model/max_tokens/thinking/effort"):
+        build_components(
+            config,
+            ConfigRegistry.load(Path("."), engine=config),
+            overrides=ComponentOverrides(llm=MockLLMProvider()),
+        )
+
+
 async def test_verifier_model_unset_shares_the_main_provider(tmp_path: Path):
     """B3: unset, behaviour is unchanged — one provider for every role."""
     config = _b3_config(tmp_path, verifier_model=None)
@@ -336,6 +383,7 @@ async def test_verifier_requests_use_the_verifier_model(tmp_path: Path):
             )
             reply = json.dumps({"content": "x", "claims": [], "summary": counts})
             client.messages.create = AsyncMock(return_value=_sdk_response(reply))
+            route_stream_to_create(client)
             mock_cls.return_value = client
             pipeline = build_pipeline(config, registry, store)
 

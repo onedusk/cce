@@ -63,8 +63,21 @@ _NO_STRUCTURED_OUTPUT_MODEL_PREFIXES: tuple[str, ...] = (
 )
 
 
+# Used when ``max_tokens`` is unset and the Models API lookup fails: the old
+# default, which is safe on every current model.
+FALLBACK_MAX_TOKENS = 21000
+# Each model's maximum output, from the Models API, looked up once per process.
+_MODEL_MAX_TOKENS: dict[str, int] = {}
+
+
 class AnthropicProvider:
-    """Async Anthropic API client with automatic prompt caching."""
+    """Async Anthropic API client with automatic prompt caching.
+
+    Requests are streamed (``messages.stream`` + ``get_final_message``): the
+    SDK refuses a non-streaming request whose ``max_tokens`` implies more
+    than ten minutes of generation (~21,333 tokens), which capped every
+    call below what current models allow.
+    """
 
     def __init__(self, config: LLMConfig) -> None:
         self._config = config
@@ -106,7 +119,7 @@ class AnthropicProvider:
         kwargs: dict = {
             "model": self._config.model,
             "messages": api_messages,
-            "max_tokens": max_tokens or self._config.max_tokens,
+            "max_tokens": max_tokens or await self._default_max_tokens(),
         }
         if self._accepts_sampling:
             kwargs["temperature"] = (
@@ -147,13 +160,15 @@ class AnthropicProvider:
             kwargs["max_tokens"],
         )
 
-        response = await self._client.messages.create(**kwargs)
+        async with self._client.messages.stream(**kwargs) as stream:
+            response = await stream.get_final_message()
 
         # Extract text from response content blocks
         content = ""
         for block in response.content:
-            if hasattr(block, "text"):
-                content += block.text
+            text = getattr(block, "text", None)  # text blocks only
+            if isinstance(text, str):
+                content += text
 
         return LLMResponse(
             content=content,
@@ -170,6 +185,29 @@ class AnthropicProvider:
             },
             stop_reason=response.stop_reason or "",
         )
+
+    async def _default_max_tokens(self) -> int:
+        """``llm.max_tokens`` if set, else the model's maximum output from the
+        Models API (cached per process), else ``FALLBACK_MAX_TOKENS``."""
+        if self._config.max_tokens is not None:
+            return self._config.max_tokens
+        model = self._config.model
+        if model not in _MODEL_MAX_TOKENS:
+            try:
+                info = await self._client.models.retrieve(model)
+                if not info.max_tokens:
+                    raise ValueError("no max_tokens in the model info")
+                _MODEL_MAX_TOKENS[model] = int(info.max_tokens)
+            except Exception as e:  # any failure: keep working on the fallback
+                logger.warning(
+                    "Could not read max_tokens for %s from the Models API (%s); "
+                    "using %d. Set llm.max_tokens / CCE_LLM_MAX_TOKENS to choose.",
+                    model,
+                    type(e).__name__,
+                    FALLBACK_MAX_TOKENS,
+                )
+                _MODEL_MAX_TOKENS[model] = FALLBACK_MAX_TOKENS
+        return _MODEL_MAX_TOKENS[model]
 
     @staticmethod
     def _split_for_cache(content: str) -> list[dict]:

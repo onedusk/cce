@@ -526,3 +526,20 @@ def make_publish_package(**overrides: Any) -> PublishPackage:
     }
     defaults.update(overrides)
     return PublishPackage(**defaults)
+
+
+def route_stream_to_create(client: Any) -> None:
+    """Make a mocked SDK client's ``messages.stream`` (what AnthropicProvider
+    calls) go through the test's ``messages.create`` mock, so tests keep
+    scripting and inspecting ``messages.create``."""
+    import contextlib
+    from unittest.mock import AsyncMock, MagicMock
+
+    @contextlib.asynccontextmanager
+    async def stream(**kwargs: Any):
+        message = await client.messages.create(**kwargs)
+        manager = MagicMock()
+        manager.get_final_message = AsyncMock(return_value=message)
+        yield manager
+
+    client.messages.stream = stream

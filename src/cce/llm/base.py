@@ -51,11 +51,10 @@ class IncompleteResponseError(RuntimeError):
             detail = (
                 f"stopped at max_tokens after "
                 f"{response.usage.get('output_tokens', 0)} output tokens "
-                "(thinking included). Lower llm.effort / CCE_LLM_EFFORT so "
-                "thinking takes less of the cap, or raise llm.max_tokens / "
-                "CCE_LLM_MAX_TOKENS (verifier: CCE_VERIFIER_MAX_TOKENS) up to "
-                "the SDK's non-streaming ceiling (~21,333; beyond it needs "
-                "streaming)"
+                "(thinking included). Lower the role's effort (CCE_<ROLE>_EFFORT "
+                "or CCE_LLM_EFFORT) so thinking takes less of the cap, or raise "
+                "its max_tokens (CCE_<ROLE>_MAX_TOKENS / CCE_LLM_MAX_TOKENS; "
+                "unset = the model's maximum)"
             )
         else:
             detail = f"ended with stop_reason={response.stop_reason!r}"

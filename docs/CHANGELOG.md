@@ -5,6 +5,57 @@ All notable changes to the Content Curation Engine (CCE).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — runtime model limits and follow-ups
+
+Follow-ups from the Phase 2 todo list, on `feature/runtime-model-limits`.
+
+### Changed — streamed requests, model-sized token caps, per-role settings
+- **Requests are streamed** (`messages.stream` + `get_final_message`). The
+  SDK refuses a non-streaming request whose `max_tokens` implies over ten
+  minutes of generation (~21,333 tokens), which is why every cap sat at
+  21000 whatever the model allowed.
+- **`llm.max_tokens` defaults to the model's maximum output**, read from the
+  Anthropic Models API once per process (128000 on the 4.6 and 5.x models,
+  64000 on the 4.5 ones; 21000 if the lookup fails). An explicit value
+  (`CCE_LLM_MAX_TOKENS`, YAML) wins. `verifier.max_tokens` now inherits it.
+  Note: a higher cap lets a runaway reply spend more; `CCE_MAX_TOKENS_PER_JOB`
+  still bounds a job.
+- **Per-role `model`, `max_tokens`, `thinking` and `effort`** for the writer,
+  verifier and editor (YAML `writer.*`, `verifier.*`,
+  `humanization.editor.*`; env `CCE_{WRITER,VERIFIER,EDITOR}_{MODEL,
+  MAX_TOKENS,THINKING,EFFORT}`), inheriting `llm` when unset. A role with any
+  setting gets its own provider; the implied-claim checker uses the
+  writer's. `EditorConfig.model`, never read before, now works. With an
+  injected `llm` these settings raise `ValueError` rather than being
+  ignored.
+
+### Fixed — date-only published dates skipped the recency filter
+- A `published_date` without a time or offset (`"2019-05-01"`, common in
+  crawl metadata) parsed as a naive datetime, so `recency.max_age_days`
+  compared naive with aware, hit the fail-open branch and never dropped
+  the page. Naive values are now read as UTC.
+
+### Fixed — citation lists in marker form were dropped
+- Haiku 4.5 lists `citations_used` / `evidence_map` IDs as `ev:<hash>` (the
+  marker syntax without the `ev_` prefix). The writer kept only exact IDs,
+  so `unit.citations` came out empty and `_evidence.json` exported nothing,
+  although the inline markers resolved. Those IDs now go through the same
+  `resolve_evidence_id` as the gate and emit, which also drops a leading
+  `ev:`. Source diversity counts the resolved citations.
+
+### Fixed — the CLI now loads `.env`
+- `cce` loads `./.env` at start-up (variables already in the environment
+  win), as `docs/configuration.md` said it did; live runs no longer need
+  `set -a; . ./.env`. The entry point is `cce.cli:main`; the Typer `app`
+  itself (and so every `CliRunner` test) doesn't read `.env`.
+
+### Fixed — `cce batch` exit codes
+- `cce batch` exited 0 whatever its jobs did. It now exits with the worst
+  job outcome in `cce curate`'s codes: 1 if any job failed (or was still
+  running at the wait timeout), else 2 for any REVIEW_REQUIRED, else 3 for
+  any READY_FOR_APPROVAL, else 0. Skipped malformed entries still don't
+  fail the batch.
+
 ## [Unreleased] — bubble-readiness Phase 2 (multi-tenant Pipeline use)
 
 Phase 2 of `docs/internal/bubble-readiness-plan-2026-09-23.md` (local-only):
