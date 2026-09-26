@@ -754,6 +754,10 @@ class Discoverer:
                     )
                 except (ValueError, AttributeError):
                     pass
+                # A date-only or offset-less value is naive; read it as UTC so
+                # the recency filter can compare it (it failed open before).
+                if published_at is not None and published_at.tzinfo is None:
+                    published_at = published_at.replace(tzinfo=UTC)
 
             # Coerce metadata fields — adapters may return lists instead of strings
             title = (

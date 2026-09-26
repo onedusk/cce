@@ -5,6 +5,16 @@ All notable changes to the Content Curation Engine (CCE).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — runtime model limits and follow-ups
+
+Follow-ups from the Phase 2 todo list, on `feature/runtime-model-limits`.
+
+### Fixed — date-only published dates skipped the recency filter
+- A `published_date` without a time or offset (`"2019-05-01"`, common in
+  crawl metadata) parsed as a naive datetime, so `recency.max_age_days`
+  compared naive with aware, hit the fail-open branch and never dropped
+  the page. Naive values are now read as UTC.
+
 ## [Unreleased] — bubble-readiness Phase 2 (multi-tenant Pipeline use)
 
 Phase 2 of `docs/internal/bubble-readiness-plan-2026-09-23.md` (local-only):
