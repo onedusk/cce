@@ -5,6 +5,13 @@ All notable changes to the Content Curation Engine (CCE).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] todo sweep
+
+### Docs: humanization is on by default
+- README.md no longer calls the humanization stages "opt-in", and the
+  `CCE_HUMANIZATION_ENABLED` row in `docs/configuration.md` shows the real
+  default (`true`, since 2026-06-24).
+
 ## [Unreleased] — runtime model limits and follow-ups
 
 Follow-ups from the Phase 2 todo list, on `feature/runtime-model-limits`.

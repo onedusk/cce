@@ -32,7 +32,7 @@ flowchart TD
     class Scorer,Editor,Implied humanization
 ```
 
-**Core invariant:** the writer produces drafts _only_ from stored evidence objects. The verifier is a separate role that checks every claim. The quality gate enforces "no citation, no ship." Humanization stages (highlighted) are opt-in via `EngineConfig.humanization.enabled` and never extend the writer-iteration budget.
+**Core invariant:** the writer produces drafts _only_ from stored evidence objects. The verifier is a separate role that checks every claim. The quality gate enforces "no citation, no ship." Humanization stages (highlighted) are on by default (disable with `EngineConfig.humanization.enabled=False`) and never extend the writer-iteration budget.
 
 ## Package Structure
 
@@ -78,7 +78,7 @@ src/cce/
 
 **Phase 1** delivered the full pipeline loop across 8 live runs. **Phase 2** added semantic evidence ranking (Ollama + sqlite-vec), rules-based taxonomy classification, per-path writer modulation, verifier trust weighting, jurisdiction pass-through, and domain policy templates. **Phase 3** shipped the FastAPI REST layer, `CurationEngine` embedded/remote dispatch, the `cce` CLI, and post-hoc MDX export.
 
-**Humanization stack** (opt-in via `EngineConfig.humanization.enabled`): programmatic style scorer, LLM editor with citation-preservation checks, and an implied-claim checker that catches unfair contrastive framing. See `docs/decompose/humanization/` (internal -- not in public clones) for full design.
+**Humanization stack** (on by default; switch off with `EngineConfig.humanization.enabled=False`, or per stage via `humanization.editor.enabled` / `humanization.implied_claims.enabled`): programmatic style scorer, LLM editor with citation-preservation checks, and an implied-claim checker that catches unfair contrastive framing. See `docs/decompose/humanization/` (internal -- not in public clones) for full design.
 
 ## Tech Stack
 
