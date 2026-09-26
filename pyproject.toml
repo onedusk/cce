@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [project.scripts]
-cce = "cce.cli:app"
+cce = "cce.cli:main"
 
 [project.optional-dependencies]
 dev = [

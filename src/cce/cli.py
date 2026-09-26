@@ -29,6 +29,17 @@ api_app.add_typer(key_app)
 app.add_typer(emit_app, name="emit-mdx")
 
 
+def main() -> None:
+    """The ``cce`` entry point: load ``./.env`` (process env vars win, as
+    documented in docs/configuration.md), then run the CLI. Kept out of the
+    Typer app so tests that invoke ``app`` never read a developer's .env.
+    """
+    from cce import load_env_file
+
+    load_env_file(".env")
+    app()
+
+
 @app.callback()
 def _main_callback() -> None:
     """CCE CLI — runs once before every subcommand.

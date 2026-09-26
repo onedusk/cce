@@ -15,9 +15,10 @@ For engine tuning values, three layers apply. Higher wins:
    single source of defaults (audit-2026-06-09 finding 1.4)
 
 A `.env` file at the repo root (gitignored) is the conventional place for
-layer 1 — `cp .env.example .env` and edit. The CLI and engine read it via
-`cce.load_env_file()`-style helpers and plain process environment; the loader
-itself only consults `os.environ`. Note the `.env` parser splits on the first
+layer 1 — `cp .env.example .env` and edit. The `cce` CLI loads `./.env` from
+the working directory at start-up (variables already set in the environment
+win); the runner scripts do the same via `cce.load_env_file()`. The embedded
+engine and the library don't read `.env`: they only consult `os.environ`. Note the `.env` parser splits on the first
 `=` and does **not** strip inline comments, so keep comments on their own line.
 
 ## Passing a YAML config file

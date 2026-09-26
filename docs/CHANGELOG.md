@@ -23,6 +23,12 @@ Follow-ups from the Phase 2 todo list, on `feature/runtime-model-limits`.
   `resolve_evidence_id` as the gate and emit, which also drops a leading
   `ev:`. Source diversity counts the resolved citations.
 
+### Fixed — the CLI now loads `.env`
+- `cce` loads `./.env` at start-up (variables already in the environment
+  win), as `docs/configuration.md` said it did; live runs no longer need
+  `set -a; . ./.env`. The entry point is `cce.cli:main`; the Typer `app`
+  itself (and so every `CliRunner` test) doesn't read `.env`.
+
 ## [Unreleased] — bubble-readiness Phase 2 (multi-tenant Pipeline use)
 
 Phase 2 of `docs/internal/bubble-readiness-plan-2026-09-23.md` (local-only):

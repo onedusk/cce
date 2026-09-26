@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from typer.testing import CliRunner
 
@@ -717,3 +719,27 @@ def test_validate_suggests_the_new_reputation_keys(tmp_path):
     assert result.exit_code == 1
     typo_line = next(line for line in result.output.splitlines() if "typo.yaml" in line)
     assert "did you mean 'marketing_phrases'?" in typo_line
+
+
+@pytest.mark.unit
+def test_entry_point_loads_dotenv_without_overriding_the_env(tmp_path, monkeypatch):
+    """`cce` never read .env, although docs/configuration.md said it did."""
+    import cce.cli as cli
+
+    (tmp_path / ".env").write_text("CCE_TEST_FROM_DOTENV=file\nCCE_TEST_SET=file\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("CCE_TEST_FROM_DOTENV", raising=False)
+    monkeypatch.setenv("CCE_TEST_SET", "env")
+    seen = {}
+    monkeypatch.setattr(
+        cli,
+        "app",
+        lambda: seen.update(
+            {k: os.environ.get(k) for k in ("CCE_TEST_FROM_DOTENV", "CCE_TEST_SET")}
+        ),
+    )
+
+    cli.main()
+    monkeypatch.delenv("CCE_TEST_FROM_DOTENV", raising=False)
+
+    assert seen == {"CCE_TEST_FROM_DOTENV": "file", "CCE_TEST_SET": "env"}
