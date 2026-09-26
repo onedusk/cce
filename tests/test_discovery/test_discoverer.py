@@ -1090,6 +1090,18 @@ def test_allow_entry_rejects_lookalikes():
     assert Discoverer._passes_policy("https://www.nih.gov:443/x", policy) is True
 
 
+def test_backslash_is_read_as_a_path_separator_like_a_browser():
+    """WHATWG parsers read "\\" as "/" in http(s) URLs, so the host of
+    https://reddit.com\\@example.com/ is reddit.com, not example.com."""
+    deny = make_source_policy(domains_deny=["reddit.com"])
+    assert Discoverer._passes_policy("https://reddit.com\\@example.com/", deny) is False
+    assert Discoverer._passes_policy("http://reddit.com\\@example.com/", deny) is False
+
+    allow = make_source_policy(domains_allow=["nih.gov"])
+    assert Discoverer._passes_policy("https://evil.io\\@nih.gov/x", allow) is False
+    assert Discoverer._passes_policy("https://nih.gov\\x", allow) is True
+
+
 def test_domain_entries_are_normalised():
     policy = make_source_policy(domains_allow=[".gov", "*.example.com"])
     assert Discoverer._passes_policy("https://www.nih.gov/x", policy) is True

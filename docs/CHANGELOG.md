@@ -5,6 +5,115 @@ All notable changes to the Content Curation Engine (CCE).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] todo sweep
+
+### Fixed: `thinking: disabled` on models that reject it
+- `thinking: disabled` on Fable 5 / 5.1, Mythos 5 / 5.1 or Opus 5.5 (any
+  effort), or on Opus 5 at effort `xhigh`/`max`, now raises `ConfigError`
+  naming the model and the setting when the provider is built, instead of
+  a 400 on every call. Other models still get the setting passed through.
+
+### Fixed: effort omitted on Opus 4.5
+- `effort` shared the adaptive-thinking gate, so it was never sent to Opus
+  4.5, which accepts `output_config.effort`. It now is; `thinking` stays
+  omitted there. Opus 4.5 takes only `low`/`medium`/`high`, so
+  `xhigh`/`max` on it (which used to be dropped silently) now raise
+  `ConfigError` when the provider is built.
+
+### Fixed: LLM retry keeps every unparseable attempt
+- `with_llm_retry` chains each failed attempt's error to the previous one
+  (`__cause__`, unless it already has a cause). When both writer (or
+  verifier) replies are unparseable, the raised `UnparseableResponseError`
+  now leads back to the first one, so a caller can reach both
+  `raw_response` values.
+
+### Fixed: a resent LLM attempt's tokens count toward the job
+- The writer and verifier now report the summed usage of every attempt
+  (new `cce.llm.base.sum_usage`), so a reply discarded as unparseable and
+  resent is included in the job totals, the WRITE stage metrics and the
+  `CCE_MAX_TOKENS_PER_JOB` checkpoint.
+
+### Fixed: model-supplied IDs and topics are clipped in logs
+- The writer's unknown-citation warning, the editor's citation-drift
+  warning and the implied-claim release-valve log now pass model-written
+  text through `cce.parsing.clip_for_log` (first 40 chars, repr-quoted),
+  so a reply can't smuggle its text or a forged line into the logs.
+
+### Changed: typed error codes for incomplete and unparseable LLM replies
+- A job failed by `IncompleteResponseError` now records
+  `JobError.code="incomplete_response"`, and one failed by
+  `UnparseableResponseError` records `"unparseable_response"` (both were
+  `"pipeline_error"`). `JobError.stage` names the failing role's stage:
+  writer WRITE, verifier VERIFY, editor and implied-claim checker EDIT
+  (the job's own stage stayed WRITE for the whole loop, so a verifier
+  failure read as a write failure). Other failures keep `"pipeline_error"`.
+  The message is unchanged and never carries reply text.
+
+### Changed: a failing path no longer drops its completed siblings
+- When a path raises (an unparseable writer reply, say), the job is still
+  FAILED with the error recorded, but `PipelineResult.package` now carries
+  the units of the paths that finished before it, with a
+  `PublishPackage.verification` record for each of them (none for the
+  failing or unstarted paths). The engine stores that package, so
+  `GET /v1/curate/jobs/{id}/package` on such a job returns it (as it does
+  for REVIEW_REQUIRED jobs). `emit-mdx --all` / `--topic` only read
+  completed jobs and `emit-mdx --job` still refuses a failed one without
+  `--force`. A run that fails before any path completes has no package, as
+  before. The failing path's own token spend is not in the package's
+  PUBLISH record.
+
+### Added: `JobHandle.error` for embedded callers
+- In embedded mode the exception that failed a job's last run is on
+  `JobHandle.error` (in memory only; None in remote mode, cleared by
+  `retry()`), set before the terminal status is stored so it is there once
+  `wait()` returns. An `UnparseableResponseError` keeps the reply text on
+  `raw_response`. The reply text never reaches the job store, the logs or
+  the API (which passes no error callback to `run_pipeline_task`).
+
+### Fixed: implied-claim checker sent topic-less fragments to the LLM
+- `rather than ` and `by contrast` match only frame keywords, so the
+  topic-extraction call got a fragment naming nothing (live reply: "I don't
+  see an actual fragment to analyze"). Frames with no word besides the frame
+  keywords are now skipped before the LLM call. Scorer counts are unchanged.
+
+### Fixed: implied-claim hints named evidence the path could not cite
+- The counter-evidence search ran store-wide, so hints could name other
+  jobs' evidence IDs; citing one is editor citation drift, so the edit was
+  discarded after paying for it. The checker now searches only the path's
+  evidence (same case-insensitive title/excerpt match, same limit), and
+  `ImpliedClaimChecker.check` no longer takes `evidence_store`. The release
+  valve ratio now reads as the share of the path's own evidence that
+  supports the dismissed side.
+
+### Docs: humanization is on by default
+- README.md no longer calls the humanization stages "opt-in", and the
+  `CCE_HUMANIZATION_ENABLED` row in `docs/configuration.md` shows the real
+  default (`true`, since 2026-06-24).
+
+### Fixed: acceptance-check judge reports truncated or refused replies
+- `scripts/research/run_acceptance_check.py`: the repetition judge now calls
+  `ensure_complete` before parsing, so a reply that stopped at `max_tokens`
+  or was refused comes back as a `verdict: "error"` naming the stop reason,
+  instead of "not valid JSON" (or "Could not locate JSON") with a snippet of
+  the partial reply.
+
+### Fixed: domain allow/deny checks read "\" as a browser does
+- B9 host matching (`_url_host` in `cce.discovery.discoverer`) now turns "\"
+  into "/" in http(s) URLs before parsing, as WHATWG parsers do. urlparse
+  kept it in the authority, so `https://reddit.com\@example.com/` was
+  checked as `example.com` (slipping past a `reddit.com` deny entry, or
+  passing an allow list for `example.com`) while a browser loads
+  `reddit.com`.
+
+### Fixed: review follow-ups on the sweep
+- `cce api start` exits with one "Configuration error" line (not a
+  lifespan traceback) when the registry load or a provider raises
+  `ConfigError`, as it already did for a missing key.
+- `sum_usage` counts a null cache-token count as 0 (the SDK types those
+  fields as optional).
+- The `search_strategy` description and CLAUDE.md now say counter-evidence
+  is matched against the path's own evidence.
+
 ## [Unreleased] — runtime model limits and follow-ups
 
 Follow-ups from the Phase 2 todo list, on `feature/runtime-model-limits`.

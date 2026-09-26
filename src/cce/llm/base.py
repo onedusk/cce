@@ -6,6 +6,7 @@ know or care which provider is behind it.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
@@ -26,6 +27,16 @@ class LLMResponse:
     model: str = ""
     usage: dict = field(default_factory=dict)  # token counts
     stop_reason: str = ""
+
+
+def sum_usage(usages: Iterable[Mapping[str, int]]) -> dict[str, int]:
+    """Add token-usage dicts key by key (e.g. every attempt of one call)."""
+    total: dict[str, int] = {}
+    for usage in usages:
+        for key, count in usage.items():
+            # The SDK types cache counts as Optional; None counts as 0.
+            total[key] = total.get(key, 0) + (count or 0)
+    return total
 
 
 # Stop reasons after which the reply is incomplete and must not be parsed.
@@ -70,7 +81,8 @@ class UnparseableResponseError(ValueError):
     Raised by the writer and verifier instead of falling back to raw
     markdown or a zero-score verdict. A ValueError, so ``with_llm_retry``
     resends; both callers allow one resend, then the error propagates and
-    the pipeline fails the job.
+    the pipeline fails the job. The first attempt's error is chained on as
+    ``__cause__``, so both replies stay reachable.
 
     The reply text is kept on ``raw_response`` for the caller to persist
     where it sees fit: direct Writer/Verifier callers catch the error, and

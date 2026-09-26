@@ -94,6 +94,15 @@ with only `llm` injected raises). An injected LLM or crawl adapter needs no
 usage keys (the token budget reads them). Configuration itself still loads
 only through the registry.
 
+**Reading a failed run's error in memory.** In embedded mode,
+`JobHandle.error` holds the exception that failed the job's last run (None
+until then or when no exception failed it, as with no evidence; cleared by
+`retry()`; always None in remote mode). For an
+unreadable writer or verifier reply it is an `UnparseableResponseError`
+whose `raw_response` is the reply text, for the caller to persist where it
+sees fit. cce never logs or stores that text: the job store and the API only
+carry `job.error` (code, message and stage).
+
 **New configuration surfaces must enter through the registry** — add a field
 to `ConfigRegistry`, load it in `load()`, and consume it from
 `build_components`. Do not add `load_*` calls to `engine.py` or
@@ -154,8 +163,8 @@ effective values when neither env var nor YAML provides one.
 | `CCE_LLM_API_KEY` | — | Overrides `ANTHROPIC_API_KEY` when set |
 | `CCE_LLM_TEMPERATURE` | `0.2` | Fallback sampling temperature; not sent to models that reject sampling params (Opus 4.7+, Sonnet 5, Fable 5) |
 | `CCE_LLM_MAX_TOKENS` | unset | Per-call output token cap, thinking included. Unset = the model's maximum output, read from the Anthropic Models API once per process (128000 on the 4.6 and 5.x models, 64000 on the 4.5 ones), or 21000 if that lookup fails. Requests are streamed, so the SDK's ~21,333 non-streaming ceiling doesn't apply. A reply that hits the cap fails the job with an `IncompleteResponseError` naming the role and model; if thinking crowds out replies, lower the role's effort |
-| `CCE_LLM_THINKING` | unset | `adaptive` or `disabled`, sent as `thinking: {type: ...}`. Unset = omit the param (model default: Sonnet 5 / Opus 5 think adaptively, the 4.6 models do not). Never sent to Opus 4.5, Haiku 4.5 or older. `adaptive` also drops `temperature` on the 4.6 models (the API rejects any value but 1 while thinking is on). Otherwise passed through as set: the API rejects `disabled` on Fable 5 / Opus 5.5, and on Opus 5 at effort `xhigh`/`max` |
-| `CCE_LLM_EFFORT` | unset | `low` / `medium` / `high` / `xhigh` / `max`, sent as `output_config.effort`. Unset = model default. Sent only to models with adaptive thinking (4.6 and later), so also omitted on Opus 4.5; `xhigh` needs Opus 4.7+ / Sonnet 5 |
+| `CCE_LLM_THINKING` | unset | `adaptive` or `disabled`, sent as `thinking: {type: ...}`. Unset = omit the param (model default: Sonnet 5 / Opus 5 think adaptively, the 4.6 models do not). Never sent to Opus 4.5, Haiku 4.5 or older. `adaptive` also drops `temperature` on the 4.6 models (the API rejects any value but 1 while thinking is on). Otherwise passed through as set, except `disabled` on Fable 5 / Opus 5.5, or on Opus 5 at effort `xhigh`/`max`, which the API rejects: that fails at start-up with a config error naming the model |
+| `CCE_LLM_EFFORT` | unset | `low` / `medium` / `high` / `xhigh` / `max`, sent as `output_config.effort`. Unset = model default. Sent to Opus 4.5 and the 4.6 and later models; omitted on Haiku 4.5, Sonnet 4.5 and older. Opus 4.5 takes only `low`/`medium`/`high` (`xhigh`/`max` there fail at start-up with a config error); `xhigh` needs Opus 4.7+ / Sonnet 5 |
 
 The writer's and verifier's replies are constrained to their JSON schemas
 with structured outputs on every current model; there is no setting for it.
@@ -252,7 +261,7 @@ want a copy of the old shape).
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `CCE_HUMANIZATION_ENABLED` | `false` | Master switch for scorer/editor/checker |
+| `CCE_HUMANIZATION_ENABLED` | `true` | Master switch for scorer/editor/checker (on by default since 2026-06-24; set `false` to skip all three) |
 | `CCE_HUMANIZATION_MARKERS_PATH` | `config/humanization_markers.yaml` | Marker lists |
 
 Granular humanization thresholds are deliberately YAML-only (reviewable in
