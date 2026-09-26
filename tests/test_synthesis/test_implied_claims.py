@@ -7,13 +7,14 @@ import json
 import pytest
 
 from cce.config.markers import HumanizationMarkers, load_markers
-from cce.config.types import ImpliedClaimsConfig
+from cce.config.types import HumanizationThresholds, ImpliedClaimsConfig
 from cce.llm.base import IncompleteResponseError, LLMResponse
 from cce.models.evidence import Evidence
 from cce.synthesis.implied_claims import (
     ContrastiveFrame,
     ImpliedClaimChecker,
 )
+from cce.synthesis.scoring import Scorer
 from tests.conftest import MockLLMProvider, make_evidence
 
 pytestmark = pytest.mark.unit
@@ -24,20 +25,17 @@ def markers() -> HumanizationMarkers:
     return load_markers("config/humanization_markers.yaml")
 
 
-class StubStore:
-    """Minimal EvidenceStore stub returning a scripted result for any topic search."""
+def _counter(n: int) -> list[Evidence]:
+    """Path evidence supporting the dismissed side ("sleeping pills")."""
+    return [
+        make_evidence(excerpt="Sleeping pills help short-term insomnia in trials.")
+        for _ in range(n)
+    ]
 
-    def __init__(self, results: list[Evidence] | None = None) -> None:
-        self._results = results or []
-        self.search_calls: list[dict] = []
 
-    async def search(
-        self, *, url: str | None = None, topic: str | None = None, limit: int = 50
-    ) -> list[Evidence]:
-        self.search_calls.append({"topic": topic, "limit": limit})
-        return self._results[:limit]
-
-    # Other protocol methods aren't called by the checker — no need to stub.
+def _unrelated(n: int) -> list[Evidence]:
+    """Path evidence that never mentions the dismissed side."""
+    return [make_evidence() for _ in range(n)]
 
 
 def _topic_extract_response(topic: str, rationale: str = "extracted") -> str:
@@ -47,21 +45,19 @@ def _topic_extract_response(topic: str, rationale: str = "extracted") -> str:
 def _make_checker(
     *,
     markers: HumanizationMarkers,
-    counter_evidence: list[Evidence] | None = None,
     config: ImpliedClaimsConfig | None = None,
     extracted_topics: list[str] | None = None,
-) -> tuple[ImpliedClaimChecker, MockLLMProvider, StubStore]:
+) -> tuple[ImpliedClaimChecker, MockLLMProvider]:
     topics = extracted_topics or ["sleeping pills"]
     llm = MockLLMProvider(
         [LLMResponse(content=_topic_extract_response(t), model="mock") for t in topics]
     )
-    store = StubStore(results=counter_evidence or [])
     checker = ImpliedClaimChecker(
         llm=llm,
         config=config or ImpliedClaimsConfig(enabled=True),
         markers=markers,
     )
-    return checker, llm, store
+    return checker, llm
 
 
 # --- Frame detection (no LLM, no store) ---
@@ -94,13 +90,12 @@ def test_detect_frames_returns_empty_when_no_contrast(markers):
 
 
 async def test_check_emits_annotation_when_counter_exists(markers):
-    counter = [make_evidence() for _ in range(5)]
-    cited = [make_evidence() for _ in range(10)]  # ratio 0.5 > 0.15
-    checker, _llm, _store = _make_checker(markers=markers, counter_evidence=counter)
+    counter = _counter(5)
+    cited = counter + _unrelated(5)  # ratio 0.5 > 0.15
+    checker, _llm = _make_checker(markers=markers)
 
     annotations = await checker.check(
         "Unlike sleeping pills, CBT-I addresses the root cause.",
-        evidence_store=_store,
         cited_evidence=cited,
     )
 
@@ -114,12 +109,11 @@ async def test_check_emits_annotation_when_counter_exists(markers):
 
 async def test_check_skips_frame_with_no_counter_evidence(markers):
     """Empty counter-evidence search → no annotation emitted."""
-    cited = [make_evidence() for _ in range(10)]
-    checker, _llm, _store = _make_checker(markers=markers, counter_evidence=[])
+    cited = _unrelated(10)
+    checker, _llm = _make_checker(markers=markers)
 
     annotations = await checker.check(
         "Unlike sleeping pills, CBT-I works.",
-        evidence_store=_store,
         cited_evidence=cited,
     )
 
@@ -128,13 +122,11 @@ async def test_check_skips_frame_with_no_counter_evidence(markers):
 
 async def test_release_valve_suppresses_low_ratio_counter(markers):
     """1 counter / 10 cited = 0.1 ≤ 0.15 default release valve → suppressed."""
-    counter = [make_evidence()]
-    cited = [make_evidence() for _ in range(10)]
-    checker, _llm, _store = _make_checker(markers=markers, counter_evidence=counter)
+    cited = _counter(1) + _unrelated(9)
+    checker, _llm = _make_checker(markers=markers)
 
     annotations = await checker.check(
         "Unlike sleeping pills, CBT-I works.",
-        evidence_store=_store,
         cited_evidence=cited,
     )
 
@@ -142,19 +134,15 @@ async def test_release_valve_suppresses_low_ratio_counter(markers):
 
 
 async def test_release_valve_log_clips_model_supplied_topic(markers, caplog):
+    """The dismissed topic is model-supplied: the release-valve log line
+    carries it clipped (one line, bounded), never raw."""
     topic = "sleeping pills" + "A" * 20 + "\nINJECTED log line " + "B" * 100
-    checker, _llm, _store = _make_checker(
-        markers=markers,
-        counter_evidence=[make_evidence()],
-        extracted_topics=[topic],
-    )
+    checker, _llm = _make_checker(markers=markers, extracted_topics=[topic])
+    # 1 matching item of 10 cited: 0.1 <= the 0.15 valve, so it is logged.
+    cited = [make_evidence(excerpt=f"Evidence on {topic}.")] + _unrelated(9)
 
     with caplog.at_level("INFO"):
-        await checker.check(
-            "Unlike sleeping pills, CBT-I works.",
-            evidence_store=_store,
-            cited_evidence=[make_evidence() for _ in range(10)],
-        )
+        await checker.check("Unlike sleeping pills, CBT-I works.", cited_evidence=cited)
 
     (record,) = [r for r in caplog.records if "Release valve" in r.message]
     assert "\n" not in record.message
@@ -163,45 +151,41 @@ async def test_release_valve_log_clips_model_supplied_topic(markers, caplog):
     assert repr(topic[:40]) in record.message
 
 
-async def test_release_valve_does_not_suppress_when_cited_empty(markers):
-    """Empty cited pool → no denominator; do NOT auto-suppress (v1 design)."""
-    counter = [make_evidence()]
-    checker, _llm, _store = _make_checker(markers=markers, counter_evidence=counter)
+async def test_check_emits_nothing_when_path_pool_empty(markers):
+    """Counter-evidence comes from the path pool, so an empty pool has none.
+    The release valve itself still never auto-suppresses without a
+    denominator (v1 design)."""
+    checker, _llm = _make_checker(markers=markers)
 
     annotations = await checker.check(
         "Unlike sleeping pills, CBT-I works.",
-        evidence_store=_store,
         cited_evidence=[],
     )
 
-    assert len(annotations) == 1
+    assert annotations == []
+    assert checker._below_release_valve(_counter(1), []) is False
 
 
 async def test_search_strategy_embedding_raises(markers):
     """The 'embedding' strategy is reserved for a post-H4 upgrade."""
-    counter = [make_evidence() for _ in range(5)]
-    checker, _llm, _store = _make_checker(
+    checker, _llm = _make_checker(
         markers=markers,
-        counter_evidence=counter,
         config=ImpliedClaimsConfig(enabled=True, search_strategy="embedding"),
     )
 
     with pytest.raises(NotImplementedError):
         await checker.check(
             "Unlike sleeping pills, CBT-I works.",
-            evidence_store=_store,
             cited_evidence=[make_evidence()],
         )
 
 
 async def test_dismissed_topic_extraction_uses_zero_temperature(markers):
-    counter = [make_evidence() for _ in range(5)]
-    cited = [make_evidence() for _ in range(10)]
-    checker, llm, _store = _make_checker(markers=markers, counter_evidence=counter)
+    cited = _counter(5) + _unrelated(5)
+    checker, llm = _make_checker(markers=markers)
 
     await checker.check(
         "Unlike sleeping pills, CBT-I works.",
-        evidence_store=_store,
         cited_evidence=cited,
     )
 
@@ -211,13 +195,12 @@ async def test_dismissed_topic_extraction_uses_zero_temperature(markers):
 
 
 async def test_annotation_rewrite_hint_includes_first_five_evidence_ids(markers):
-    counter = [make_evidence() for _ in range(8)]
-    cited = [make_evidence() for _ in range(10)]
-    checker, _llm, _store = _make_checker(markers=markers, counter_evidence=counter)
+    counter = _counter(8)
+    cited = counter + _unrelated(2)
+    checker, _llm = _make_checker(markers=markers)
 
     annotations = await checker.check(
         "Unlike sleeping pills, CBT-I works.",
-        evidence_store=_store,
         cited_evidence=cited,
     )
 
@@ -229,20 +212,16 @@ async def test_annotation_rewrite_hint_includes_first_five_evidence_ids(markers)
 
 
 async def test_check_returns_empty_when_no_frames_detected(markers):
-    """No contrastive frames → no LLM calls, no store calls, empty annotations."""
-    checker, llm, store = _make_checker(
-        markers=markers, counter_evidence=[make_evidence()]
-    )
+    """No contrastive frames → no LLM calls, empty annotations."""
+    checker, llm = _make_checker(markers=markers)
 
     annotations = await checker.check(
         "CBT-I targets the underlying habits keeping people awake.",
-        evidence_store=store,
         cited_evidence=[make_evidence()],
     )
 
     assert annotations == []
     assert llm.calls == []
-    assert store.search_calls == []
 
 
 def test_contrastive_frame_is_frozen():
@@ -284,7 +263,6 @@ async def test_check_skips_parasitic_frames_no_llm_call(markers):
     extractor logs on them."""
     cited = [make_evidence() for _ in range(10)]
     llm = MockLLMProvider([])  # no scripted responses — any call would raise
-    store = StubStore(results=[])
     checker = ImpliedClaimChecker(
         llm=llm,
         config=ImpliedClaimsConfig(enabled=True),
@@ -293,13 +271,11 @@ async def test_check_skips_parasitic_frames_no_llm_call(markers):
 
     annotations = await checker.check(
         "Boredom is not a problem to be solved. It is a signal to be heard.",
-        evidence_store=store,
         cited_evidence=cited,
     )
 
     assert annotations == []
     assert llm.calls == [], "parasitic frames must not trigger LLM topic extraction"
-    assert store.search_calls == [], "parasitic frames must not hit the store"
 
 
 async def test_check_still_processes_genuine_alternative_when_parasitic_present(
@@ -307,18 +283,15 @@ async def test_check_still_processes_genuine_alternative_when_parasitic_present(
 ):
     """Mixed body: parasitic frames are skipped; genuine_alternative
     frames still go through the normal topic-extract → counter-search pipeline."""
-    cited = [make_evidence() for _ in range(10)]
-    counter = [make_evidence() for _ in range(3)]  # ratio 0.3 > 0.15
-    checker, llm, store = _make_checker(
+    cited = _counter(3) + _unrelated(7)  # ratio 0.3 > 0.15
+    checker, llm = _make_checker(
         markers=markers,
-        counter_evidence=counter,
         extracted_topics=["sleeping pills"],
     )
 
     annotations = await checker.check(
         "Unlike sleeping pills, CBT-I works. "
         "This is not a shortcut. It is a longer investment.",
-        evidence_store=store,
         cited_evidence=cited,
     )
 
@@ -340,7 +313,6 @@ async def test_topic_extraction_raises_on_truncated_reply(markers):
             )
         ]
     )
-    store = StubStore(results=[make_evidence()])
     checker = ImpliedClaimChecker(
         llm=llm,
         config=ImpliedClaimsConfig(enabled=True),
@@ -350,8 +322,53 @@ async def test_topic_extraction_raises_on_truncated_reply(markers):
     with pytest.raises(IncompleteResponseError, match="implied-claim checker"):
         await checker.check(
             "Unlike sleeping pills, CBT-I works.",
-            evidence_store=store,
             cited_evidence=[make_evidence()],
         )
 
     assert len(llm.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Choose a routine rather than a pill.",
+        "By contrast, CBT-I changes habits.",
+    ],
+)
+async def test_check_skips_keyword_only_frames_no_llm_call(markers, body):
+    """'rather than ' and 'by contrast' match only frame keywords, so the
+    fragment names no dismissed topic: no extraction call, and the scorer
+    still counts the frame."""
+    llm = MockLLMProvider([])  # no scripted responses: any call would raise
+    checker = ImpliedClaimChecker(
+        llm=llm,
+        config=ImpliedClaimsConfig(enabled=True),
+        markers=markers,
+    )
+    assert checker._detect_frames(body), "fixture must contain a detected frame"
+
+    annotations = await checker.check(body, cited_evidence=[make_evidence()])
+
+    assert annotations == []
+    assert llm.calls == []
+    scores = Scorer(thresholds=HumanizationThresholds(), markers=markers).score(body)
+    assert scores.contrastive_frame_count == 1
+
+
+async def test_counter_search_matches_path_title_or_excerpt_up_to_limit(markers):
+    """Counter-evidence is the path's own evidence naming the topic in its
+    title or excerpt (case-insensitive, like the store's topic search),
+    capped at counter_evidence_search_limit."""
+    by_title = make_evidence(title="SLEEPING PILLS and older adults")
+    by_excerpt = _counter(2)
+    cited = [by_title, *by_excerpt, *_unrelated(2)]
+    checker, _llm = _make_checker(
+        markers=markers,
+        config=ImpliedClaimsConfig(enabled=True, counter_evidence_search_limit=2),
+    )
+
+    annotations = await checker.check(
+        "Unlike sleeping pills, CBT-I works.", cited_evidence=cited
+    )
+
+    assert annotations[0].counter_evidence_ids == [by_title.id, by_excerpt[0].id]

@@ -82,9 +82,10 @@ def build_components(
     (embedding, taxonomy, path configs): construction or load failure logs a
     warning and yields ``None`` / empty, exactly as the old wiring site did.
 
-    The set holds no evidence store (B6): the implied-claim checker gets its
-    Pipeline's store per call, so one set can back several Pipelines — one
-    per tenant, each with its own store — without pooling their evidence.
+    The set holds no evidence store (B6): the implied-claim checker searches
+    only the path evidence it is handed, so one set can back several
+    Pipelines (one per tenant, each with its own store) without pooling
+    their evidence.
 
     ``overrides`` (B5) replaces the config-built LLM providers, crawl adapter
     or embedding provider with the caller's own. Raises ``ValueError`` when
