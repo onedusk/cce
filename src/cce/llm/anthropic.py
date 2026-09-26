@@ -15,6 +15,7 @@ import logging
 
 import anthropic
 
+from cce.config.loader import ConfigError
 from cce.config.types import LLMConfig
 from cce.llm.base import LLMMessage, LLMResponse
 
@@ -61,6 +62,36 @@ _NO_STRUCTURED_OUTPUT_MODEL_PREFIXES: tuple[str, ...] = (
     "claude-sonnet-4-0",
     "claude-sonnet-4-2025",
 )
+# Models that reject `thinking: {type: "disabled"}` with a 400: Fable 5 /
+# 5.1, Mythos 5 / 5.1 and Opus 5.5 at every effort, Opus 5 only at effort
+# xhigh/max. Any other model gets the setting passed through.
+_NO_DISABLED_THINKING_MODEL_PREFIXES: tuple[str, ...] = (
+    "claude-fable-5",
+    "claude-mythos-5",
+    "claude-opus-5-5",
+)
+_NO_DISABLED_THINKING_AT_HIGH_EFFORT_MODEL_PREFIXES: tuple[str, ...] = (
+    "claude-opus-5",
+)
+
+
+def _check_disabled_thinking(config: LLMConfig) -> None:
+    """Raise ConfigError when ``thinking: disabled`` would 400 on every call."""
+    if config.thinking != "disabled":
+        return
+    model = config.model
+    if model.startswith(_NO_DISABLED_THINKING_MODEL_PREFIXES):
+        raise ConfigError(
+            f"thinking: disabled is rejected by {model} (thinking is always on); "
+            "unset thinking and lower effort instead."
+        )
+    if model.startswith(
+        _NO_DISABLED_THINKING_AT_HIGH_EFFORT_MODEL_PREFIXES
+    ) and config.effort in ("xhigh", "max"):
+        raise ConfigError(
+            f"thinking: disabled is rejected by {model} at effort "
+            f"{config.effort}; use effort high or lower, or unset thinking."
+        )
 
 
 # Used when ``max_tokens`` is unset and the Models API lookup fails: the old
@@ -80,6 +111,7 @@ class AnthropicProvider:
     """
 
     def __init__(self, config: LLMConfig) -> None:
+        _check_disabled_thinking(config)
         self._config = config
         self._client = anthropic.AsyncAnthropic(api_key=config.api_key, max_retries=2)
         self._accepts_adaptive = not config.model.startswith(

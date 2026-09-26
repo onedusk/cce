@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from cce.config.loader import ConfigError
 from cce.config.types import LLMConfig
 from cce.llm.anthropic import AnthropicProvider
 from cce.llm.base import LLMMessage
@@ -304,6 +305,52 @@ async def test_disabled_thinking_passes_through(mock_cls: MagicMock) -> None:
     await AnthropicProvider(config).complete([LLMMessage(role="user", content="Hi")])
 
     assert mock_client.messages.create.call_args[1]["thinking"] == {"type": "disabled"}
+
+
+@pytest.mark.parametrize(
+    ("model", "effort"),
+    [
+        ("claude-fable-5", None),
+        ("claude-fable-5-1", "low"),
+        ("claude-mythos-5-1", None),
+        ("claude-opus-5-5", "low"),
+        ("claude-opus-5", "xhigh"),
+        ("claude-opus-5", "max"),
+    ],
+)
+@patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
+def test_disabled_thinking_rejected_at_construction(
+    mock_cls: MagicMock, model: str, effort: str | None
+) -> None:
+    """Models whose API rejects `thinking: disabled` fail fast with a
+    ConfigError naming the model and the setting, not a 400 per call."""
+    config = _config().model_copy(
+        update={"model": model, "thinking": "disabled", "effort": effort}
+    )
+    with pytest.raises(ConfigError, match=model) as exc:
+        AnthropicProvider(config)
+    assert "thinking: disabled" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    ("model", "effort"),
+    [
+        ("claude-opus-5", None),
+        ("claude-opus-5", "high"),
+        ("claude-opus-4-8", "max"),
+        ("claude-sonnet-5", "xhigh"),
+        ("claude-future-9", "max"),
+    ],
+)
+@patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
+def test_disabled_thinking_allowed_elsewhere(
+    mock_cls: MagicMock, model: str, effort: str | None
+) -> None:
+    """Opus 5 at effort high or below, and models on no list, keep it."""
+    config = _config().model_copy(
+        update={"model": model, "thinking": "disabled", "effort": effort}
+    )
+    AnthropicProvider(config)
 
 
 @patch("cce.llm.anthropic.anthropic.AsyncAnthropic")

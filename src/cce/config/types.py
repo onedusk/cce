@@ -54,8 +54,9 @@ class LLMConfig(BaseModel):
             "the param and take the model default (Sonnet 5 / Opus 5 think "
             "adaptively; 4.6 models do not think). Never sent to models "
             "without adaptive thinking (Opus 4.5, Haiku 4.5 and older). "
-            "Otherwise passed through as set: the API rejects `disabled` on "
-            "Fable 5 / Opus 5.5, and on Opus 5 at effort xhigh/max."
+            "Otherwise passed through as set, except `disabled` on Fable 5 / "
+            "Opus 5.5, or on Opus 5 at effort xhigh/max, which the API "
+            "rejects: that raises ConfigError when the provider is built."
         ),
     )
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = Field(
