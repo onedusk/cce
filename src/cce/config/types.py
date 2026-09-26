@@ -63,11 +63,11 @@ class LLMConfig(BaseModel):
         default=None,
         description=(
             "Sent as `output_config.effort` (B2). None = omit (model "
-            "default, `high` on most models). Sent only to models with "
-            "adaptive thinking (4.6 and later) — so also omitted on Opus 4.5, "
-            "which does accept effort. `xhigh` needs Opus 4.7+ / Sonnet 5; "
-            "the API rejects it on the 4.6 models. Lowering effort is the "
-            "lever when thinking crowds out the reply."
+            "default, `high` on most models). Sent to Opus 4.5 and the 4.6 "
+            "and later models; omitted on Haiku 4.5 / Sonnet 4.5 and older. "
+            "Opus 4.5 takes only low/medium/high (others raise ConfigError), and `xhigh` needs Opus "
+            "4.7+ / Sonnet 5 (the API rejects it on the 4.6 models). "
+            "Lowering effort is the lever when thinking crowds out the reply."
         ),
     )
 

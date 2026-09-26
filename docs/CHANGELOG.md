@@ -13,6 +13,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   naming the model and the setting when the provider is built, instead of
   a 400 on every call. Other models still get the setting passed through.
 
+### Fixed: effort omitted on Opus 4.5
+- `effort` shared the adaptive-thinking gate, so it was never sent to Opus
+  4.5, which accepts `output_config.effort`. It now is; `thinking` stays
+  omitted there. Opus 4.5 takes only `low`/`medium`/`high`, so
+  `xhigh`/`max` on it (which used to be dropped silently) now raise
+  `ConfigError` when the provider is built.
+
 ## [Unreleased] — runtime model limits and follow-ups
 
 Follow-ups from the Phase 2 todo list, on `feature/runtime-model-limits`.

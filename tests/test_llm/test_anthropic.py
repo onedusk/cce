@@ -245,6 +245,46 @@ async def test_thinking_and_effort_follow_model_capability(
         assert "output_config" not in call_kwargs
 
 
+@pytest.mark.parametrize("model", ["claude-opus-4-5", "claude-opus-4-5-20251101"])
+@patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
+async def test_opus_4_5_gets_effort_but_not_thinking(
+    mock_cls: MagicMock, model: str
+) -> None:
+    """Opus 4.5 accepts output_config.effort but not adaptive thinking, so
+    effort is sent and thinking stays omitted."""
+    mock_client = MagicMock()
+    route_stream_to_create(mock_client)
+    mock_client.messages.create = AsyncMock(return_value=_mock_response())
+    mock_cls.return_value = mock_client
+
+    config = _config().model_copy(
+        update={"model": model, "thinking": "adaptive", "effort": "medium"}
+    )
+    await AnthropicProvider(config).complete([LLMMessage(role="user", content="Hi")])
+
+    call_kwargs = mock_client.messages.create.call_args[1]
+    assert "thinking" not in call_kwargs
+    assert call_kwargs["output_config"] == {"effort": "medium"}
+
+
+@pytest.mark.parametrize("effort", ["xhigh", "max"])
+@patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
+def test_opus_4_5_rejects_xhigh_and_max_effort(
+    mock_cls: MagicMock, effort: str
+) -> None:
+    """Now that effort reaches Opus 4.5, the levels it rejects fail fast."""
+    config = _config().model_copy(update={"model": "claude-opus-4-5", "effort": effort})
+    with pytest.raises(ConfigError, match=f"effort: {effort}.*claude-opus-4-5"):
+        AnthropicProvider(config)
+
+
+@pytest.mark.parametrize("effort", ["low", "medium", "high"])
+@patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
+def test_opus_4_5_accepts_low_to_high_effort(mock_cls: MagicMock, effort: str) -> None:
+    config = _config().model_copy(update={"model": "claude-opus-4-5", "effort": effort})
+    AnthropicProvider(config)
+
+
 @pytest.mark.parametrize("model", ["claude-sonnet-5", "claude-sonnet-4-6"])
 @patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
 async def test_thinking_and_effort_omitted_by_default(
