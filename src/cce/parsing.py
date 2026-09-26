@@ -26,10 +26,14 @@ def resolve_evidence_id(
     The writer's prompt says "use [ev:EVIDENCE_ID]" while the evidence block displays IDs as
     [ev_HASH] — the LLM frequently interprets "EVIDENCE_ID" as just the HASH part (without the
     `ev_` prefix) and emits [ev:HASH]. Try the literal lookup first, then re-try with the `ev_`
-    prefix added so downstream consumers see one canonical form.
+    prefix added so downstream consumers see one canonical form. A leading ``ev:`` (the marker
+    syntax copied into a citation list, as Haiku 4.5 does) is dropped when the literal ID
+    doesn't resolve.
     """
     ev_id = ev_id_raw
     evidence = evidence_by_id.get(ev_id)
+    if evidence is None and ev_id.startswith("ev:"):
+        return resolve_evidence_id(ev_id[3:], evidence_by_id)
     if evidence is None and not ev_id.startswith("ev_"):
         prefixed = f"ev_{ev_id}"
         evidence = evidence_by_id.get(prefixed)

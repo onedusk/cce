@@ -15,6 +15,14 @@ Follow-ups from the Phase 2 todo list, on `feature/runtime-model-limits`.
   compared naive with aware, hit the fail-open branch and never dropped
   the page. Naive values are now read as UTC.
 
+### Fixed — citation lists in marker form were dropped
+- Haiku 4.5 lists `citations_used` / `evidence_map` IDs as `ev:<hash>` (the
+  marker syntax without the `ev_` prefix). The writer kept only exact IDs,
+  so `unit.citations` came out empty and `_evidence.json` exported nothing,
+  although the inline markers resolved. Those IDs now go through the same
+  `resolve_evidence_id` as the gate and emit, which also drops a leading
+  `ev:`. Source diversity counts the resolved citations.
+
 ## [Unreleased] — bubble-readiness Phase 2 (multi-tenant Pipeline use)
 
 Phase 2 of `docs/internal/bubble-readiness-plan-2026-09-23.md` (local-only):

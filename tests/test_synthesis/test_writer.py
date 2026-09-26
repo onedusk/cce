@@ -514,3 +514,30 @@ async def test_write_raises_after_second_unparseable_reply(monkeypatch):
 
     assert len(llm.calls) == 2
     assert exc.value.raw_response == "second bad"
+
+
+@pytest.mark.unit
+async def test_citation_ids_written_in_marker_form_are_kept():
+    """Haiku 4.5 lists citations as "ev:<hash>" (the marker syntax without
+    the ev_ prefix); they used to be dropped, leaving unit.citations empty."""
+    import json
+
+    from cce.llm.base import LLMResponse
+    from cce.synthesis.writer import Writer
+    from tests.conftest import MockLLMProvider, make_curation_request, make_evidence
+
+    ev = make_evidence(id="ev_bbac54615a34")
+    reply = json.dumps(
+        {
+            "content": "A claim [ev:bbac54615a34].",
+            "citations_used": ["ev:bbac54615a34"],
+            "evidence_map": [{"claim": "A claim", "evidence_ids": ["ev:bbac54615a34"]}],
+            "gaps": [],
+        }
+    )
+    llm = MockLLMProvider([LLMResponse(content=reply, model="m")])
+    out = await Writer(llm).write(make_curation_request(), [ev], "blog")
+
+    assert [c.evidence_id for c in out.unit.citations] == ["ev_bbac54615a34"]
+    assert out.unit.evidence_map[0].evidence_ids == ["ev_bbac54615a34"]
+    assert out.unit.scores.source_diversity == 1.0
