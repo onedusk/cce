@@ -19,6 +19,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   instead of "not valid JSON" (or "Could not locate JSON") with a snippet of
   the partial reply.
 
+### Fixed: domain allow/deny checks read "\" as a browser does
+- B9 host matching (`_url_host` in `cce.discovery.discoverer`) now turns "\"
+  into "/" in http(s) URLs before parsing, as WHATWG parsers do. urlparse
+  kept it in the authority, so `https://reddit.com\@example.com/` was
+  checked as `example.com` (slipping past a `reddit.com` deny entry, or
+  passing an allow list for `example.com`) while a browser loads
+  `reddit.com`.
+
 ## [Unreleased] — runtime model limits and follow-ups
 
 Follow-ups from the Phase 2 todo list, on `feature/runtime-model-limits`.
