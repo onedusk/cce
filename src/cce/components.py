@@ -8,6 +8,10 @@ parity test in ``tests/test_components.py`` pins the contract.
 Configuration loading lives in ``cce.config.registry`` (ADR-002, M06): this
 module consumes a ``ConfigRegistry`` and constructs live runtime objects
 from it — it never reads YAML or selects paths itself.
+
+A consumer that must route outbound calls through its own gateway injects
+its providers with :class:`ComponentOverrides` (B5) instead of building a
+``Pipeline`` by hand; configuration still loads only through the registry.
 """
 
 from __future__ import annotations
@@ -47,10 +51,30 @@ class ComponentSet:
     implied_claims: ImpliedClaimChecker | None
 
 
+@dataclass(frozen=True)
+class ComponentOverrides:
+    """Caller-supplied providers used instead of the config-built ones (B5).
+
+    Every field left ``None`` is built from config as usual. An injected
+    ``llm`` reaches the writer, editor and implied-claim checker, and the
+    verifier too unless ``verifier_llm`` is given. Injected providers must
+    honour the ``LLMProvider`` contract: accept ``output_schema``, set
+    ``stop_reason``, and report the usage keys the token budget reads
+    (``input_tokens``, ``output_tokens``, ``cache_creation_input_tokens``,
+    ``cache_read_input_tokens``).
+    """
+
+    llm: LLMProvider | None = None
+    verifier_llm: LLMProvider | None = None
+    crawl_adapter: CrawlAdapter | None = None
+    embedding: EmbeddingProvider | None = None
+
+
 def build_components(
     config: EngineConfig,
     registry: ConfigRegistry,
-    evidence_store: EvidenceStore,
+    *,
+    overrides: ComponentOverrides | None = None,
 ) -> ComponentSet:
     """Construct the component graph from config + loaded registry.
 
@@ -58,10 +82,23 @@ def build_components(
     (embedding, taxonomy, path configs): construction or load failure logs a
     warning and yields ``None`` / empty, exactly as the old wiring site did.
 
-    ``evidence_store`` is required because the implied-claim checker is
-    constructor-injected with the live store (counter-evidence search) — the
-    registry holds config-time data only.
+    The set holds no evidence store (B6): the implied-claim checker gets its
+    Pipeline's store per call, so one set can back several Pipelines — one
+    per tenant, each with its own store — without pooling their evidence.
+
+    ``overrides`` (B5) replaces the config-built LLM providers, crawl adapter
+    or embedding provider with the caller's own. Raises ``ValueError`` when
+    ``verifier.model`` is set and only ``llm`` is injected: building the
+    verifier from config would bypass the injected provider.
     """
+    o = overrides or ComponentOverrides()
+    if o.llm is not None and o.verifier_llm is None and config.verifier.model:
+        raise ValueError(
+            "verifier.model is set but only an llm override was given; inject "
+            "verifier_llm as well — building the verifier from config would "
+            "bypass the injected provider."
+        )
+
     # Concrete adapters are imported lazily so importing cce.components
     # (engine.py does, at module level) doesn't pull the anthropic/firecrawl
     # SDKs into keyless CLI commands (emit-mdx, api key generate).
@@ -71,20 +108,26 @@ def build_components(
     from cce.tagging.loader import load_taxonomy
     from cce.tagging.wellbeing import WellBeingTaxonomy
 
-    crawl_adapter = FirecrawlAdapter(config.crawl)
-    llm = AnthropicProvider(config.llm)
+    crawl_adapter: CrawlAdapter = (
+        o.crawl_adapter
+        if o.crawl_adapter is not None
+        else FirecrawlAdapter(config.crawl)
+    )
+    llm: LLMProvider = o.llm if o.llm is not None else AnthropicProvider(config.llm)
     # Verifier-specific model (B3): same credentials and settings, its own
     # model ID. Unset -> the verifier shares the writer's provider.
     verifier_llm: LLMProvider = llm
-    if config.verifier.model:
+    if o.verifier_llm is not None:
+        verifier_llm = o.verifier_llm
+    elif o.llm is None and config.verifier.model:
         verifier_llm = AnthropicProvider(
             config.llm.model_copy(update={"model": config.verifier.model})
         )
         logger.info("Verifier model: %s", config.verifier.model)
 
     # Embedding provider (optional)
-    embedding_provider = None
-    if config.embedding.enabled:
+    embedding_provider = o.embedding
+    if embedding_provider is None and config.embedding.enabled:
         try:
             provider = OllamaEmbeddingProvider(config.embedding)
             embedding_provider = provider
@@ -151,7 +194,6 @@ def build_components(
             else:
                 implied_claim_checker = ImpliedClaimChecker(
                     llm=llm,
-                    evidence_store=evidence_store,
                     config=config.humanization.implied_claims,
                     markers=markers,
                 )
@@ -179,15 +221,28 @@ def build_pipeline(
     registry: ConfigRegistry,
     evidence_store: EvidenceStore,
     components: ComponentSet | None = None,
+    *,
+    overrides: ComponentOverrides | None = None,
 ) -> Pipeline:
     """Assemble a ``Pipeline`` from a ``ComponentSet`` (built if not given).
 
     The single Pipeline-construction point shared by
     ``CurationEngine.embedded()`` and the API lifespan (via the
-    ``api/app.py:_build_pipeline`` shim).
+    ``api/app.py:_build_pipeline`` shim). ``overrides`` is forwarded to
+    :func:`build_components`; passing it with prebuilt ``components`` raises,
+    so an override is never silently ignored.
+
+    Multi-tenant use (B6): build one Pipeline per tenant, each with its own
+    ``evidence_store`` (and, through the engine, its own job store). They
+    may share one ``ComponentSet``; nothing in it holds tenant data.
     """
+    if components is not None and overrides is not None:
+        raise ValueError(
+            "pass either prebuilt components or overrides, not both — the "
+            "overrides would be ignored"
+        )
     if components is None:
-        components = build_components(config, registry, evidence_store)
+        components = build_components(config, registry, overrides=overrides)
     return Pipeline(
         config=config,
         crawl_adapter=components.crawl_adapter,

@@ -41,3 +41,17 @@ def test_missing_llm_key_raises_even_when_crawl_not_required():
 def test_both_keys_present_returns_none():
     config = make_engine_config()
     assert validate_required_keys(config) is None
+
+
+def test_missing_llm_key_ok_when_llm_injected():
+    """B5: an injected LLM provider needs no ANTHROPIC_API_KEY."""
+    config = make_engine_config(llm=LLMConfig(api_key=""))
+    assert validate_required_keys(config, require_llm=False) is None
+
+
+def test_crawl_key_still_checked_when_only_llm_injected():
+    config = make_engine_config(
+        llm=LLMConfig(api_key=""), crawl=CrawlConfig(api_key=None)
+    )
+    with pytest.raises(ConfigError, match="FIRECRAWL_API_KEY"):
+        validate_required_keys(config, require_llm=False)

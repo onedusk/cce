@@ -187,10 +187,35 @@ def test_looks_peer_reviewed_normal():
     assert Discoverer._looks_peer_reviewed(cr) is False
 
 
-def test_looks_primary_gov_edu_org():
-    for suffix in [".gov", ".edu", ".org"]:
+def test_looks_primary_default_is_gov_and_edu():
+    """B9 / open decision 4: .org is no longer primary by default."""
+    for suffix in [".gov", ".edu"]:
         cr = make_crawl_result(url=f"https://example{suffix}/page")
         assert Discoverer._looks_primary(cr) is True, f"Failed for {suffix}"
+    assert (
+        Discoverer._looks_primary(make_crawl_result(url="https://example.org/p"))
+        is False
+    )
+
+
+def test_looks_primary_uses_policy_suffixes_at_label_boundaries():
+    suffixes = [".gov", ".edu", ".org", "gov.uk", "mayoclinic.org"]
+    for url in (
+        "https://example.org/page",
+        "https://www.gov.uk/guidance",
+        "https://www.mayoclinic.org/x",
+        "https://www.nih.gov:443/study",
+    ):
+        cr = make_crawl_result(url=url)
+        assert Discoverer._looks_primary(cr, suffixes) is True, url
+    # A label boundary, not a string suffix.
+    assert (
+        Discoverer._looks_primary(make_crawl_result(url="https://notgov/x"), [".gov"])
+        is False
+    )
+    assert (
+        Discoverer._looks_primary(make_crawl_result(url="https://x.com/y"), []) is False
+    )
 
 
 def test_looks_primary_com():
@@ -985,3 +1010,160 @@ async def test_discover_no_embedding_provider():
 
     evidence = (await discoverer.discover(request, policy)).evidence
     assert len(evidence) >= 1
+
+
+# ---------------------------------------------------------------------------
+# B9: configurable marketing phrases (whole-word) and label-boundary domains
+# ---------------------------------------------------------------------------
+
+
+def test_promoted_to_ceo_is_not_marketing_without_promoted():
+    """B9 acceptance: 'was promoted to CEO' is not flagged under a policy whose
+    phrase list lacks 'promoted' (and still is under the unchanged default)."""
+    from cce.policy.types import DEFAULT_MARKETING_PHRASES
+
+    cr = make_crawl_result(
+        markdown="Jane Doe was promoted to CEO in May.", title="News"
+    )
+    without = [p for p in DEFAULT_MARKETING_PHRASES if p != "promoted"]
+
+    assert Discoverer._looks_marketing(cr, without) is False
+    assert Discoverer._looks_marketing(cr) is True
+
+
+@pytest.mark.parametrize(
+    ("text", "flagged"),
+    [
+        ("Researchers affiliated with the hospital found", False),
+        ("An unsponsored, independent review", False),
+        ("Use my affiliate link", True),
+        ("BUY NOW and save", True),
+        ("Buy\nnow while stocks last", True),
+        ("This post is Sponsored.", True),
+    ],
+)
+def test_marketing_phrases_match_whole_words(text, flagged):
+    cr = make_crawl_result(markdown=text, title="")
+    assert Discoverer._looks_marketing(cr) is flagged
+
+
+def test_empty_phrase_list_never_flags():
+    cr = make_crawl_result(markdown="Buy now! Sponsored! Affiliate!", title="Ad")
+    assert Discoverer._looks_marketing(cr, []) is False
+
+
+@pytest.mark.parametrize("title", [["Sponsored", "post"], None, ""])
+def test_looks_marketing_tolerates_list_and_missing_titles(title):
+    """Adapters can return list metadata; this used to raise TypeError (a
+    FAILED job) because quality was computed before title coercion."""
+    cr = make_crawl_result(markdown="Plain text.", title=title)
+    assert Discoverer._looks_marketing(cr) is (title == ["Sponsored", "post"])
+
+
+def test_deny_entry_does_not_block_a_lookalike_host():
+    """B9 acceptance: deny x.com does not block fox.com."""
+    policy = make_source_policy(domains_deny=["x.com"])
+    assert Discoverer._passes_policy("https://fox.com/a", policy) is True
+    for url in (
+        "https://x.com",
+        "https://www.x.com/p",
+        "https://api.x.com/p",
+        "https://X.COM:443/a",
+        "https://user@x.com/a",
+    ):
+        assert Discoverer._passes_policy(url, policy) is False, url
+
+
+def test_deny_entry_still_blocks_country_variants():
+    """Deny keeps blocking the entry's labels anywhere in the host, so
+    amazon.com still blocks amazon.com.au (substring did too)."""
+    policy = make_source_policy(domains_deny=["amazon.com"])
+    assert Discoverer._passes_policy("https://www.amazon.com.au/dp/1", policy) is False
+    assert Discoverer._passes_policy("https://notamazon.com/", policy) is True
+
+
+def test_allow_entry_rejects_lookalikes():
+    """Allow nih.gov used to admit nih.gov.evil.io and evilnih.gov."""
+    policy = make_source_policy(domains_allow=["nih.gov"])
+    assert Discoverer._passes_policy("https://nih.gov.evil.io/x", policy) is False
+    assert Discoverer._passes_policy("https://evilnih.gov/x", policy) is False
+    assert Discoverer._passes_policy("https://www.nih.gov:443/x", policy) is True
+
+
+def test_domain_entries_are_normalised():
+    policy = make_source_policy(domains_allow=[".gov", "*.example.com"])
+    assert Discoverer._passes_policy("https://www.nih.gov/x", policy) is True
+    assert Discoverer._passes_policy("https://a.example.com/x", policy) is True
+    assert Discoverer._passes_policy("https://example.org/x", policy) is False
+
+
+def test_resolve_for_topic_override_replaces_the_whole_reputation_rule():
+    """Existing semantics, pinned: an override's reputation resets the new
+    fields to defaults unless it sets them."""
+    policy = make_source_policy(
+        reputation=ReputationRule(
+            marketing_phrases=[], penalize_conflict_of_interest=False
+        ),
+        topic_overrides=[
+            TopicOverride(topic_pattern="vendor", reputation=ReputationRule())
+        ],
+    )
+    resolved = policy.resolve_for_topic("vendor pricing")
+    assert resolved.reputation.penalize_conflict_of_interest is True
+    assert policy.resolve_for_topic("other").reputation.marketing_phrases == []
+
+
+def _ceo_news_adapter():
+    from tests.conftest import MockCrawlAdapter
+
+    url = "https://news.example.com/ceo"
+    return MockCrawlAdapter(
+        search_map={"test topic": [url]},
+        url_map={
+            url: make_crawl_result(
+                url=url,
+                markdown=(
+                    "Jane Doe was promoted to CEO in May after leading the sleep "
+                    "research division for a decade."
+                ),
+                title="Leadership news",
+            )
+        },
+    )
+
+
+async def test_discover_keeps_promoted_to_ceo_page_under_a_custom_phrase_list():
+    """B9 acceptance, end to end: with 'promoted' removed from the policy's
+    phrase list the page is kept and not flagged; under the default it is
+    dropped at discovery (block_marketing)."""
+    from cce.policy.types import DEFAULT_MARKETING_PHRASES
+
+    discoverer = Discoverer(
+        adapter=_ceo_news_adapter(), config=CrawlConfig(api_key="t")
+    )
+    request = make_curation_request(topic="test topic")
+
+    custom = make_source_policy(
+        reputation=ReputationRule(
+            marketing_phrases=[p for p in DEFAULT_MARKETING_PHRASES if p != "promoted"]
+        )
+    )
+    kept = (await discoverer.discover(request, custom)).evidence
+    assert kept and all(not ev.source_quality.conflict_of_interest for ev in kept)
+
+    dropped = (await discoverer.discover(request, make_source_policy())).evidence
+    assert dropped == []
+
+
+async def test_discover_block_marketing_false_keeps_flagged_page():
+    """Pinned: block_marketing false keeps a flagged page, still COI-tagged."""
+    discoverer = Discoverer(
+        adapter=_ceo_news_adapter(), config=CrawlConfig(api_key="t")
+    )
+    policy = make_source_policy(reputation=ReputationRule(block_marketing=False))
+
+    evidence = (
+        await discoverer.discover(make_curation_request(topic="test topic"), policy)
+    ).evidence
+
+    assert evidence and all(ev.source_quality.conflict_of_interest for ev in evidence)

@@ -16,6 +16,7 @@ import uuid
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 
 from cce.api.middleware import get_request_id
 from cce.api.schemas import (
@@ -85,17 +86,33 @@ async def create_job(
     if body.jurisdiction:
         constraints = CurationConstraints(jurisdiction=body.jurisdiction)
 
-    curation_request = CurationRequest(
-        topic=body.topic,
-        subtopics=body.subtopics,
-        paths=body.paths,
-        audience=body.audience,
-        constraints=constraints,
-        policy_id=body.policy_id,
-        taxonomy_id=body.taxonomy_id,
-        path_config_id=body.path_config_id,
-        risk_profile=body.risk_profile,
-    )
+    try:
+        curation_request = CurationRequest(
+            topic=body.topic,
+            subtopics=body.subtopics,
+            paths=body.paths,
+            audience=body.audience,
+            constraints=constraints,
+            policy_id=body.policy_id,
+            taxonomy_id=body.taxonomy_id,
+            path_config_id=body.path_config_id,
+            risk_profile=body.risk_profile,
+            context=body.context,
+        )
+    except ValidationError as e:
+        # A 422 naming the rule, not a 500 that logs the input (pinned
+        # context can be confidential).
+        return JSONResponse(
+            status_code=422,
+            content=error_envelope(
+                code="invalid_request",
+                message="; ".join(
+                    f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}"
+                    for err in e.errors(include_input=False)
+                ),
+                request_id=get_request_id(),
+            ).model_dump(mode="json"),
+        )
 
     # Create and persist job
     job = Job(

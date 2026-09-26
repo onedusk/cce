@@ -99,7 +99,7 @@ uv sync --all-extras
 # Set up environment
 cp .env.example .env  # add ANTHROPIC_API_KEY and FIRECRAWL_API_KEY
 
-# Run a single topic and wait (exit 0 completed / 2 review / 1 failed)
+# Run a single topic and wait (exit 0 completed / 2 review / 3 ready for approval / 1 failed)
 uv run cce curate "sleep hygiene" --policy-id peer-reviewed
 
 # Run a batch of topics through the pipeline

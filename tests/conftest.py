@@ -400,7 +400,7 @@ def make_engine_config(**overrides: Any) -> EngineConfig:
         ),
         "quality_gate": {
             "medium": QualityGateConfig(
-                autopublish_threshold=0.85,
+                pass_threshold=0.85,
                 min_citations_per_paragraph=1,
                 min_citation_density_ratio=0.9,
                 max_writer_iterations=3,
@@ -415,7 +415,7 @@ def make_engine_config(**overrides: Any) -> EngineConfig:
 def make_gate_config(**overrides: Any) -> QualityGateConfig:
     """Build a QualityGateConfig with explicit thresholds."""
     defaults: dict[str, Any] = {
-        "autopublish_threshold": 0.85,
+        "pass_threshold": 0.85,
         "min_citations_per_paragraph": 1,
         "min_citation_density_ratio": 0.9,
         "max_writer_iterations": 3,

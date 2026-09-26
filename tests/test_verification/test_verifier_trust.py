@@ -148,3 +148,34 @@ class TestJurisdiction:
 
         assert report.confidence_score > 0
         assert report.total_claims == 1
+
+
+@pytest.mark.integration
+async def test_coi_rules_can_be_switched_off():
+    """B9: penalize_conflict_of_interest=False drops the COI rules but keeps
+    the rest of the trust weighting; the default prompt is unchanged."""
+    from cce.verification.verifier import _VERIFIER_PROMPT_NO_COI
+
+    llm = MockLLMProvider(
+        [
+            LLMResponse(
+                content=_make_valid_response(), model="m", stop_reason="end_turn"
+            ),
+            LLMResponse(
+                content=_make_valid_response(), model="m", stop_reason="end_turn"
+            ),
+        ]
+    )
+    verifier = Verifier(llm)
+    unit = make_content_unit(content="Claim [ev:ev_001].")
+    evidence = [make_evidence(id="ev_001")]
+
+    await verifier.verify(unit, evidence, penalize_conflict_of_interest=False)
+    await verifier.verify(unit, evidence)
+
+    off, on = llm.calls[0]["system"], llm.calls[1]["system"]
+    assert off == _VERIFIER_PROMPT_NO_COI
+    assert "COI-flagged" not in off and "[potential-COI]" not in off
+    assert "SOURCE TRUST WEIGHTING" in off
+    assert "[peer-reviewed]" in off and "[primary-source]" in off
+    assert on == _VERIFIER_FULL_PROMPT

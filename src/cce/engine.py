@@ -23,11 +23,12 @@ from pathlib import Path
 
 import httpx
 
-from cce.components import build_pipeline
+from cce.components import ComponentOverrides, build_pipeline
 from cce.config.loader import load_config, validate_required_keys
 from cce.config.registry import ConfigRegistry
 from cce.config.types import EngineConfig
 from cce.evidence.sqlite import SQLiteEvidenceStore
+from cce.evidence.store import EvidenceStore
 from cce.jobs.store import JobStore
 from cce.models.job import Job, JobError, JobStage, JobStatus
 from cce.models.package import PublishPackage
@@ -42,6 +43,7 @@ _TERMINAL_STATUSES = {
     JobStatus.FAILED,
     JobStatus.CANCELLED,
     JobStatus.REVIEW_REQUIRED,
+    JobStatus.READY_FOR_APPROVAL,
 }
 
 
@@ -215,7 +217,9 @@ class CurationEngine:
         self._config: EngineConfig | None = None
         self._pipeline: Pipeline | None = None
         self._job_store: JobStore | None = None
-        self._evidence_store: SQLiteEvidenceStore | None = None
+        self._evidence_store: EvidenceStore | None = None
+        # Stores this engine opened itself; injected stores stay the caller's.
+        self._owned_stores: list[SQLiteEvidenceStore | JobStore] = []
         self._policies: dict[str, SourcePolicy] = {}
         self._running_tasks: dict[str, asyncio.Task] = {}
         self._semaphore: asyncio.Semaphore | None = None
@@ -228,12 +232,25 @@ class CurationEngine:
         policies_dir: str = "policies",
         taxonomies_dir: str = "taxonomies",
         path_configs_path: str | None = None,
+        *,
+        overrides: ComponentOverrides | None = None,
+        evidence_store: EvidenceStore | None = None,
+        job_store: JobStore | None = None,
     ) -> CurationEngine:
         """Create an in-process engine instance.
 
         Loads config, builds all components, returns ready-to-use engine.
         ``policies_dir`` / ``taxonomies_dir`` / ``path_configs_path`` feed
         ``ConfigRegistry.load`` (M06) — the registry owns path selection.
+        ``overrides`` injects the caller's LLM provider(s), crawl adapter or
+        embedding provider (B5); an injected provider needs no API key.
+
+        ``evidence_store`` / ``job_store`` (B6) are the supported way to keep
+        tenants apart: one engine per tenant, each with its own stores.
+        Injected stores must already be connected and are not closed by
+        ``close()``. Left ``None``, both open on
+        ``evidence_store.sqlite_path``, which ``CCE_EVIDENCE_SQLITE_PATH``
+        overrides process-wide — so it can't separate tenants in one process.
         """
         engine = cls()
         engine._mode = "embedded"
@@ -242,7 +259,12 @@ class CurationEngine:
         # (markers, taxonomy): a missing API key must surface first, not be
         # masked by a markers error (final-review finding 3, 2026-06-09).
         config = load_config(Path(config_path) if config_path else None)
-        validate_required_keys(config)
+        o = overrides or ComponentOverrides()
+        validate_required_keys(
+            config,
+            require_llm=o.llm is None,
+            require_crawl=o.crawl_adapter is None,
+        )
 
         # One registry owns every configuration surface (ADR-002, M06).
         registry = ConfigRegistry.load(
@@ -254,17 +276,28 @@ class CurationEngine:
         )
         engine._config = registry.engine
 
-        # Open stores
-        engine._job_store = JobStore(db_path=engine._config.evidence_store.sqlite_path)
-        await engine._job_store.connect()
+        try:
+            # Open stores (unless the caller supplied its own — B6)
+            if job_store is None:
+                job_store = JobStore(db_path=engine._config.evidence_store.sqlite_path)
+                await job_store.connect()
+                engine._owned_stores.append(job_store)
+            engine._job_store = job_store
 
-        engine._evidence_store = SQLiteEvidenceStore(engine._config.evidence_store)
-        await engine._evidence_store.connect()
+            if evidence_store is None:
+                sqlite_store = SQLiteEvidenceStore(engine._config.evidence_store)
+                await sqlite_store.connect()
+                engine._owned_stores.append(sqlite_store)
+                evidence_store = sqlite_store
+            engine._evidence_store = evidence_store
 
-        # Build pipeline through the shared component factory (M05, ADR-001)
-        engine._pipeline = build_pipeline(
-            engine._config, registry, engine._evidence_store
-        )
+            # Build pipeline through the shared component factory (M05, ADR-001)
+            engine._pipeline = build_pipeline(
+                engine._config, registry, engine._evidence_store, overrides=overrides
+            )
+        except BaseException:
+            await engine.close()  # nobody else can: the engine is never returned
+            raise
 
         engine._policies = registry.policies
 
@@ -321,10 +354,9 @@ class CurationEngine:
                 pass
         self._running_tasks.clear()
 
-        if self._evidence_store is not None:
-            await self._evidence_store.close()
-        if self._job_store is not None:
-            await self._job_store.close()
+        for store in self._owned_stores:
+            await store.close()
+        self._owned_stores.clear()
         if self._http_client is not None:
             await self._http_client.aclose()
 
@@ -396,6 +428,7 @@ class CurationEngine:
             jurisdiction=(
                 request.constraints.jurisdiction if request.constraints else None
             ),
+            context=request.context,
         )
         resp = await self._http_client.post(
             "/v1/curate/jobs",

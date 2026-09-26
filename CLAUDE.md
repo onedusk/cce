@@ -46,7 +46,7 @@ uv add --dev <package>
 **CLI** (installed as `cce` via `[project.scripts]`; the supported front door — finding 4.8):
 
 ```bash
-# Run a single topic through the embedded engine and wait (exit 0 COMPLETED / 2 REVIEW_REQUIRED / 1 FAILED)
+# Run a single topic through the embedded engine and wait (exit 0 COMPLETED / 2 REVIEW_REQUIRED / 3 READY_FOR_APPROVAL / 1 FAILED)
 uv run cce curate "sleep hygiene" --policy-id peer-reviewed --path learn
 
 # Run the pipeline over a YAML topics file

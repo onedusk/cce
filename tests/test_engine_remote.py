@@ -32,6 +32,7 @@ from cce.orchestrator.pipeline import Pipeline
 from tests.conftest import (
     make_curation_request,
     make_engine_config,
+    make_evidence,
     make_source_policy,
 )
 from tests.test_orchestrator.conftest import (
@@ -135,6 +136,7 @@ async def test_curate_maps_request_fields_onto_wire(engine: CurationEngine):
         taxonomy_id="wellbeing-8d",
         path_config_id="thnklabs",
         risk_profile="high",
+        context=[make_evidence(id="ctx_a", url="consumer://c", excerpt="Pinned.")],
     )
     handle = await engine.curate(request)
     assert handle.job_id.startswith("job_")
@@ -151,6 +153,7 @@ async def test_curate_maps_request_fields_onto_wire(engine: CurationEngine):
     assert received.risk_profile == "high"
     assert received.constraints is not None
     assert received.constraints.jurisdiction == "EU"
+    assert received.context == request.context  # B11
 
 
 async def test_status_returns_job_state(engine: CurationEngine):
@@ -217,3 +220,52 @@ async def test_remote_rejects_bad_api_key(remote_app: FastAPI):
         assert exc_info.value.response.status_code == 401
     finally:
         await eng.close()
+
+
+async def test_remote_package_carries_verification(engine: CurationEngine):
+    """B7 round trip, remote: the wire PublishPackage keeps the records."""
+    handle = await engine.curate(make_curation_request())
+    await handle.wait(timeout=10)
+
+    package = await handle.package()
+    assert package is not None
+    [record] = package.verification
+    assert record.path == package.units[0].path
+    assert record.unit_id == package.units[0].id
+    assert record.decision == "pass"
+    assert record.report is not None
+
+
+async def test_remote_wait_parses_ready_for_approval(
+    tmp_path: Path, job_store: JobStore, sqlite_store, api_key: str
+):
+    """B8 over the wire: a remote client parses and stops on the new status."""
+    config = make_engine_config(
+        evidence_store=EvidenceStoreConfig(sqlite_path=tmp_path / "human.db"),
+        api=APIConfig(require_auth=True),
+        quality_gate=default_quality_gate_profiles(),
+        publish_policy="human",
+    )
+    pipeline = Pipeline(
+        config=config,
+        crawl_adapter=make_adapter(),
+        evidence_store=sqlite_store,
+        llm=make_llm(writer_json(), verifier_json(supported=10, total=10, gaps=0)),
+    )
+    app = create_app(
+        config=config,
+        job_store=job_store,
+        evidence_store=sqlite_store,
+        pipeline=pipeline,
+        policies={"test-policy": make_source_policy()},
+    )
+    async with app.router.lifespan_context(app):
+        remote = CurationEngine.remote(
+            "http://test", api_key, transport=httpx.ASGITransport(app=app)
+        )
+        try:
+            handle = await remote.curate(make_curation_request())
+            job = await handle.wait(timeout=10)
+            assert job.status is JobStatus.READY_FOR_APPROVAL
+        finally:
+            await remote.close()

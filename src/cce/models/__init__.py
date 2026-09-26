@@ -19,6 +19,12 @@ from cce.models.package import PackageLineage, PublishPackage
 from cce.models.paths import PathConfig
 from cce.models.request import CurationConstraints, CurationRequest
 from cce.models.taxonomy import Dimension, TaxonomyConfig
+from cce.models.verification import (
+    ClaimVerdict,
+    PathVerification,
+    SourceContradiction,
+    VerificationRecord,
+)
 
 __all__ = [
     # evidence
@@ -48,4 +54,9 @@ __all__ = [
     "TaxonomyConfig",
     # paths (Phase 2)
     "PathConfig",
+    # verification (B7)
+    "ClaimVerdict",
+    "PathVerification",
+    "SourceContradiction",
+    "VerificationRecord",
 ]

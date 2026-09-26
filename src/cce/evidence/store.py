@@ -16,11 +16,17 @@ class EvidenceStore(Protocol):
     """Interface for persisting and retrieving evidence objects."""
 
     async def put(self, evidence: Evidence) -> bool:
-        """Store an evidence object. Returns False if it was a duplicate (by excerpt_hash)."""
+        """Store an evidence object. Returns False if it was a duplicate
+        (same url and excerpt_hash)."""
         ...
 
     async def put_many(self, evidence: list[Evidence]) -> int:
         """Store multiple evidence objects. Returns count of newly inserted (non-duplicate)."""
+        ...
+
+    async def get_stored_ids(self, evidence: list[Evidence]) -> dict[str, str]:
+        """Map each in-memory ID whose (url, excerpt_hash) is already stored
+        under a different ID to that stored ID (B6). Other IDs are absent."""
         ...
 
     async def get(self, evidence_id: str) -> Evidence | None:

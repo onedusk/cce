@@ -673,3 +673,47 @@ def test_validate_real_repo_tree_passes():
     result = runner.invoke(app, ["validate", "--root", str(repo_root)])
     assert result.exit_code == 0, result.output
     assert "0 errors" in result.output
+
+
+def test_curate_ready_for_approval_exits_3(monkeypatch):
+    """B8: passed under publish_policy=human, awaiting a person."""
+    from cce.models.job import JobStatus
+
+    _stub_curate_engine(monkeypatch, JobStatus.READY_FOR_APPROVAL)
+    result = runner.invoke(app, ["curate", "topic", "--policy-id", "peer-reviewed"])
+    assert result.exit_code == 3, result.output
+    assert "Status: ready_for_approval" in result.output
+
+
+def test_jobs_status_filter_accepts_ready_for_approval(tmp_path):
+    from cce.models.job import JobStatus
+    from tests.conftest import make_curation_request, make_job
+
+    _seed_jobs(
+        tmp_path,
+        [
+            make_job(
+                id="job_ready0000001",
+                request=make_curation_request(topic="awaiting approval"),
+                status=JobStatus.READY_FOR_APPROVAL,
+            )
+        ],
+    )
+    result = runner.invoke(app, ["jobs", "--status", "ready_for_approval"])
+    assert result.exit_code == 0, result.output
+    assert "awaiting approval" in result.output
+    assert "ready_for_approval " in result.output  # fits the widened column
+
+
+def test_validate_suggests_the_new_reputation_keys(tmp_path):
+    """B9: cce validate knows marketing_phrases and hints on a typo."""
+    _write_validate_tree(tmp_path)
+    (tmp_path / "policies" / "typo.yaml").write_text(
+        "id: typo\nname: Typo\nreputation:\n  marketing_phrase: [sponsored]\n"
+    )
+
+    result = runner.invoke(app, ["validate", "--root", str(tmp_path)])
+
+    assert result.exit_code == 1
+    typo_line = next(line for line in result.output.splitlines() if "typo.yaml" in line)
+    assert "did you mean 'marketing_phrases'?" in typo_line

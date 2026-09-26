@@ -1,6 +1,8 @@
 """MDX emit — public API.
 
 Converts a PublishPackage into a directory of .mdx files + companion JSON.
+Page bodies are MDX-escaped (``escape.py``); the JSON sidecars carry raw,
+untrusted text. The output contract is in SECURITY.md.
 """
 
 from __future__ import annotations
@@ -9,6 +11,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from cce.models.evidence import Evidence
 from cce.models.package import PublishPackage
@@ -79,6 +82,8 @@ def emit_mdx(
     target_dir: Path,
     topic_slug: str | None = None,
     topic_name: str | None = None,
+    *,
+    citation_key: Literal["url", "evidence"] = "url",
 ) -> EmitResult:
     """Emit MDX files for a completed PublishPackage.
 
@@ -87,6 +92,8 @@ def emit_mdx(
         target_dir: Root content directory (e.g. src/content/topics/).
         topic_slug: Explicit slug override. If None, derived from topic_name.
         topic_name: Topic name for slug derivation. Required if topic_slug is None.
+        citation_key: Footnote keying — ``"url"`` (default, one per source) or
+            ``"evidence"`` (one per evidence ID, with locator; B12).
 
     Returns:
         EmitResult summarizing what was written.
@@ -130,6 +137,7 @@ def emit_mdx(
             package.job_id,
             topic_slug=topic_slug,
             curated_at=curated_at,
+            citation_key=citation_key,
         )
         (path_dir / "page.mdx").write_text(mdx_content, encoding="utf-8")
         files_written += 1

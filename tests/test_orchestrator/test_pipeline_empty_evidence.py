@@ -121,3 +121,30 @@ async def test_discover_metrics_reflect_no_crawl_on_empty_path(sqlite_store):
     assert metrics["crawl_success"] == 0
     assert metrics["crawl_failed"] == 0
     assert metrics["crawl_failure_rate"] == 0.0
+    # B10: the drop ledger is present, all zero
+    assert metrics["urls_gathered"] == 0
+    assert metrics["excerpts_gathered"] == 0
+    assert metrics["kept"] == 0
+
+
+async def test_discover_record_carries_a_balanced_drop_ledger(sqlite_store):
+    """B10: the DISCOVER StageRecord holds both ledgers, each summing exactly."""
+    from tests.test_discovery.test_discovery_ledger import assert_ledgers_balance
+    from tests.test_orchestrator.conftest import make_adapter, verifier_json
+    from tests.test_orchestrator.test_pipeline_verification_records import (
+        writer_reply,
+    )
+
+    pipeline = Pipeline(
+        config=make_engine_config(),
+        crawl_adapter=make_adapter(),
+        evidence_store=sqlite_store,
+        llm=_llm(writer_reply(), verifier_json(supported=10, total=10, gaps=0)),
+    )
+    result = await pipeline.run(make_curation_request(), make_source_policy())
+
+    [record] = [s for s in result.job.stages if s.stage == JobStage.DISCOVER]
+    assert record.metrics is not None
+    assert record.metrics["urls_gathered"] == 1
+    assert record.metrics["kept"] == len(result.package.evidence) == 1
+    assert_ledgers_balance(record.metrics)

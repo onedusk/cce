@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 
 from cce.config.types import EngineConfig, QualityGateConfig
@@ -28,6 +28,7 @@ from cce.models.package import PackageLineage, PublishPackage
 from cce.models.paths import PathConfig
 from cce.models.request import CurationRequest
 from cce.models.style import StyleScores
+from cce.models.verification import PathVerification
 from cce.policy.types import SourcePolicy
 from cce.synthesis.editor import Editor
 from cce.synthesis.implied_claims import ImpliedClaimAnnotation, ImpliedClaimChecker
@@ -182,6 +183,105 @@ def _terminal_decisions(
     return decisions
 
 
+def _path_verifications(
+    paths: list[str],
+    units: list[ContentUnit],
+    gate_results_by_path: Mapping[str, list[GateResult]],
+    writer_gaps_by_path: Mapping[str, list[str]],
+    stages: Sequence[StageRecord] = (),
+) -> list[PathVerification]:
+    """One persisted verification record per requested path (B7).
+
+    Uses the same terminal rule as ``_terminal_decisions``: the gate result
+    with the highest iteration. A path with no gate result (empty draft, or
+    stopped before its first write) records a terminal "fail" with no report;
+    when the token budget stopped it, the feedback says so (from the WRITE
+    ``StageRecord`` in ``stages``). Built after the loop, so a budget note
+    appended to the terminal result's feedback is captured.
+    """
+    unit_ids = {u.path: u.id for u in units}
+    records: list[PathVerification] = []
+    for path in paths:
+        group = gate_results_by_path.get(path) or []
+        gaps = list(writer_gaps_by_path.get(path, []))
+        if not group:
+            records.append(
+                PathVerification(
+                    path=path,
+                    unit_id=unit_ids.get(path),
+                    decision=GateDecision.FAIL.value,
+                    feedback=_budget_stop_note(path, stages),
+                    writer_gaps=gaps,
+                )
+            )
+            continue
+        terminal = max(group, key=lambda gr: gr.iteration)
+        records.append(
+            PathVerification(
+                path=path,
+                unit_id=unit_ids.get(path),
+                decision=terminal.decision.value,
+                iteration=terminal.iteration,
+                confidence=terminal.confidence,
+                coverage=terminal.coverage,
+                feedback=terminal.feedback,
+                report=terminal.report.to_record(),
+                writer_gaps=gaps,
+            )
+        )
+    return records
+
+
+def _drop_context_duplicates(
+    context: list[Evidence],
+    evidence: list[Evidence],
+    job: Job,
+    job_logger: logging.Logger | logging.LoggerAdapter,
+) -> tuple[list[Evidence], dict[str, Evidence]]:
+    """Drop discovered items that repeat a pinned context item (B11): the
+    same excerpt at the same URL (a corroborating copy elsewhere is kept).
+    Context wins. The count goes on the DISCOVER record as
+    ``context_duplicates``, only for runs with context.
+    """
+    pinned = {(ev.url, ev.excerpt_hash) for ev in context}
+    context_ids = {ev.id for ev in context}
+    kept = [
+        ev
+        for ev in evidence
+        if (ev.url, ev.excerpt_hash) not in pinned and ev.id not in context_ids
+    ]
+    dropped = len(evidence) - len(kept)
+    if dropped:
+        job_logger.info("Dropped %d discovered duplicate(s) of pinned context", dropped)
+    for i, rec in enumerate(job.stages):
+        if rec.stage == JobStage.DISCOVER:
+            job.stages[i] = rec.model_copy(
+                update={
+                    "metrics": {**(rec.metrics or {}), "context_duplicates": dropped}
+                }
+            )
+    lookup = {ev.id: ev for ev in context}
+    lookup.update((ev.id, ev) for ev in kept)
+    return kept, lookup
+
+
+def _budget_stop_note(path: str, stages: Sequence[StageRecord]) -> str:
+    """The budget-stop reason for a path that never reached the gate."""
+    for rec in stages:
+        m = rec.metrics or {}
+        if (
+            rec.stage == JobStage.WRITE
+            and rec.path == path
+            and m.get("budget_exceeded")
+        ):
+            return (
+                "Token budget exceeded: stopped before iteration "
+                f"{m['stopped_before_iteration']} (spent {m['tokens_spent']:,} of "
+                f"{m['max_tokens_per_job']:,} tokens) (ADR-003)."
+            )
+    return ""
+
+
 def _build_sibling_digest(units: list[ContentUnit]) -> str:
     """Compact digest of already-written sibling drafts, fed to the next path's writer.
 
@@ -292,8 +392,9 @@ class Pipeline:
             # --- Stage 1: Discover ---
             discovery = await self._run_discovery(request, policy, job, job_logger)
             evidence = discovery.evidence
+            context = list(request.context)  # pinned evidence (B11)
 
-            if not evidence:
+            if not evidence and not context:
                 return PipelineResult(
                     package=None,
                     job=self._update_job(
@@ -307,15 +408,26 @@ class Pipeline:
                 evidence = await self._run_tagging(evidence, job, job_logger)
 
             # --- Stage 2: Store evidence ---
-            ev_lookup = await self._store_evidence(evidence, job_logger)
+            # Pinned context is not stored: it is caller data, lives on the
+            # request and the package, and must never come back to a later
+            # run as a crawl of its URL (B11, final review).
+            evidence, ev_lookup = await self._store_evidence(evidence, job_logger)
+            if context:
+                evidence, ev_lookup = _drop_context_duplicates(
+                    context, evidence, job, job_logger
+                )
 
             # --- Stage 3: Write + Verify loop (per output path, run sequentially) ---
             (
                 all_units,
                 all_gate_results,
                 gate_results_by_path,
+                writer_gaps_by_path,
             ) = await self._run_all_paths(
                 request=request,
+                penalize_coi=policy.resolve_for_topic(
+                    request.topic
+                ).reputation.penalize_conflict_of_interest,
                 evidence=evidence,
                 gate=gate,
                 lineage=lineage,
@@ -334,7 +446,14 @@ class Pipeline:
                 request=request,
                 run_id=run_id,
                 units=all_units,
-                evidence=evidence,
+                verification=_path_verifications(
+                    request.paths,
+                    all_units,
+                    gate_results_by_path,
+                    writer_gaps_by_path,
+                    job.stages,
+                ),
+                evidence=[*context, *evidence],
                 token_usage=token_usage,
             )
             job = self._update_job(job, final_status)
@@ -444,20 +563,36 @@ class Pipeline:
         self,
         evidence: list[Evidence],
         job_logger: logging.Logger | logging.LoggerAdapter,
-    ) -> dict[str, Evidence]:
-        """Persist evidence and return the evidence-id lookup."""
+    ) -> tuple[list[Evidence], dict[str, Evidence]]:
+        """Persist evidence; return it with stored IDs, plus the id lookup.
+
+        A copy ``put_many`` skipped because the same (url, excerpt_hash) was
+        already stored (e.g. by a concurrent job) takes the stored row's ID
+        before anything is written, so every cited discovered ID exists in the
+        store (B6; pinned context is never stored, B11). Only the ID changes:
+        URL and verbatim excerpt are identical.
+        """
         inserted = await self._evidence_store.put_many(evidence)
         job_logger.info(
             "Stored %d new evidence objects (%d duplicates skipped)",
             inserted,
             len(evidence) - inserted,
         )
+        remap = await self._evidence_store.get_stored_ids(evidence)
+        if remap:
+            evidence = [
+                ev.model_copy(update={"id": remap[ev.id]}) if ev.id in remap else ev
+                for ev in evidence
+            ]
+            job_logger.info(
+                "Remapped %d evidence ID(s) to the already-stored rows", len(remap)
+            )
 
         # Build the evidence-id lookup once and pass it through (audit P8).
         # Writer + _write_verify_loop previously rebuilt this dict on every
         # iteration of every path — O(paths × iterations) sweeps over the
         # same list.
-        return {ev.id: ev for ev in evidence}
+        return evidence, {ev.id: ev for ev in evidence}
 
     def _interpret_terminal_decisions(
         self,
@@ -477,6 +612,10 @@ class Pipeline:
         )
 
         if all(d == GateDecision.PASS for d in final_decisions):
+            # PASS is a quality signal; the publish policy decides whether a
+            # passed job is done or waits for a person (B8).
+            if self._config.publish_policy == "human":
+                return JobStatus.READY_FOR_APPROVAL
             return JobStatus.COMPLETED
         elif any(d == GateDecision.REVIEW for d in final_decisions):
             return JobStatus.REVIEW_REQUIRED
@@ -493,6 +632,7 @@ class Pipeline:
         units: list[ContentUnit],
         evidence: list[Evidence],
         token_usage: dict[str, int],
+        verification: list[PathVerification],
     ) -> PublishPackage:
         """Assemble the publish package and append the PUBLISH StageRecord."""
         job = self._update_job(job, JobStatus.RUNNING, JobStage.PUBLISH)
@@ -523,6 +663,7 @@ class Pipeline:
                 engine_version=self._config.engine_version,
                 stages=job.stages,
             ),
+            verification=verification,
         )
 
         job.stages.append(
@@ -539,6 +680,7 @@ class Pipeline:
         self,
         *,
         request: CurationRequest,
+        penalize_coi: bool = True,
         evidence: list[Evidence],
         path: str,
         gate: QualityGate,
@@ -548,7 +690,7 @@ class Pipeline:
         ev_lookup: dict[str, Evidence],
         job_token_usage: Mapping[str, int] | None = None,
         sibling_context: str | None = None,
-    ) -> tuple[ContentUnit | None, list[GateResult], dict[str, int]]:
+    ) -> tuple[ContentUnit | None, list[GateResult], dict[str, int], list[str]]:
         """Run one path's writer/verifier loop with a local token dict and child logger.
 
         ``sibling_context`` (M03) is threaded straight through to the writer so
@@ -565,8 +707,9 @@ class Pipeline:
             path_logger = parent_logger.getChild(path)
 
         path_tokens = _zero_tokens()
-        unit, gate_results = await self._write_verify_loop(
+        unit, gate_results, writer_gaps = await self._write_verify_loop(
             request=request,
+            penalize_coi=penalize_coi,
             evidence=evidence,
             path=path,
             gate=gate,
@@ -578,12 +721,13 @@ class Pipeline:
             job_token_usage=job_token_usage,
             sibling_context=sibling_context,
         )
-        return unit, gate_results, path_tokens
+        return unit, gate_results, path_tokens, writer_gaps
 
     async def _run_all_paths(
         self,
         *,
         request: CurationRequest,
+        penalize_coi: bool = True,
         evidence: list[Evidence],
         gate: QualityGate,
         lineage: ContentLineage,
@@ -591,7 +735,12 @@ class Pipeline:
         job_logger: logging.Logger | logging.LoggerAdapter,
         token_usage: dict[str, int],
         ev_lookup: dict[str, Evidence],
-    ) -> tuple[list[ContentUnit], list[GateResult], dict[str, list[GateResult]]]:
+    ) -> tuple[
+        list[ContentUnit],
+        list[GateResult],
+        dict[str, list[GateResult]],
+        dict[str, list[str]],
+    ]:
         """Run per-path write-verify loops SEQUENTIALLY so each path sees its
         siblings (M03, ADR-003).
 
@@ -621,14 +770,16 @@ class Pipeline:
 
         all_units: list[ContentUnit] = []
         all_gate_results: list[GateResult] = []
+        writer_gaps_by_path: dict[str, list[str]] = {}
         gate_results_by_path: dict[str, list[GateResult]] = {}
 
         for completed, path in enumerate(request.paths, start=1):
             # Build the sibling digest from prior paths' drafts (None for the
             # first path) and thread it into this path's writer prompt.
             sibling_context = _build_sibling_digest(all_units) if all_units else None
-            unit, gate_results, path_tokens = await self._run_one_path(
+            unit, gate_results, path_tokens, writer_gaps = await self._run_one_path(
                 request=request,
+                penalize_coi=penalize_coi,
                 evidence=evidence,
                 path=path,
                 gate=gate,
@@ -641,6 +792,7 @@ class Pipeline:
             )
             all_gate_results.extend(gate_results)
             gate_results_by_path[path] = gate_results
+            writer_gaps_by_path[path] = writer_gaps
             if unit is not None:
                 all_units.append(unit)
             _merge_tokens(token_usage, path_tokens)
@@ -654,7 +806,7 @@ class Pipeline:
                 progress=JobProgress(completed=completed, total=total),
             )
 
-        return all_units, all_gate_results, gate_results_by_path
+        return all_units, all_gate_results, gate_results_by_path, writer_gaps_by_path
 
     async def _write_verify_loop(
         self,
@@ -669,7 +821,8 @@ class Pipeline:
         ev_lookup: dict[str, Evidence] | None = None,
         job_token_usage: Mapping[str, int] | None = None,
         sibling_context: str | None = None,
-    ) -> tuple[ContentUnit | None, list[GateResult]]:
+        penalize_coi: bool = True,
+    ) -> tuple[ContentUnit | None, list[GateResult], list[str]]:
         """Run the writer-verifier loop for a single output path.
 
         Scoring, editing, and verification live in the phase helpers below
@@ -688,27 +841,39 @@ class Pipeline:
         _tokens = token_usage  # may be None if called outside full pipeline
         gate_results: list[GateResult] = []
         feedback: str | None = None
+        # Gaps declared by the write that produced the surviving unit (B7).
+        writer_gaps: list[str] = []
         unit: ContentUnit | None = None
 
         gate_config = gate._config
         max_iters = gate_config.max_writer_iterations
 
         path_config = self._path_configs.get(path)
+        context = list(request.context)  # pinned evidence, never capped (B11)
         # ev_lookup is built once in Pipeline.run() and passed down (audit P8).
         # Falls back to a local rebuild when called directly (e.g. unit tests).
         if ev_lookup is None:
-            ev_lookup = {ev.id: ev for ev in evidence}
+            ev_lookup = {ev.id: ev for ev in [*context, *evidence]}
 
-        # Per-path evidence cap (keeps full list for tag aggregation)
-        path_evidence = evidence
+        # Per-path evidence cap on discovered sources (keeps full list for tag
+        # aggregation); pinned context comes first and is never capped.
+        sources = evidence
         if path_config and path_config.max_evidence:
-            path_evidence = evidence[: path_config.max_evidence]
+            sources = evidence[: path_config.max_evidence]
+        path_evidence = [*context, *sources]
+        # The writer keeps only citations to what it was shown, the same set
+        # the gate checks markers against (final review of B13).
+        path_lookup = {ev.id: ev for ev in path_evidence}
 
         # Pre-format the evidence prompt blocks once per path — all iterations
         # share the same blocks since `path_evidence` is immutable here
         # (audit P7). Saves (iterations - 1) formatting passes per path.
-        writer_block = format_evidence_for_prompt(path_evidence, style="writer")
-        verifier_block = format_evidence_for_prompt(path_evidence, style="verifier")
+        writer_block = format_evidence_for_prompt(
+            sources, style="writer", context=context
+        )
+        verifier_block = format_evidence_for_prompt(
+            sources, style="verifier", context=context
+        )
 
         for iteration in range(1, max_iters + 1):
             # --- Budget checkpoint (M08, ADR-003) ---
@@ -781,7 +946,7 @@ class Pipeline:
                 feedback=feedback,
                 lineage=lineage,
                 evidence_block=writer_block,
-                ev_lookup=ev_lookup,
+                ev_lookup=path_lookup,
                 sibling_context=sibling_context,
             )
 
@@ -792,12 +957,15 @@ class Pipeline:
 
             if not writer_output.has_content:
                 _log.warning("Writer produced no content for path '%s'", path)
+                if unit is None:
+                    writer_gaps = list(writer_output.gaps)
                 break
 
             # `has_content=True` implies the writer produced a non-None unit
             # with non-empty content. Narrow the type for pyright.
             assert writer_output.unit is not None
             unit = writer_output.unit
+            writer_gaps = list(writer_output.gaps)
 
             self._record_write_stage(job, path, iteration, write_start, writer_output)
 
@@ -828,6 +996,7 @@ class Pipeline:
             report = await self._run_verifier(
                 unit,
                 request=request,
+                penalize_coi=penalize_coi,
                 path_evidence=path_evidence,
                 verifier_block=verifier_block,
                 path=path,
@@ -843,7 +1012,7 @@ class Pipeline:
 
             if gate_result.should_publish:
                 _log.info("Path '%s': PASSED at iteration %d", path, iteration)
-                return unit, gate_results
+                return unit, gate_results, writer_gaps
 
             if gate_result.should_rewrite:
                 feedback = gate_result.feedback
@@ -854,11 +1023,11 @@ class Pipeline:
                 _log.info(
                     "Path '%s': routed to human review at iteration %d", path, iteration
                 )
-                return unit, gate_results
+                return unit, gate_results, writer_gaps
 
         # Exhausted iterations without passing
         _log.info("Path '%s': exhausted %d iterations", path, max_iters)
-        return unit, gate_results
+        return unit, gate_results, writer_gaps
 
     # --- _write_verify_loop phase helpers (M07 — bodies lifted verbatim per
     # ADR-005; finding 1.2). Token accumulation threads the per-path dict
@@ -981,7 +1150,9 @@ class Pipeline:
         annotations: list[ImpliedClaimAnnotation] = []
         if self._implied_claim_checker is not None:
             annotations = await self._implied_claim_checker.check(
-                unit.content, cited_evidence=path_evidence
+                unit.content,
+                cited_evidence=path_evidence,
+                evidence_store=self._evidence_store,
             )
             log.info(
                 "ImpliedClaimChecker: %d annotation(s) for path '%s' iter %d",
@@ -1051,6 +1222,7 @@ class Pipeline:
         path: str,
         job: Job | None,
         token_usage: dict | None,
+        penalize_coi: bool = True,
     ) -> VerificationReport:
         """Verify the draft against path evidence; append the VERIFY record."""
         _tokens = token_usage
@@ -1061,6 +1233,7 @@ class Pipeline:
             path_evidence,
             jurisdiction=jurisdiction,
             evidence_block=verifier_block,
+            penalize_conflict_of_interest=penalize_coi,
         )
 
         # Accumulate token usage from verifier
@@ -1132,7 +1305,12 @@ class Pipeline:
         if progress is not None:
             job.progress = progress
 
-        if status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.REVIEW_REQUIRED):
+        if status in (
+            JobStatus.COMPLETED,
+            JobStatus.FAILED,
+            JobStatus.REVIEW_REQUIRED,
+            JobStatus.READY_FOR_APPROVAL,
+        ):
             job.completed_at = datetime.now(UTC)
 
         if error_msg:

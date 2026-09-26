@@ -15,7 +15,10 @@ import re
 import time
 import uuid
 from collections import defaultdict
+from collections.abc import Sequence
 from datetime import UTC, datetime
+from functools import lru_cache
+from typing import Literal
 from urllib.parse import urlparse
 
 from cce.config.types import CrawlConfig
@@ -24,7 +27,12 @@ from cce.discovery.embeddings import EmbeddingProvider, EmbeddingUnavailableErro
 from cce.evidence.store import EvidenceStore
 from cce.models.evidence import DiscoveryResult, Evidence, SourceQuality
 from cce.models.request import CurationConstraints, CurationRequest
-from cce.policy.types import ReputationRule, SourcePolicy
+from cce.policy.types import (
+    DEFAULT_MARKETING_PHRASES,
+    DEFAULT_PRIMARY_SOURCE_SUFFIXES,
+    ReputationRule,
+    SourcePolicy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +57,122 @@ _CRAWL_FAILURE_WARN_THRESHOLD = 0.3
 SEARCH_RESULT_LIMIT = 20  # max URLs from search
 MIN_FRAGMENT_SIZE = 50  # min chars for evidence excerpt
 MAX_CHUNK_SIZE = 1500  # max chars per evidence chunk
+
+
+# -- Discovery drop ledger (B10) ---------------------------------------------
+#
+# Two ledgers, because URL-level drops happen before any excerpt exists:
+#   urls_gathered == urls_dropped_policy + urls_capped + urls_reused
+#                    + crawl_failed + crawl_success
+#   excerpts_gathered == dropped_fragment + dropped_date + dropped_reputation
+#                        + dropped_marketing + deduplicated + capped + kept
+# linked through crawl_success (pages whose chunks enter the excerpt ledger)
+# and urls_reused / excerpts_reused (stored rows rehydrated for reused URLs).
+_LEDGER_KEYS = (
+    "urls_gathered",
+    "urls_dropped_policy",
+    "urls_capped",
+    "urls_reused",
+    "crawl_success",
+    "crawl_failed",
+    "excerpts_gathered",
+    "excerpts_reused",
+    "dropped_fragment",
+    "dropped_date",
+    "dropped_reputation",
+    "dropped_marketing",
+    "deduplicated",
+    "capped",
+    "kept",
+)
+
+
+# The ledger keys that are drops (logged when non-zero).
+_DROP_KEYS = (
+    "urls_dropped_policy",
+    "urls_capped",
+    "crawl_failed",
+    "dropped_fragment",
+    "dropped_date",
+    "dropped_reputation",
+    "dropped_marketing",
+    "deduplicated",
+    "capped",
+)
+
+
+def _log_drops(metrics: dict[str, int | float]) -> None:
+    dropped = [f"{k}={metrics[k]}" for k in _DROP_KEYS if metrics.get(k)]
+    if dropped:
+        logger.info("Discovery drops: %s", ", ".join(dropped))
+
+
+def _discovery_metrics(**counts: int) -> dict[str, int | float]:
+    """Every ledger key (missing ones 0), plus crawl_failure_rate."""
+    metrics: dict[str, int | float] = {key: counts.get(key, 0) for key in _LEDGER_KEYS}
+    crawled = int(metrics["crawl_success"]) + int(metrics["crawl_failed"])
+    metrics["crawl_failure_rate"] = (
+        round(int(metrics["crawl_failed"]) / crawled, 2) if crawled else 0.0
+    )
+    return metrics
+
+
+# -- Domain and phrase matching (B9) -----------------------------------------
+
+
+def _url_host(url: str) -> str:
+    """Lower-cased host without port, userinfo or trailing dot ('' if none)."""
+    try:
+        host = urlparse(url).hostname or ""
+    except ValueError:
+        return ""
+    return host.rstrip(".")
+
+
+def _entry_labels(entry: str) -> list[str]:
+    """Policy domain entry -> labels; tolerates '.gov', '*.example.com'."""
+    normalized = entry.strip().lower().lstrip("*").strip(".")
+    return normalized.split(".") if normalized else []
+
+
+def _host_matches(host: str, entry: str) -> bool:
+    """True when ``host`` is ``entry`` or a subdomain of it."""
+    labels = _entry_labels(entry)
+    if not labels:
+        return False
+    suffix = ".".join(labels)
+    return host == suffix or host.endswith("." + suffix)
+
+
+def _host_contains(host: str, entry: str) -> bool:
+    """True when ``entry``'s labels appear as a contiguous run in ``host``."""
+    labels = _entry_labels(entry)
+    if not labels:
+        return False
+    host_labels = host.split(".")
+    n = len(labels)
+    return any(
+        host_labels[i : i + n] == labels for i in range(len(host_labels) - n + 1)
+    )
+
+
+@lru_cache(maxsize=64)
+def _phrase_pattern(phrases: tuple[str, ...]) -> re.Pattern[str] | None:
+    """Whole-word, case-insensitive matcher for any phrase (None if empty).
+
+    Lookarounds rather than \\b so phrases with non-word edges still work;
+    words within a phrase may be separated by any whitespace (line wraps).
+    """
+    alternatives = [
+        r"\s+".join(re.escape(word) for word in phrase.split())
+        for phrase in phrases
+        if phrase.strip()
+    ]
+    if not alternatives:
+        return None
+    return re.compile(
+        r"(?<!\w)(?:" + "|".join(alternatives) + r")(?!\w)", re.IGNORECASE
+    )
 
 
 class Discoverer:
@@ -119,6 +243,7 @@ class Discoverer:
         # Step 3: Filter against policy
         effective_policy = self._resolve_overrides(request.topic, policy)
         filtered_urls = self._apply_policy_filters(candidate_urls, effective_policy)
+        urls_dropped_policy = len(candidate_urls) - len(filtered_urls)
 
         # Step 3b: Split into fresh URLs (need crawling) and reusable stored evidence
         # from previously-indexed URLs (audit P3). Happens before the max-sources cap
@@ -126,6 +251,10 @@ class Discoverer:
         fresh_urls, reusable_evidence = await self._split_fresh_and_reusable(
             filtered_urls
         )
+        # Candidates are unique and reused URLs are a subset of them.
+        n_reused_urls = len(filtered_urls) - len(fresh_urls)
+        fresh_overflow = max(0, len(fresh_urls) - policy.max_sources_per_run)
+        reused_urls_before_cap = {ev.url for ev in reusable_evidence}
 
         # Cap total sources at policy.max_sources_per_run (review finding F-3).
         # Fresh URLs keep priority; reusable evidence fills the remaining
@@ -148,6 +277,17 @@ class Discoverer:
                     seen_urls.add(ev.url)
                     kept.append(ev)
             reusable_evidence = kept
+        reused_capped = len(reused_urls_before_cap) - len(
+            {ev.url for ev in reusable_evidence}
+        )
+        url_ledger = {
+            "urls_gathered": len(candidate_urls),
+            "urls_dropped_policy": urls_dropped_policy,
+            "urls_capped": fresh_overflow + reused_capped,
+            # A URL the store reports but has no rows for counts as reused
+            # with zero excerpts, so the URL identity stays exact.
+            "urls_reused": n_reused_urls - reused_capped,
+        }
         logger.info(
             "Discovery: %d fresh URLs to crawl, %d reusable evidence rows",
             len(fresh_urls),
@@ -156,14 +296,9 @@ class Discoverer:
 
         if not fresh_urls and not reusable_evidence:
             logger.warning("Discovery: no URLs survived policy filter")
-            return DiscoveryResult(
-                evidence=[],
-                metrics={
-                    "crawl_success": 0,
-                    "crawl_failed": 0,
-                    "crawl_failure_rate": 0.0,
-                },
-            )
+            metrics = _discovery_metrics(**url_ledger)
+            _log_drops(metrics)
+            return DiscoveryResult(evidence=[], metrics=metrics)
 
         # Steps 4-5: Crawl fresh URLs, extract + filter evidence, merge reusable
         evidence, metrics = await self._crawl_and_extract(
@@ -210,8 +345,16 @@ class Discoverer:
             relevance_scores=relevance_scores,
         )
 
-        # Every crawl result is tallied as exactly one success or failure, so
-        # the sum equals the page count previously taken from len(crawl_results).
+        metrics = _discovery_metrics(
+            **url_ledger,
+            **{k: int(v) for k, v in metrics.items() if k in _LEDGER_KEYS},
+            capped=before_cap - len(evidence),
+            kept=len(evidence),
+        )
+        _log_drops(metrics)
+
+        # Every requested URL is tallied as exactly one success or failure
+        # (a result the adapter never returned is a failure).
         pages_crawled = int(metrics["crawl_success"]) + int(metrics["crawl_failed"])
         logger.info(
             "Discovery complete: %d evidence objects from %d pages (%d before cap)",
@@ -283,38 +426,63 @@ class Discoverer:
             ]
             crawl_results = await self._adapter.crawl_many(crawl_requests)
 
-        # Step 5: Extract, filter, and normalize (with in-run dedup by excerpt hash)
+        # Step 5: Extract, filter, and normalize (with in-run dedup by excerpt
+        # hash), counting every excerpt that doesn't survive by reason (B10).
         evidence: list[Evidence] = []
         seen_hashes: set[str] = set()
-        filtered_date = 0
-        filtered_reputation = 0
-        crawl_success = 0
-        crawl_failed = 0
+        counts: dict[str, int] = dict.fromkeys(
+            (
+                "excerpts_gathered",
+                "dropped_fragment",
+                "dropped_date",
+                "dropped_reputation",
+                "dropped_marketing",
+                "deduplicated",
+            ),
+            0,
+        )
+        good_results = 0
         for result in crawl_results:
             if result.status_code == 0 or not result.markdown.strip():
-                crawl_failed += 1
                 logger.debug("Skipping empty or failed crawl: %s", result.url)
                 continue
 
-            crawl_success += 1
-            extracted = self._extract_evidence(result, effective_policy)
+            good_results += 1
+            extracted, n_chunks = self._extract_evidence_counted(
+                result, effective_policy
+            )
+            counts["excerpts_gathered"] += n_chunks
+            counts["dropped_fragment"] += n_chunks - len(extracted)
             for ev in extracted:
                 if not self._passes_date_filter(ev, effective_policy, constraints):
-                    filtered_date += 1
+                    counts["dropped_date"] += 1
                     continue
-                if not self._passes_reputation_filter(ev, effective_policy.reputation):
-                    filtered_reputation += 1
+                reason = self._reputation_drop_reason(ev, effective_policy.reputation)
+                if reason is not None:
+                    counts[f"dropped_{reason}"] += 1
                     continue
-                if ev.excerpt_hash not in seen_hashes:
-                    seen_hashes.add(ev.excerpt_hash)
-                    evidence.append(ev)
+                if ev.excerpt_hash in seen_hashes:
+                    counts["deduplicated"] += 1
+                    continue
+                seen_hashes.add(ev.excerpt_hash)
+                evidence.append(ev)
+
+        # One outcome per requested URL, so the URL ledger sums whatever the
+        # adapter returns: missing results are failures, extra or duplicate
+        # ones (an adapter adding child pages) don't count as more sources.
+        # By count, not URL, since an adapter may report the redirected URL.
+        crawl_success = min(good_results, len(fresh_urls))
+        crawl_failed = len(fresh_urls) - crawl_success
 
         # Merge reusable evidence from previously-crawled URLs (audit P3).
         # Same excerpt-hash dedup applies so nothing is double-counted.
+        counts["excerpts_gathered"] += len(reusable_evidence)
         for ev in reusable_evidence:
-            if ev.excerpt_hash not in seen_hashes:
-                seen_hashes.add(ev.excerpt_hash)
-                evidence.append(ev)
+            if ev.excerpt_hash in seen_hashes:
+                counts["deduplicated"] += 1
+                continue
+            seen_hashes.add(ev.excerpt_hash)
+            evidence.append(ev)
 
         # Track crawl success/failure metrics
         total_crawls = crawl_success + crawl_failed
@@ -330,14 +498,9 @@ class Discoverer:
             "crawl_success": crawl_success,
             "crawl_failed": crawl_failed,
             "crawl_failure_rate": round(failure_rate, 2),
+            "excerpts_reused": len(reusable_evidence),
+            **counts,
         }
-
-        if filtered_date or filtered_reputation:
-            logger.info(
-                "Discovery filters: %d dropped by date, %d dropped by reputation",
-                filtered_date,
-                filtered_reputation,
-            )
 
         return evidence, metrics
 
@@ -356,40 +519,31 @@ class Discoverer:
     @staticmethod
     def _resolve_overrides(topic: str, policy: SourcePolicy) -> SourcePolicy:
         """Apply any matching topic overrides to the base policy."""
-        for override in policy.topic_overrides:
-            if re.search(override.topic_pattern, topic, re.IGNORECASE):
-                # Layer override fields onto a copy of the base policy
-                merged_allow = policy.domains_allow + override.domains_allow
-                merged_deny = policy.domains_deny + override.domains_deny
-                return SourcePolicy(
-                    id=policy.id,
-                    name=policy.name,
-                    domains_allow=merged_allow,
-                    domains_deny=merged_deny,
-                    reputation=override.reputation or policy.reputation,
-                    recency=override.recency or policy.recency,
-                    max_sources_per_run=policy.max_sources_per_run,
-                    topic_overrides=[],  # don't recurse
-                )
-        return policy
+        return policy.resolve_for_topic(topic)
 
     @staticmethod
     def _passes_policy(url: str, policy: SourcePolicy) -> bool:
-        """Check if a URL is allowed by the source policy."""
-        domain = urlparse(url).netloc.lower()
-        if not domain:
+        """Check if a URL is allowed by the source policy.
+
+        Matches on the URL's host at label boundaries, never substrings (B9):
+        a deny entry matches when its labels appear as a contiguous run in the
+        host (``x.com`` no longer blocks ``fox.com``; ``amazon.com`` still
+        blocks ``amazon.com.au``), and an allow entry only when the host is it
+        or ends with it (``nih.gov`` no longer admits ``nih.gov.evil.io``).
+        """
+        host = _url_host(url)
+        if not host:
             return False
 
         # Deny list takes priority
-        for denied in policy.domains_deny:
-            if denied.lower() in domain:
-                return False
+        if any(_host_contains(host, denied) for denied in policy.domains_deny):
+            return False
 
         # If allow list is non-empty, URL must match
-        if policy.domains_allow:
-            matched = any(allowed.lower() in domain for allowed in policy.domains_allow)
-            if not matched:
-                return False
+        if policy.domains_allow and not any(
+            _host_matches(host, allowed) for allowed in policy.domains_allow
+        ):
+            return False
 
         return True
 
@@ -450,22 +604,29 @@ class Discoverer:
 
         Fail-open: evidence with no source_quality always passes.
         """
+        return Discoverer._reputation_drop_reason(ev, reputation) is None
+
+    @staticmethod
+    def _reputation_drop_reason(
+        ev: Evidence, reputation: ReputationRule
+    ) -> Literal["reputation", "marketing"] | None:
+        """Why the reputation hard filters drop ``ev`` (None = kept), B10."""
         if ev.source_quality is None:
-            return True
+            return None
 
         if reputation.require_peer_reviewed and not ev.source_quality.is_peer_reviewed:
-            return False
+            return "reputation"
 
         if (
             reputation.require_primary_source
             and not ev.source_quality.is_primary_source
         ):
-            return False
+            return "reputation"
 
         if reputation.block_marketing and ev.source_quality.conflict_of_interest:
-            return False
+            return "marketing"
 
-        return True
+        return None
 
     # -- Embedding relevance --
 
@@ -553,14 +714,25 @@ class Discoverer:
         section) and creates one Evidence object per chunk. Each chunk
         is a verbatim excerpt with full provenance.
         """
+        return self._extract_evidence_counted(result, policy)[0]
+
+    def _extract_evidence_counted(
+        self, result: CrawlResult, policy: SourcePolicy
+    ) -> tuple[list[Evidence], int]:
+        """``_extract_evidence`` plus the number of chunks considered, so the
+        caller can count those dropped as too short (B10)."""
         chunks = self._chunk_content(result.markdown)
         now = datetime.now(UTC)
 
         quality = SourceQuality(
             is_peer_reviewed=self._looks_peer_reviewed(result),
-            is_primary_source=self._looks_primary(result),
+            is_primary_source=self._looks_primary(
+                result, policy.reputation.primary_source_suffixes
+            ),
             domain_reputation=self._assess_reputation(result.url, policy.reputation),
-            conflict_of_interest=self._looks_marketing(result),
+            conflict_of_interest=self._looks_marketing(
+                result, policy.reputation.marketing_phrases
+            ),
         )
 
         evidence: list[Evidence] = []
@@ -614,7 +786,7 @@ class Discoverer:
                 )
             )
 
-        return evidence
+        return evidence, len(chunks)
 
     @staticmethod
     def _chunk_content(
@@ -753,14 +925,22 @@ class Discoverer:
         return any(ind in url_lower for ind in indicators)
 
     @staticmethod
-    def _looks_primary(result: CrawlResult) -> bool:
-        """Heuristic: .gov, .edu, or known research domains."""
-        domain = urlparse(result.url).netloc.lower()
-        return any(domain.endswith(suffix) for suffix in [".gov", ".edu", ".org"])
+    def _looks_primary(
+        result: CrawlResult,
+        suffixes: Sequence[str] = DEFAULT_PRIMARY_SOURCE_SUFFIXES,
+    ) -> bool:
+        """Heuristic: the host ends with a primary-source suffix (B9: from the
+        policy, label-boundary matched; default .gov / .edu)."""
+        host = _url_host(result.url)
+        return bool(host) and any(_host_matches(host, s) for s in suffixes)
 
     @staticmethod
     def _assess_reputation(url: str, rules: ReputationRule) -> str:
-        """Map a URL to a reputation tier based on policy rules."""
+        """Map a URL to a reputation tier based on policy rules.
+
+        Still substring-matched (not B9): policies rely on bare entries such
+        as ``pubmed`` matching inside a host.
+        """
         domain = urlparse(url).netloc.lower()
         for trusted in rules.trusted_institutions:
             if trusted.lower() in domain:
@@ -770,16 +950,18 @@ class Discoverer:
         return "unknown"
 
     @staticmethod
-    def _looks_marketing(result: CrawlResult) -> bool:
-        """Basic heuristic for marketing/sponsored content."""
-        indicators = [
-            "sponsored",
-            "advertisement",
-            "promoted",
-            "affiliate",
-            "buy now",
-            "sign up free",
-            "limited time offer",
-        ]
-        text_lower = (result.markdown[:2000] + result.title).lower()
-        return any(ind in text_lower for ind in indicators)
+    def _looks_marketing(
+        result: CrawlResult,
+        phrases: Sequence[str] = DEFAULT_MARKETING_PHRASES,
+    ) -> bool:
+        """Marketing/sponsored heuristic: any policy phrase, as whole words
+        (B9: ``affiliate`` no longer matches ``affiliated``), in the title or
+        the first 2,000 characters."""
+        pattern = _phrase_pattern(tuple(phrases))
+        if pattern is None:
+            return False
+        title = result.title
+        if isinstance(title, list):  # adapters can return list metadata
+            title = ", ".join(str(t) for t in title)
+        text = result.markdown[:2000] + "\n" + (title or "")
+        return pattern.search(text) is not None

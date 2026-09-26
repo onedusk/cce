@@ -41,6 +41,7 @@ async def _make_lifecycle_app(
     *,
     llm_responses: list[str] | None = None,
     require_auth: bool = False,
+    adapter=None,
 ) -> tuple[FastAPI, JobStore, SQLiteEvidenceStore]:
     """Build a fully wired app with a real Pipeline using mock deps."""
     config = make_engine_config(
@@ -60,7 +61,7 @@ async def _make_lifecycle_app(
 
     pipeline = Pipeline(
         config=config,
-        crawl_adapter=make_adapter(),
+        crawl_adapter=adapter or make_adapter(),
         evidence_store=evidence_store,
         llm=make_llm(*llm_responses),
     )
@@ -287,6 +288,109 @@ async def test_pipeline_error_sets_failed_status(tmp_path: Path):
             assert data["status"] == "failed"
             assert data["error"] is not None
             assert "crashed" in data["error"]["message"].lower()
+
+    await job_store.close()
+    await evidence_store.close()
+
+
+async def test_every_cited_id_resolves_through_the_evidence_endpoint(tmp_path: Path):
+    """B6 acceptance: job 1 stores an excerpt at URL A; job 2 finds the same
+    text syndicated at URL B. Every evidence ID job 2's package cites must
+    resolve through GET /evidence/{id} (before B6 the second copy was never
+    stored and returned 404)."""
+    from cce.parsing import EV_MARKER_RE
+    from tests.conftest import MockCrawlAdapter, make_crawl_result
+
+    page = (
+        "# Wire story\n\nThis syndicated paragraph was published word for word "
+        "by two different outlets, so both URLs carry the same excerpt text."
+    )
+    adapter = MockCrawlAdapter(
+        search_map={
+            "topic a": ["https://a.example/s"],
+            "topic b": ["https://b.example/s"],
+        },
+        url_map={
+            u: make_crawl_result(url=u, markdown=page)
+            for u in ("https://a.example/s", "https://b.example/s")
+        },
+    )
+    app, job_store, evidence_store = await _make_lifecycle_app(
+        tmp_path, llm_responses=[writer_json(), verifier_json()] * 2, adapter=adapter
+    )
+
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            for topic in ("topic a", "topic b"):
+                resp = await client.post(
+                    "/v1/curate/jobs",
+                    json={
+                        "topic": topic,
+                        "paths": ["blog"],
+                        "policy_id": "test-policy",
+                    },
+                )
+                job_id = resp.json()["data"]["id"]
+                data = await wait_for_job_status(
+                    client, job_id, {"completed", "failed"}
+                )
+                assert data["status"] == "completed"
+
+            pkg = (await client.get(f"/v1/curate/jobs/{job_id}/package")).json()["data"]
+            ids = {ev["id"] for ev in pkg["evidence"]}
+            for unit in pkg["units"]:
+                ids.update(c["evidence_id"] for c in unit["citations"])
+                ids.update(
+                    m.group(1) or m.group(2)
+                    for m in EV_MARKER_RE.finditer(unit["content"])
+                )
+            assert ids
+            for ev_id in ids:
+                resp = await client.get(f"/v1/curate/evidence/{ev_id}")
+                assert resp.status_code == 200, ev_id
+                assert resp.json()["data"]["url"] == "https://b.example/s"
+
+    await job_store.close()
+    await evidence_store.close()
+
+
+async def test_review_package_verification_over_the_api(tmp_path: Path):
+    """B7 round trip, API: GET /jobs/{id}/package carries the verification
+    records of a REVIEW job."""
+    from tests.test_orchestrator.test_pipeline_verification_records import (
+        uncited_report,
+        writer_reply,
+    )
+
+    app, job_store, evidence_store = await _make_lifecycle_app(
+        tmp_path, llm_responses=[writer_reply(), uncited_report()] * 3
+    )
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/v1/curate/jobs",
+                json={
+                    "topic": "test topic",
+                    "paths": ["blog"],
+                    "policy_id": "test-policy",
+                },
+            )
+            job_id = resp.json()["data"]["id"]
+            data = await wait_for_job_status(
+                client, job_id, {"completed", "failed", "review_required"}
+            )
+            assert data["status"] == "review_required"
+
+            pkg = (await client.get(f"/v1/curate/jobs/{job_id}/package")).json()["data"]
+            [record] = pkg["verification"]
+            assert record["decision"] == "review"
+            assert "Max iterations" in record["feedback"]
+            assessments = [c["assessment"] for c in record["report"]["claims"]]
+            assert assessments.count("uncited") == 2
 
     await job_store.close()
     await evidence_store.close()

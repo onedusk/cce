@@ -5,12 +5,18 @@ footnote index per unique source URL (by order of first appearance),
 replaces markers with [^N] footnote syntax, and returns the ordered
 citation list. Multiple evidence excerpts of the same URL collapse onto a
 single footnote number (emit-time, per-article — ADR-001/002).
+
+``citation_key="evidence"`` (B12, opt-in) keys footnotes by evidence ID
+instead, each carrying its excerpt's locator — for a source that is one long
+document with page or slide locators, where per-URL keying would collapse
+every citation into one footnote with no page number.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Literal
 
 from cce.models.evidence import Evidence
 from cce.parsing import EV_MARKER_RE, resolve_evidence_id
@@ -26,6 +32,9 @@ class CitationEntry:
     title: str | None
     author: str | None
     published_at: str | None  # ISO 8601 or None
+    # Set only when keyed by evidence ID: a per-URL entry spans several
+    # excerpts, so no single locator would be right.
+    locator: str | None = None
 
 
 @dataclass(frozen=True)
@@ -49,12 +58,16 @@ def _canonical_url(url: str) -> str:
 def build_citation_index(
     content: str,
     evidence_by_id: dict[str, Evidence],
+    *,
+    citation_key: Literal["url", "evidence"] = "url",
 ) -> CitationResult:
     """Scan [ev:ID] markers; assign ONE footnote index per unique source URL (per article).
 
     Args:
         content: Markdown body containing [ev:ID] inline markers.
         evidence_by_id: Lookup table of Evidence objects keyed by ID.
+        citation_key: ``"url"`` (default) — one footnote per source URL;
+            ``"evidence"`` — one per evidence ID, carrying its locator (B12).
 
     Returns:
         CitationResult with transformed content and ordered citation list.
@@ -64,7 +77,12 @@ def build_citation_index(
     IDs that resolve to the same canonical source URL share one footnote
     index; the citation entry's `id` is the first-seen (representative) id.
     """
-    seen: dict[str, int] = {}  # canonical URL -> footnote index
+    if citation_key not in ("url", "evidence"):
+        raise ValueError(
+            f"unknown citation_key {citation_key!r} (use 'url' or 'evidence')"
+        )
+    by_evidence = citation_key == "evidence"
+    seen: dict[str, int] = {}  # canonical URL (or evidence id) -> footnote index
     citations: list[CitationEntry] = []
 
     def _replace(match: re.Match[str]) -> str:
@@ -73,7 +91,7 @@ def build_citation_index(
         ev_id, evidence = resolve_evidence_id(ev_id_raw, evidence_by_id)
         if evidence is None:
             return "[^?]"
-        key = _canonical_url(evidence.url)
+        key = ev_id if by_evidence else _canonical_url(evidence.url)
         if key in seen:
             return f"[^{seen[key]}]"
         index = len(citations) + 1
@@ -88,6 +106,7 @@ def build_citation_index(
                 published_at=(
                     evidence.published_at.isoformat() if evidence.published_at else None
                 ),
+                locator=evidence.locator if by_evidence else None,
             )
         )
         return f"[^{index}]"

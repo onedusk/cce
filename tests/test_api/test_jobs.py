@@ -132,3 +132,53 @@ async def test_get_package_not_found(client: httpx.AsyncClient):
 async def test_retry_nonexistent_returns_404(client: httpx.AsyncClient):
     resp = await client.post("/v1/curate/jobs/nonexistent/retry")
     assert resp.status_code == 404
+
+
+async def test_list_jobs_filters_ready_for_approval(client):
+    """B8: the new status is a valid list filter."""
+    resp = await client.get("/v1/curate/jobs?status=ready_for_approval")
+    assert resp.status_code == 200
+
+
+async def test_create_job_with_context_round_trips(client: httpx.AsyncClient):
+    """B11: pinned context is accepted on the wire and kept on the job."""
+    from tests.conftest import make_evidence
+
+    ctx = make_evidence(id="ctx_a", url="consumer://acme", excerpt="No em-dashes.")
+    resp = await client.post(
+        "/v1/curate/jobs",
+        json={
+            "topic": "test topic",
+            "paths": ["blog"],
+            "policy_id": "test-policy",
+            "context": [ctx.model_dump(mode="json")],
+        },
+    )
+    assert resp.status_code == 202
+    job = (await client.get(f"/v1/curate/jobs/{resp.json()['data']['id']}")).json()
+    [echoed] = job["data"]["request"]["context"]
+    assert echoed["id"] == "ctx_a"
+    assert echoed["excerpt"] == "No em-dashes."
+
+
+async def test_invalid_context_is_a_422_that_does_not_echo_it(
+    client: httpx.AsyncClient,
+):
+    from tests.conftest import make_evidence
+
+    bad = make_evidence(id="ctx_a", excerpt="Confidential pinned text.")
+    payload = bad.model_dump(mode="json") | {"excerpt_hash": "0" * 64}
+    resp = await client.post(
+        "/v1/curate/jobs",
+        json={
+            "topic": "test topic",
+            "paths": ["blog"],
+            "policy_id": "test-policy",
+            "context": [payload],
+        },
+    )
+    assert resp.status_code == 422
+    err = resp.json()["error"]
+    assert err["code"] == "invalid_request"
+    assert "excerpt_hash is not the SHA-256" in err["message"]
+    assert "Confidential" not in resp.text

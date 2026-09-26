@@ -9,8 +9,9 @@ the trailing semicolon).
 
 This module reshapes the SAME `PublishPackage` into that format. Everything
 except the page.mdx metadata is reused verbatim:
-- body + footnotes: `build_citation_index` (URL-keyed per M02),
-- `_evidence.json`: `export_evidence` (already byte-identical to deployed),
+- body + footnotes: `build_citation_index` (URL-keyed per M02 by default;
+  `citation_key="evidence"` keys by evidence ID with locators, B12),
+- `_evidence.json`: `export_evidence` (each entry carries its `locator`, B12),
 - `meta.json`: `merge_topic_meta` (preserves editorial fields, updates CCE ones).
 Only `format_thnklabs_page` differs from `format_mdx_page`.
 """
@@ -21,12 +22,18 @@ import json
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from cce.models.content import ContentUnit
 from cce.models.evidence import Evidence
 from cce.models.package import PublishPackage
 from cce.output.mdx import EmitResult, _strip_evidence_gaps, slugify
-from cce.output.mdx.citations import build_citation_index
+from cce.output.mdx.citations import (
+    CitationEntry,
+    _canonical_url,
+    build_citation_index,
+)
+from cce.output.mdx.escape import escape_mdx_body, escape_mdx_inline
 from cce.output.mdx.evidence import export_evidence
 from cce.output.mdx.formatter import _citation_to_dict, _derive_title
 from cce.output.mdx.meta import merge_topic_meta
@@ -79,8 +86,14 @@ def _rebuild_resources_section(body: str, citations) -> str:
     nxt = re.search(r"^#{2,3}[ \t]+", rest, re.MULTILINE)
     end = m.end() + nxt.start() if nxt else len(body)
 
+    # One bullet per source: keyed by evidence ID (B12), several footnotes
+    # can share a URL, and the list would repeat the source for each.
+    sources: dict[str, CitationEntry] = {}
+    for c in citations:
+        sources.setdefault(_canonical_url(c.url), c)
     bullets = "\n".join(
-        f"- **{(c.title or c.url or '').strip()}** [^{c.index}]" for c in citations
+        f"- **{escape_mdx_inline(c.title or c.url or '')}** [^{c.index}]"
+        for c in sources.values()
     )
     new_section = f"## Curated Resources\n\n{bullets}\n"
     tail = body[end:]
@@ -96,9 +109,12 @@ def format_thnklabs_page(
     topic_slug: str,
     status: str = "draft",
     curated_at: str | None = None,
+    citation_key: Literal["url", "evidence"] = "url",
 ) -> str:
     """Render one ContentUnit as a thnkLabs `page.mdx` (ArticleMetadata + body)."""
-    result = build_citation_index(unit.content, evidence_by_id)
+    result = build_citation_index(
+        unit.content, evidence_by_id, citation_key=citation_key
+    )
     body = _rebuild_resources_section(result.content, result.citations)
 
     metadata: dict = {
@@ -123,7 +139,9 @@ def format_thnklabs_page(
         metadata["curatedAt"] = curated_at
 
     metadata_json = json.dumps(metadata, indent=2, ensure_ascii=False)
-    return f"export const metadata = {metadata_json};\n\n{body}\n"
+    # Metadata above is derived from the raw body (JSON-escaped); only the
+    # rendered body is MDX-escaped (B13).
+    return f"export const metadata = {metadata_json};\n\n{escape_mdx_body(body)}\n"
 
 
 def emit_thnklabs(
@@ -133,6 +151,7 @@ def emit_thnklabs(
     topic_name: str | None = None,
     *,
     status: str = "draft",
+    citation_key: Literal["url", "evidence"] = "url",
 ) -> EmitResult:
     """Emit a completed package as thnkLabs MDX (page.mdx per path + _evidence.json + meta.json).
 
@@ -170,6 +189,7 @@ def emit_thnklabs(
             topic_slug=topic_slug,
             status=status,
             curated_at=curated_at,
+            citation_key=citation_key,
         )
         (path_dir / "page.mdx").write_text(mdx_content, encoding="utf-8")
         files_written += 1

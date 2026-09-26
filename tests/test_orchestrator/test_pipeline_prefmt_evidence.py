@@ -34,9 +34,9 @@ async def test_formatter_called_twice_per_path(sqlite_store, monkeypatch):
     calls: list[tuple[int, str]] = []
     real_format = formatting_module.format_evidence_for_prompt
 
-    def _counting(evidence, *, style):
+    def _counting(evidence, *, style, context=None):
         calls.append((len(evidence), style))
-        return real_format(evidence, style=style)
+        return real_format(evidence, style=style, context=context)
 
     monkeypatch.setattr(formatting_module, "format_evidence_for_prompt", _counting)
     # The pipeline imports it as a module-level symbol into orchestrator/pipeline.py;

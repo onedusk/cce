@@ -28,7 +28,7 @@ def _evaluate(
     conflicts: int = 0,
     iteration: int = 1,
     content: str = "This is a long enough paragraph with a citation [ev:test_001] to pass density checks easily.\n\nAnother paragraph with enough words and a citation [ev:test_002] for the gate.",
-    autopublish_threshold: float = 0.85,
+    pass_threshold: float = 0.85,
     max_writer_iterations: int = 3,
     min_citations_per_paragraph: int = 1,
     evidence: list | None = None,
@@ -42,7 +42,7 @@ def _evaluate(
     if evidence is None:
         evidence = [make_evidence(id="test_001"), make_evidence(id="test_002")]
     config = make_gate_config(
-        autopublish_threshold=autopublish_threshold,
+        pass_threshold=pass_threshold,
         max_writer_iterations=max_writer_iterations,
         min_citations_per_paragraph=min_citations_per_paragraph,
     )

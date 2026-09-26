@@ -32,7 +32,9 @@ The engine config file is *opt-in* — nothing is loaded implicitly. Pass it:
 
 Top-level YAML sections mirror `EngineConfig`: `llm`, `writer`, `verifier`,
 `evidence_store`, `crawl`, `embedding`, `quality_gate`, `api`, `humanization`,
-`engine_version`. `writer.temperature` (default `0.2`) and
+`publish_policy`, `max_tokens_per_job`, `engine_version`. Quality-gate
+profiles take `pass_threshold` (renamed from `autopublish_threshold`, which is
+still accepted). `writer.temperature` (default `0.2`) and
 `verifier.temperature` (default `0.1`) are the per-agent sampling
 temperatures; like `llm.temperature` they are not sent to models that reject
 sampling parameters (Opus 4.7 and later, Sonnet 5, Fable 5).
@@ -77,6 +79,20 @@ audit-2026-06-09 M06; they were accepted but ignored from Phase 3 until
 then). Relative arguments resolve against `root`; absolute ones are used
 as-is.
 
+**Injecting providers instead of configuring them.** A consumer that must
+route outbound calls through its own gateway passes
+`overrides=ComponentOverrides(llm=..., verifier_llm=..., crawl_adapter=...,
+embedding=...)` to `CurationEngine.embedded()` or `build_pipeline()`
+(`src/cce/components.py`). Each field left `None` is built from config as
+usual; an injected `llm` also serves the editor and implied-claim checker,
+and the verifier unless `verifier_llm` is given (setting `verifier.model`
+with only `llm` injected raises). An injected LLM or crawl adapter needs no
+`ANTHROPIC_API_KEY` / `FIRECRAWL_API_KEY`. Injected LLM providers must accept
+`output_schema`, set `stop_reason`, and report the `input_tokens`,
+`output_tokens`, `cache_creation_input_tokens` and `cache_read_input_tokens`
+usage keys (the token budget reads them). Configuration itself still loads
+only through the registry.
+
 **New configuration surfaces must enter through the registry** — add a field
 to `ConfigRegistry`, load it in `load()`, and consume it from
 `build_components`. Do not add `load_*` calls to `engine.py` or
@@ -93,7 +109,15 @@ shaped*. Loaded by id at job time, not part of `EngineConfig`:
   tiers, recency rules). Keyed by the `id` field inside each file — that id is
   what `--policy-id` and the API's `policy_id` refer to. The API loads every
   `*.yaml` in this directory at boot; malformed files are logged and skipped
-  (boot resilience — see PDR-003 in the audit pack).
+  (boot resilience — see PDR-003 in the audit pack). `domains_allow` /
+  `domains_deny` match the URL's host at label boundaries: an allow entry
+  admits the host or its subdomains, a deny entry blocks any host containing
+  its labels in sequence (`x.com` doesn't block `fox.com`; `amazon.com` does
+  block `amazon.com.au`). `reputation` also takes `marketing_phrases`
+  (whole-word; `[]` flags nothing), `primary_source_suffixes` (default
+  `.gov`, `.edu`) and `penalize_conflict_of_interest` (default true) — see
+  `policies/peer-reviewed.yaml`. `trusted_institutions` still matches by
+  substring.
 - `taxonomies/` — taxonomy definitions for evidence classification. The API
   currently selects `taxonomies/wellbeing-8d.yaml` when present.
 - `path_configs/` — output path definitions (tone, structure, depth per
@@ -148,7 +172,20 @@ An unreadable reply is resent once, then fails the job.
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `CCE_EVIDENCE_BACKEND` | `sqlite` | Backend id (only `sqlite` implemented) |
-| `CCE_EVIDENCE_SQLITE_PATH` | `evidence.db` | SQLite file (also jobs + API keys) |
+| `CCE_EVIDENCE_SQLITE_PATH` | `evidence.db` | SQLite file (also jobs, packages with their full evidence, and API keys). Relative paths resolve against the working directory |
+
+`CCE_EVIDENCE_SQLITE_PATH` is process-wide and overrides YAML, so it can't
+keep tenants apart in one process: every engine or Pipeline that relies on it
+shares one evidence pool and one job store. For per-tenant separation, give
+each tenant its own stores — `CurationEngine.embedded(evidence_store=...,
+job_store=...)` (injected stores are the caller's to connect and close), or
+one `build_pipeline(config, registry, tenant_store, components)` per tenant.
+Tenants may share one `ComponentSet`; it holds no tenant data.
+
+Schema v4 (B6) makes evidence unique on `(url, excerpt_hash)` rather than
+`excerpt_hash` alone. An existing database is rebuilt losslessly the first
+time the new code opens it (one transaction; back the file up first if you
+want a copy of the old shape).
 
 ### Crawl
 
@@ -188,6 +225,12 @@ An unreadable reply is resent once, then fails the job.
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `CCE_MAX_TOKENS_PER_JOB` | unset | Hard ceiling on accumulated LLM tokens (input + output, all paths and iterations) per job. On breach the job stops iterating and routes to `REVIEW_REQUIRED`, keeping partial drafts (ADR-003, audit-2026-06-09). Unset = unlimited. |
+
+### Publish policy
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `CCE_PUBLISH_POLICY` | `auto` | What a gate PASS on every path means (YAML `publish_policy`). `auto`: the job is `COMPLETED`. `human`: it is `READY_FOR_APPROVAL` — PASS is a quality signal and a person approves every output; `cce curate` exits 3, and `emit-mdx --job` needs `--force`. Process-wide, not per request |
 
 ### Humanization
 

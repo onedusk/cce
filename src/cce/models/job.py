@@ -22,6 +22,10 @@ class JobStatus(StrEnum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     REVIEW_REQUIRED = "review_required"
+    # Every path passed the gate, but the publish policy is "human": a person
+    # approves before anything ships (B8). Terminal for cce, which has no
+    # approve transition — approval happens in the consuming product.
+    READY_FOR_APPROVAL = "ready_for_approval"
 
 
 class JobStage(StrEnum):
@@ -83,9 +87,27 @@ class StageRecord(BaseModel):
 
 
 class DiscoverMetrics(TypedDict):
+    # URL ledger (B10): urls_gathered == urls_dropped_policy + urls_capped
+    # + urls_reused + crawl_failed + crawl_success
+    urls_gathered: int
+    urls_dropped_policy: int
+    urls_capped: int
+    urls_reused: int
     crawl_success: int
     crawl_failed: int
     crawl_failure_rate: float
+    # Excerpt ledger (B10): excerpts_gathered == dropped_fragment
+    # + dropped_date + dropped_reputation + dropped_marketing + deduplicated
+    # + capped + kept. excerpts_reused is the stored-row share of gathered.
+    excerpts_gathered: int
+    excerpts_reused: int
+    dropped_fragment: int
+    dropped_date: int
+    dropped_reputation: int
+    dropped_marketing: int
+    deduplicated: int
+    capped: int
+    kept: int
 
 
 class TagMetrics(TypedDict):

@@ -25,8 +25,11 @@ pytestmark = pytest.mark.integration
 runner = CliRunner()
 
 
-async def _seed_store(db_path: Path) -> tuple[str, str]:
-    """Seed a job store with a completed job + package. Returns (job_id, topic)."""
+async def _seed_store(
+    db_path: Path, status: JobStatus = JobStatus.COMPLETED
+) -> tuple[str, str]:
+    """Seed a job store with a job (completed by default) + package.
+    Returns (job_id, topic)."""
     store = JobStore(db_path=db_path)
     await store.connect()
     try:
@@ -37,7 +40,7 @@ async def _seed_store(db_path: Path) -> tuple[str, str]:
             citations=[Citation(evidence_id="ev_cli_1", url="https://example.com/1")],
         )
         job = make_job(
-            status=JobStatus.COMPLETED,
+            status=status,
             request=make_curation_request(
                 topic="cli test topic",
                 paths=["learn"],
@@ -192,3 +195,113 @@ class TestEmitMdxCli:
         assert result.exit_code == 0, result.output
         assert "citations" in result.output
         assert "KB" in result.output
+
+
+class TestEmitJobStatusGuard:
+    """B8: emit-mdx --job refuses a job that isn't completed unless --force."""
+
+    @pytest.mark.parametrize(
+        "status", [JobStatus.REVIEW_REQUIRED, JobStatus.READY_FOR_APPROVAL]
+    )
+    def test_non_completed_job_is_refused(self, tmp_path, status):
+        db_path = tmp_path / "test.db"
+        target = tmp_path / "content"
+        target.mkdir()
+        job_id, _ = asyncio.run(_seed_store(db_path, status))
+
+        result = _run_emit("--job", job_id, db_path=db_path, target=target)
+
+        assert result.exit_code == 1
+        assert f"job status '{status.value}'" in result.output
+        assert "--force" in result.output
+        assert list(target.iterdir()) == []
+
+    def test_failed_job_without_a_package_names_its_status(self, tmp_path):
+        """Review of B8: the CHANGELOG promises the status is named; a failed
+        job has no package, so the no-package error now carries it."""
+
+        async def seed_failed() -> str:
+            store = JobStore(db_path=tmp_path / "test.db")
+            await store.connect()
+            try:
+                job = make_job(status=JobStatus.FAILED)
+                await store.create_job(job)
+                return job.id
+            finally:
+                await store.close()
+
+        target = tmp_path / "content"
+        target.mkdir()
+        job_id = asyncio.run(seed_failed())
+
+        result = _run_emit("--job", job_id, db_path=tmp_path / "test.db", target=target)
+
+        assert result.exit_code == 1
+        assert f"no package found for job {job_id} (job status 'failed')" in (
+            result.output
+        )
+
+    def test_dry_run_is_refused_too(self, tmp_path):
+        db_path = tmp_path / "test.db"
+        target = tmp_path / "content"
+        target.mkdir()
+        job_id, _ = asyncio.run(_seed_store(db_path, JobStatus.REVIEW_REQUIRED))
+
+        result = _run_emit("--job", job_id, "--dry-run", db_path=db_path, target=target)
+
+        assert result.exit_code == 1
+        assert "review_required" in result.output
+
+    def test_force_emits_a_review_job(self, tmp_path):
+        db_path = tmp_path / "test.db"
+        target = tmp_path / "content"
+        target.mkdir()
+        job_id, _ = asyncio.run(_seed_store(db_path, JobStatus.REVIEW_REQUIRED))
+
+        result = _run_emit("--job", job_id, "--force", db_path=db_path, target=target)
+
+        assert result.exit_code == 0, result.output
+        assert any(target.rglob("page.mdx"))
+
+
+class TestCiteBy:
+    """B12: --cite-by evidence keys footnotes by evidence ID with locators."""
+
+    def test_cite_by_evidence_writes_locators(self, tmp_path):
+        db_path = tmp_path / "test.db"
+        target = tmp_path / "content"
+        target.mkdir()
+        job_id, _ = asyncio.run(_seed_store(db_path))
+
+        result = _run_emit(
+            "--job", job_id, "--cite-by", "evidence", db_path=db_path, target=target
+        )
+
+        assert result.exit_code == 0, result.output
+        [page] = list(target.rglob("page.mdx"))
+        assert '"locator": "chunk:0"' in page.read_text()
+
+    def test_default_keying_has_no_locator_in_the_page(self, tmp_path):
+        db_path = tmp_path / "test.db"
+        target = tmp_path / "content"
+        target.mkdir()
+        job_id, _ = asyncio.run(_seed_store(db_path))
+
+        result = _run_emit("--job", job_id, db_path=db_path, target=target)
+
+        assert result.exit_code == 0, result.output
+        [page] = list(target.rglob("page.mdx"))
+        assert '"locator"' not in page.read_text()
+
+    def test_unknown_cite_by_is_rejected(self, tmp_path):
+        db_path = tmp_path / "test.db"
+        target = tmp_path / "content"
+        target.mkdir()
+        job_id, _ = asyncio.run(_seed_store(db_path))
+
+        result = _run_emit(
+            "--job", job_id, "--cite-by", "page", db_path=db_path, target=target
+        )
+
+        assert result.exit_code == 1
+        assert "unknown --cite-by 'page'" in result.output

@@ -6,7 +6,26 @@ It feeds both Discovery (what to crawl) and Verification (what to trust).
 
 from __future__ import annotations
 
+import re
+
 from pydantic import BaseModel, Field
+
+# Legacy marketing indicators, kept verbatim as the default (B9). Matched as
+# whole words/phrases, case-insensitive, any whitespace between words.
+DEFAULT_MARKETING_PHRASES: tuple[str, ...] = (
+    "sponsored",
+    "advertisement",
+    "promoted",
+    "affiliate",
+    "buy now",
+    "sign up free",
+    "limited time offer",
+)
+# Host suffixes tagged as primary sources (B9, open decision 4). .org is not
+# in the engine default — it tagged aggregators such as en.wikipedia.org and
+# coursera.org as primary; a policy that wants it lists it (peer-reviewed.yaml
+# does, for health-content parity).
+DEFAULT_PRIMARY_SOURCE_SUFFIXES: tuple[str, ...] = (".gov", ".edu")
 
 
 class ReputationRule(BaseModel):
@@ -24,7 +43,32 @@ class ReputationRule(BaseModel):
     )
     block_marketing: bool = Field(
         default=True,
-        description="Filter out pages that look like marketing/sponsored content",
+        description=(
+            "Drop pages flagged as marketing/sponsored at discovery. False keeps "
+            "them (still tagged [potential-COI] for the verifier)."
+        ),
+    )
+    marketing_phrases: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_MARKETING_PHRASES),
+        description=(
+            "Phrases that flag a page as marketing (whole words, case-insensitive, "
+            "checked over the title and the first 2,000 characters). [] never flags."
+        ),
+    )
+    primary_source_suffixes: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_PRIMARY_SOURCE_SUFFIXES),
+        description=(
+            "Host suffixes tagged as primary sources, matched at a label boundary "
+            "(.gov matches www.nih.gov; a full host like mayoclinic.org also works)."
+        ),
+    )
+    penalize_conflict_of_interest: bool = Field(
+        default=True,
+        description=(
+            "Apply the verifier's conflict-of-interest rules: claims backed only by "
+            "[potential-COI] sources are lower confidence, or unsupported. False "
+            "for research that must read vendors' own pages (B9)."
+        ),
     )
 
     model_config = {"extra": "forbid"}
@@ -76,6 +120,7 @@ class SourcePolicy(BaseModel):
     recency: RecencyRule = Field(default_factory=RecencyRule)
     max_sources_per_run: int = Field(
         default=50,
+        ge=0,
         description="Cap on total sources discovered per curation run",
     )
     topic_overrides: list[TopicOverride] = Field(
@@ -84,3 +129,21 @@ class SourcePolicy(BaseModel):
     )
 
     model_config = {"extra": "forbid"}
+
+    def resolve_for_topic(self, topic: str) -> SourcePolicy:
+        """The effective policy for ``topic``: the first matching override
+        layered onto this one (allow/deny lists merge; an override's
+        ``reputation`` / ``recency`` replaces the whole rule)."""
+        for override in self.topic_overrides:
+            if re.search(override.topic_pattern, topic, re.IGNORECASE):
+                return SourcePolicy(
+                    id=self.id,
+                    name=self.name,
+                    domains_allow=self.domains_allow + override.domains_allow,
+                    domains_deny=self.domains_deny + override.domains_deny,
+                    reputation=override.reputation or self.reputation,
+                    recency=override.recency or self.recency,
+                    max_sources_per_run=self.max_sources_per_run,
+                    topic_overrides=[],  # don't recurse
+                )
+        return self

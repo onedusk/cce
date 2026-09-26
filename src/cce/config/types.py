@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Final, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 
 class LLMConfig(BaseModel):
@@ -127,7 +127,11 @@ class EvidenceStoreConfig(BaseModel):
     )
     sqlite_path: Path = Field(
         default=Path("evidence.db"),
-        description="Path to SQLite database file",
+        description=(
+            "Path to SQLite database file (also holds jobs, packages and API "
+            "keys). Process-wide when set via CCE_EVIDENCE_SQLITE_PATH: don't "
+            "rely on it for per-tenant separation — inject stores instead (B6)."
+        ),
     )
 
 
@@ -200,11 +204,16 @@ class CrawlConfig(BaseModel):
 class QualityGateConfig(BaseModel):
     """Threshold configuration for the quality gate, keyed by risk profile."""
 
-    autopublish_threshold: float = Field(
+    pass_threshold: float = Field(
         default=0.85,
         ge=0.0,
         le=1.0,
-        description="Minimum confidence score to autopublish",
+        # Renamed from autopublish_threshold (B8): PASS is a quality signal,
+        # and whether it publishes is the publish policy's call. The old key
+        # stays accepted, or an operator's YAML threshold would be dropped
+        # silently and the profile reset to the default.
+        validation_alias=AliasChoices("pass_threshold", "autopublish_threshold"),
+        description="Minimum verifier confidence for the gate to PASS",
     )
     min_citations_per_paragraph: int = Field(
         default=1, description="Minimum citations required per paragraph"
@@ -228,17 +237,17 @@ class QualityGateConfig(BaseModel):
 
 QUALITY_GATE_PROFILES: Final[dict[str, dict]] = {
     "low": {
-        "autopublish_threshold": 0.7,
+        "pass_threshold": 0.7,
         "min_citations_per_paragraph": 1,
         "max_writer_iterations": 2,
     },
     "medium": {
-        "autopublish_threshold": 0.85,
+        "pass_threshold": 0.85,
         "min_citations_per_paragraph": 1,
         "max_writer_iterations": 3,
     },
     "high": {
-        "autopublish_threshold": 0.95,
+        "pass_threshold": 0.95,
         "min_citations_per_paragraph": 2,
         "max_writer_iterations": 4,
     },
@@ -433,6 +442,15 @@ class EngineConfig(BaseModel):
     )
     api: APIConfig = Field(default_factory=APIConfig)
     humanization: HumanizationConfig = Field(default_factory=HumanizationConfig)
+    publish_policy: Literal["auto", "human"] = Field(
+        default="auto",
+        description=(
+            "What a gate PASS on every path means (B8). 'auto' (default): the "
+            "job is COMPLETED, as before. 'human': it is READY_FOR_APPROVAL — "
+            "PASS is a quality signal, and a person approves every output. "
+            "Process-wide, not per request, so an API client can't downgrade it."
+        ),
+    )
     max_tokens_per_job: int | None = Field(
         default=None,
         ge=1,
