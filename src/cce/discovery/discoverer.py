@@ -123,6 +123,10 @@ def _discovery_metrics(**counts: int) -> dict[str, int | float]:
 def _url_host(url: str) -> str:
     """Lower-cased host without port, userinfo or trailing dot ('' if none)."""
     try:
+        # WHATWG parsers (browsers) read "\" as "/" in http(s) URLs; urlparse
+        # keeps it in the authority, so https://a.com\@b.com/ would be b.com.
+        if urlparse(url).scheme in ("http", "https"):
+            url = url.replace("\\", "/")
         host = urlparse(url).hostname or ""
     except ValueError:
         return ""

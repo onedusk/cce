@@ -222,6 +222,23 @@ class TestParseResponse:
         assert len(output.unit.citations) == 1
         assert output.unit.citations[0].evidence_id == "ev_001"
 
+    def test_parse_response_unknown_citation_id_is_clipped_in_log(self, caplog):
+        """A model-supplied ID can't smuggle reply text or a forged line into logs."""
+        smuggled = "ev_" + "A" * 30 + "\nINJECTED log line " + "B" * 100
+        raw = _make_writer_json(citations_used=["ev_001", smuggled])
+        response = LLMResponse(content=raw, model="mock")
+
+        with caplog.at_level("WARNING"):
+            self._writer()._parse_response(
+                response, [make_evidence(id="ev_001")], "blog", self._lineage()
+            )
+
+        (record,) = [r for r in caplog.records if "unknown evidence ID" in r.message]
+        assert "\n" not in record.message
+        assert "INJECTED" not in record.message
+        assert "BBBB" not in record.message
+        assert repr(smuggled[:40]) in record.message
+
     def test_parse_response_empty_claims_filtered(self):
         ev = make_evidence(id="ev_001")
         raw = _make_writer_json(
@@ -497,6 +514,33 @@ async def test_write_resends_once_on_unparseable_reply(monkeypatch):
 
 
 @pytest.mark.integration
+async def test_write_token_usage_includes_the_discarded_attempt(monkeypatch):
+    monkeypatch.setattr("cce.llm.retry.asyncio.sleep", AsyncMock())
+    llm = MockLLMProvider(
+        [
+            LLMResponse(
+                content="not json",
+                model="mock",
+                usage={"input_tokens": 100, "output_tokens": 7},
+                stop_reason="end_turn",
+            ),
+            LLMResponse(
+                content=_make_writer_json(),
+                model="mock",
+                usage={"input_tokens": 120, "output_tokens": 30},
+                stop_reason="end_turn",
+            ),
+        ]
+    )
+
+    output = await Writer(llm).write(
+        make_curation_request(), [make_evidence(id="ev_001")], "blog"
+    )
+
+    assert output.token_usage == {"input_tokens": 220, "output_tokens": 37}
+
+
+@pytest.mark.integration
 async def test_write_raises_after_second_unparseable_reply(monkeypatch):
     """Retry once, then fail: no raw-markdown fallback, no third call."""
     monkeypatch.setattr("cce.llm.retry.asyncio.sleep", AsyncMock())
@@ -514,6 +558,9 @@ async def test_write_raises_after_second_unparseable_reply(monkeypatch):
 
     assert len(llm.calls) == 2
     assert exc.value.raw_response == "second bad"
+    # The first attempt is chained, so a caller can reach both replies.
+    assert isinstance(exc.value.__cause__, UnparseableResponseError)
+    assert exc.value.__cause__.raw_response == "first bad"
 
 
 @pytest.mark.unit

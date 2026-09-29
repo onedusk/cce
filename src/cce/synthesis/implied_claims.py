@@ -1,7 +1,7 @@
 """Implied-claim checker (humanization M04).
 
 Detects contrastive frames in a draft, extracts the dismissed-side topic via
-the LLM, and searches the evidence store for material supporting that side.
+the LLM, and searches the path's evidence for material supporting that side.
 Surfaces flagged frames as annotations for the Editor (M03).
 
 Why this matters (PDR-002): the verifier checks every *explicit* claim, but
@@ -20,16 +20,16 @@ rather than a full spectrum rewrite.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 
 from cce.config.markers import ContrastiveSubtype, HumanizationMarkers
 from cce.config.types import ImpliedClaimsConfig
 from cce.evidence.formatting import quote_untrusted
-from cce.evidence.store import EvidenceStore
 from cce.llm.base import LLMMessage, LLMProvider, ensure_complete
 from cce.llm.retry import with_llm_retry
 from cce.models.evidence import Evidence
-from cce.parsing import extract_json
+from cce.parsing import clip_for_log, extract_json
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +84,22 @@ Return JSON: {"dismissed_topic": "<topic>", "rationale": "<why>"}\
 """
 
 
+# Words the contrastive patterns themselves supply ("unlike", "rather than",
+# "by contrast", "it's not about", ...). A matched fragment made only of these
+# names no dismissed topic, so the extractor has nothing to return: "rather
+# than " and "by contrast" match that way on every hit.
+_FRAME_KEYWORDS = frozenset(
+    {"unlike", "not", "just", "only", "but", "rather", "than", "it", "its", "s"}
+    | {"about", "by", "contrast"}
+)
+_WORD_RE = re.compile(r"[a-z]+")
+
+
+def _names_a_topic(fragment: str) -> bool:
+    """Return True when the fragment has a word besides the frame keywords."""
+    return any(w not in _FRAME_KEYWORDS for w in _WORD_RE.findall(fragment.lower()))
+
+
 class ImpliedClaimChecker:
     """Find contrastive frames whose dismissed side has supporting evidence."""
 
@@ -101,20 +117,22 @@ class ImpliedClaimChecker:
         self,
         content: str,
         cited_evidence: list[Evidence],
-        *,
-        evidence_store: EvidenceStore,
     ) -> list[ImpliedClaimAnnotation]:
         """Return annotations for frames whose dismissed side has counter-evidence.
 
         Args:
             content: Draft body (citation markers may be present).
-            cited_evidence: Evidence the writer drew from. Used to compute the
-                release-valve ratio: if the counter-evidence pool is small
-                relative to the cited pool on the dismissed topic, the
-                contrast is editorially permissible without a spectrum rewrite.
-            evidence_store: The store of the Pipeline running this check. Passed
-                per call, not bound at construction, so one checker shared by
-                several Pipelines (tenants) never searches another's store (B6).
+            cited_evidence: Evidence the path can cite (the writer's pool).
+                Counter-evidence is searched in this list only, not the
+                store: a store-wide search returned other jobs' evidence,
+                and a hint naming an ID the path cannot cite makes the
+                editor's rewrite citation drift, discarded after paying for
+                the call. It also keeps tenants apart without a store (B6).
+                So counter-evidence is a subset of this pool, and the
+                release-valve ratio reads as the share of the path's own
+                evidence that supports the dismissed side: at or below
+                ``dismissal_release_valve_ratio`` the contrast stands
+                without a spectrum rewrite.
         """
         frames = self._detect_frames(content)
         if not frames:
@@ -129,17 +147,21 @@ class ImpliedClaimChecker:
             # the fragment-too-short warnings the extractor logs on them.
             if frame.kind == "parasitic":
                 continue
+            # Keyword-only matches carry no topic; asking the LLM for one
+            # just spends a request on "I don't see a fragment" replies.
+            if not _names_a_topic(frame.matched_text):
+                continue
             dismissed = await self._extract_dismissed_topic(frame)
             if not dismissed:
                 continue
-            counter = await self._search_counter_evidence(dismissed, evidence_store)
+            counter = self._search_counter_evidence(dismissed, cited_evidence)
             if not counter:
                 continue
             if self._below_release_valve(counter, cited_evidence):
                 logger.info(
                     "Release valve suppressed implied-claim annotation for "
-                    "topic=%r (counter=%d, cited=%d)",
-                    dismissed,
+                    "topic=%s (counter=%d, cited=%d)",
+                    clip_for_log(dismissed),
                     len(counter),
                     len(cited_evidence),
                 )
@@ -193,17 +215,22 @@ class ImpliedClaimChecker:
 
         return await with_llm_retry(_attempt)
 
-    async def _search_counter_evidence(
-        self, dismissed_topic: str, evidence_store: EvidenceStore
+    def _search_counter_evidence(
+        self, dismissed_topic: str, path_evidence: list[Evidence]
     ) -> list[Evidence]:
-        """Search the evidence store for material supporting the dismissed topic."""
+        """Find path evidence supporting the dismissed topic (see :meth:`check`)."""
         if self._config.search_strategy in ("keyword", "llm_extract"):
-            # v1: both strategies hit the same keyword search — the LLM
-            # extracted the topic phrase, the store does keyword lookup.
-            return await evidence_store.search(
-                topic=dismissed_topic,
-                limit=self._config.counter_evidence_search_limit,
-            )
+            # v1: both strategies run the same keyword match: the LLM
+            # extracted the topic phrase, matched as the store's topic
+            # search does (case-insensitive substring of title or excerpt).
+            needle = dismissed_topic.casefold()
+            matches = [
+                ev
+                for ev in path_evidence
+                if needle in (ev.title or "").casefold()
+                or needle in ev.excerpt.casefold()
+            ]
+            return matches[: self._config.counter_evidence_search_limit]
         # search_strategy == "embedding" — deferred (Stage 1 ImpliedClaimsConfig)
         raise NotImplementedError("Embedding-based counter-search deferred to post-H4")
 
@@ -215,7 +242,9 @@ class ImpliedClaimChecker:
         """Return True when counter-evidence is small enough to permit the contrast.
 
         Empty cited evidence returns False — without a denominator we can't
-        compute a meaningful ratio, so we don't auto-suppress.
+        compute a meaningful ratio, so we don't auto-suppress. (Since counter
+        is drawn from the cited pool, :meth:`check` never gets here with an
+        empty pool; the guard stays for direct callers.)
         """
         if not cited_evidence:
             return False

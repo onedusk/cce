@@ -86,3 +86,30 @@ def test_api_envelope_serializable():
     d = env.model_dump()
     assert d["data"] == {"key": "value"}
     assert d["error"] is None
+
+
+async def test_provider_config_error_exits_with_one_log_line(tmp_path, caplog):
+    """A ConfigError raised while building providers (here thinking: disabled
+    on a model that rejects it) exits cleanly like a missing key, instead of
+    escaping the lifespan as a traceback."""
+    from cce.api.app import create_app
+    from cce.config.types import (
+        CrawlConfig,
+        EmbeddingConfig,
+        EngineConfig,
+        EvidenceStoreConfig,
+        LLMConfig,
+    )
+
+    config = EngineConfig(
+        llm=LLMConfig(api_key="k", model="claude-fable-5", thinking="disabled"),
+        crawl=CrawlConfig(api_key="k"),
+        evidence_store=EvidenceStoreConfig(sqlite_path=tmp_path / "ev.db"),
+        embedding=EmbeddingConfig(enabled=False),
+    )
+    app = create_app(config)
+    with pytest.raises(SystemExit):
+        async with app.router.lifespan_context(app):
+            pass
+    assert "Configuration error" in caplog.text
+    assert "claude-fable-5" in caplog.text

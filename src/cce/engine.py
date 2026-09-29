@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -56,11 +57,18 @@ async def run_pipeline_task(
     job_store: JobStore,
     semaphore: asyncio.Semaphore,
     running_tasks: dict[str, asyncio.Task],
+    on_error: Callable[[BaseException], None] | None = None,
 ) -> None:
     """Shared background pipeline execution.
 
     Used by both the API route layer and CurationEngine embedded mode.
-    Updates job status through the lifecycle, stores the package on success.
+    Updates job status through the lifecycle and stores the package whenever
+    the pipeline produced one: also for a FAILED job whose earlier paths
+    completed (their units only; emit-mdx still refuses it without --force).
+
+    ``on_error`` receives the exception that failed the run, in memory, before
+    the terminal status is stored (embedded mode hands it to the JobHandle).
+    It is never stored: the API passes nothing.
     """
     job: Job | None = None
     try:
@@ -72,6 +80,8 @@ async def run_pipeline_task(
             await job_store.update_job(job)
 
             result = await pipeline.run(request, policy)
+            if on_error is not None and result.error is not None:
+                on_error(result.error)
 
             # Sync pipeline result back to stored job
             job.status = result.job.status
@@ -95,6 +105,8 @@ async def run_pipeline_task(
         raise
     except Exception as e:
         logger.exception("Pipeline failed for job %s: %s", job_id, e)
+        if on_error is not None:
+            on_error(e)
         if job is None:
             job = await job_store.get_job(job_id)
         if job:
@@ -129,10 +141,26 @@ class JobHandle:
         self._running_tasks = running_tasks
         self._engine = engine
         self._http_client = http_client
+        self._error: BaseException | None = None
 
     @property
     def job_id(self) -> str:
         return self._job_id
+
+    @property
+    def error(self) -> BaseException | None:
+        """The exception that failed this job's last run, in memory only.
+
+        Embedded mode only (always None in remote mode, until a run fails,
+        and for a failure without an exception such as no evidence). An ``UnparseableResponseError`` keeps the reply text on
+        ``raw_response`` for the caller to persist where it sees fit; the
+        stored job and the API only ever see ``job.error``, which never
+        carries reply text. Cleared by ``retry()``.
+        """
+        return self._error
+
+    def _set_error(self, error: BaseException) -> None:
+        self._error = error
 
     async def status(self) -> Job:
         """Get current job state."""
@@ -192,9 +220,10 @@ class JobHandle:
             job.error = None
             job.stage = None
             job.completed_at = None
+            self._error = None
             assert self._job_store is not None
             await self._job_store.update_job(job)
-            self._engine._launch_pipeline(job)
+            self._engine._launch_pipeline(job, self)
             return job
         assert self._http_client is not None
         resp = await self._http_client.post(f"/v1/curate/jobs/{self._job_id}/retry")
@@ -210,6 +239,10 @@ class CurationEngine:
     CLI and runner scripts), and ``remote(base_url, api_key)`` becomes a
     thin HTTP client against a running CCE API server. Both modes expose
     the same ``curate() -> JobHandle`` interface; consumers don't branch.
+
+    In embedded mode a failed run's exception is on ``JobHandle.error``, in
+    memory only (e.g. ``UnparseableResponseError.raw_response``, the reply
+    text): the reply text never reaches the job store, the logs or the API.
     """
 
     def __init__(self) -> None:
@@ -375,20 +408,22 @@ class CurationEngine:
             request=request,
         )
         await self._job_store.create_job(job)
-        self._launch_pipeline(job)
-
-        return JobHandle(
+        handle = JobHandle(
             job.id,
             job_store=self._job_store,
             running_tasks=self._running_tasks,
             engine=self,
         )
+        self._launch_pipeline(job, handle)
+        return handle
 
-    def _launch_pipeline(self, job: Job) -> None:
+    def _launch_pipeline(self, job: Job, handle: JobHandle) -> None:
         """Launch a background pipeline task for a job."""
         policy = self._policies.get(job.request.policy_id)
         assert policy is not None
-        task = asyncio.create_task(self._run_pipeline(job.id, job.request, policy))
+        task = asyncio.create_task(
+            self._run_pipeline(job.id, job.request, policy, handle)
+        )
         self._running_tasks[job.id] = task
 
     async def _run_pipeline(
@@ -396,6 +431,7 @@ class CurationEngine:
         job_id: str,
         request: CurationRequest,
         policy: SourcePolicy,
+        handle: JobHandle,
     ) -> None:
         """Background pipeline execution — delegates to shared function."""
         assert self._job_store is not None
@@ -409,6 +445,7 @@ class CurationEngine:
             job_store=self._job_store,
             semaphore=self._semaphore,
             running_tasks=self._running_tasks,
+            on_error=handle._set_error,
         )
 
     async def _curate_remote(self, request: CurationRequest) -> JobHandle:

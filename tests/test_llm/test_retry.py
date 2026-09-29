@@ -184,3 +184,44 @@ async def test_raises_last_error_with_max_attempts_1():
     with pytest.raises(ValueError, match="once"):
         await with_llm_retry(fn, max_attempts=1)
     fn.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Each failed attempt is chained to the one before it
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+async def test_final_error_chains_every_earlier_attempt():
+    e1, e2, e3 = ValueError("e1"), ValueError("e2"), ValueError("e3")
+    fn = AsyncMock(side_effect=[e1, e2, e3])
+    with patch("cce.llm.retry.asyncio.sleep", new_callable=AsyncMock):
+        with pytest.raises(ValueError) as exc:
+            await with_llm_retry(fn, max_attempts=3)
+    assert exc.value is e3
+    assert e3.__cause__ is e2
+    assert e2.__cause__ is e1
+    assert e1.__cause__ is None
+
+
+@pytest.mark.unit
+async def test_chaining_keeps_an_existing_cause():
+    """An error raised ``from`` something keeps that cause."""
+    original = KeyError("root")
+    e1, e2 = ValueError("e1"), ValueError("e2")
+    e2.__cause__ = original
+    fn = AsyncMock(side_effect=[e1, e2])
+    with patch("cce.llm.retry.asyncio.sleep", new_callable=AsyncMock):
+        with pytest.raises(ValueError) as exc:
+            await with_llm_retry(fn, max_attempts=2)
+    assert exc.value.__cause__ is original
+
+
+@pytest.mark.unit
+async def test_same_error_instance_is_not_chained_to_itself():
+    err = ValueError("same")
+    fn = AsyncMock(side_effect=err)
+    with patch("cce.llm.retry.asyncio.sleep", new_callable=AsyncMock):
+        with pytest.raises(ValueError):
+            await with_llm_retry(fn, max_attempts=3)
+    assert err.__cause__ is None

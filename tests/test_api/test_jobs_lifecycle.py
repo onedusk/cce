@@ -293,6 +293,54 @@ async def test_pipeline_error_sets_failed_status(tmp_path: Path):
     await evidence_store.close()
 
 
+async def test_unparseable_reply_never_reaches_api_responses(
+    tmp_path: Path, monkeypatch, caplog
+):
+    """The reply text of an unparseable writer reply stays out of every API
+    response and the job store (it is only in memory, for embedded callers)."""
+    monkeypatch.setattr("cce.llm.retry._with_jitter", lambda delay: 0.0)
+    sentinel = "SENTINEL-CONFIDENTIAL client statement"
+    app, job_store, evidence_store = await _make_lifecycle_app(
+        tmp_path,
+        llm_responses=[f"{sentinel} not json", f"{sentinel} still not json"],
+    )
+
+    with caplog.at_level("DEBUG"):
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.post(
+                    "/v1/curate/jobs",
+                    json={
+                        "topic": "test topic",
+                        "paths": ["blog"],
+                        "policy_id": "test-policy",
+                    },
+                )
+                job_id = resp.json()["data"]["id"]
+
+                data = await wait_for_job_status(
+                    client, job_id, {"failed", "completed"}
+                )
+                assert data["status"] == "failed"
+                assert data["error"]["code"] == "unparseable_response"
+                for url in (
+                    f"/v1/curate/jobs/{job_id}",
+                    f"/v1/curate/jobs/{job_id}/package",
+                    "/v1/curate/jobs",
+                ):
+                    assert sentinel not in (await client.get(url)).text
+
+    stored = await job_store.get_job(job_id)
+    assert stored is not None
+    assert sentinel not in stored.model_dump_json()
+    assert sentinel not in caplog.text
+
+    await job_store.close()
+    await evidence_store.close()
+
+
 async def test_every_cited_id_resolves_through_the_evidence_endpoint(tmp_path: Path):
     """B6 acceptance: job 1 stores an excerpt at URL A; job 2 finds the same
     text syndicated at URL B. Every evidence ID job 2's package cites must

@@ -8,6 +8,7 @@ import pytest
 
 from cce.components import ComponentOverrides
 from cce.engine import CurationEngine, JobHandle
+from cce.llm.base import UnparseableResponseError
 from cce.models.job import JobStatus
 from cce.models.request import CurationRequest
 from tests.test_orchestrator.conftest import (
@@ -353,6 +354,86 @@ async def test_embedded_review_package_carries_verification(
         assert "no citations" in record.feedback
         assert record.writer_gaps == ["gap"]
         assert [c.assessment for c in record.report.claims].count("uncited") == 2
+    finally:
+        await engine.close()
+
+
+async def test_embedded_failed_job_stores_completed_paths(tmp_path: Path, monkeypatch):
+    """A later path's failure fails the job; the stored package keeps the
+    path that completed before it."""
+    monkeypatch.setattr("cce.llm.retry._with_jitter", lambda delay: 0.0)
+    script = [
+        writer_json(),
+        verifier_json(supported=10, total=10, gaps=0),
+        "not json",
+        "still not json",
+    ]
+    engine = await _make_engine(tmp_path, monkeypatch, llm_responses=script)
+    try:
+        handle = await engine.curate(
+            CurationRequest(
+                topic="test topic",
+                paths=["learn", "explore"],
+                policy_id="test-policy",
+            )
+        )
+        job = await handle.wait(timeout=10)
+        assert job.status == JobStatus.FAILED
+        assert job.error is not None
+        assert job.error.code == "unparseable_response"
+
+        package = await handle.package()
+        assert package is not None
+        assert package.job_id == handle.job_id
+        assert [u.path for u in package.units] == ["learn"]
+        assert [r.path for r in package.verification] == ["learn"]
+    finally:
+        await engine.close()
+
+
+async def test_embedded_handle_error_keeps_reply_in_memory_only(
+    tmp_path: Path, monkeypatch, caplog
+):
+    """An unparseable reply reaches the embedded caller on JobHandle.error
+    (with its raw_response), but never the stored job, package or logs."""
+    monkeypatch.setattr("cce.llm.retry._with_jitter", lambda delay: 0.0)
+    sentinel = "SENTINEL-CONFIDENTIAL client statement"
+    script = [f"{sentinel} not json", f"{sentinel} still not json"]
+    engine = await _make_engine(tmp_path, monkeypatch, llm_responses=script)
+    try:
+        handle = await engine.curate(
+            CurationRequest(topic="test topic", paths=["blog"], policy_id="test-policy")
+        )
+        assert handle.error is None
+        with caplog.at_level("DEBUG"):
+            job = await handle.wait(timeout=10)
+
+        assert job.status == JobStatus.FAILED
+        assert isinstance(handle.error, UnparseableResponseError)
+        assert sentinel in handle.error.raw_response
+        assert sentinel not in job.model_dump_json()
+        assert await handle.package() is None
+        assert sentinel not in caplog.text
+    finally:
+        await engine.close()
+
+
+async def test_embedded_retry_clears_handle_error(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("cce.llm.retry._with_jitter", lambda delay: 0.0)
+    script = ["not json", "still not json", writer_json(), verifier_json()]
+    engine = await _make_engine(tmp_path, monkeypatch, llm_responses=script)
+    try:
+        handle = await engine.curate(
+            CurationRequest(topic="test topic", paths=["blog"], policy_id="test-policy")
+        )
+        assert (await handle.wait(timeout=10)).status == JobStatus.FAILED
+        assert handle.error is not None
+
+        await handle.retry()
+        assert handle.error is None
+        final = await handle.wait(timeout=10)
+        assert final.status != JobStatus.FAILED
+        assert handle.error is None
     finally:
         await engine.close()
 

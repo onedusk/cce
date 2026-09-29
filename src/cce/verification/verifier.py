@@ -26,6 +26,7 @@ from cce.llm.base import (
     LLMResponse,
     UnparseableResponseError,
     ensure_complete,
+    sum_usage,
 )
 from cce.llm.retry import with_llm_retry
 from cce.models.content import ContentUnit
@@ -419,6 +420,8 @@ traced to the evidence above should be flagged.
             len(evidence),
         )
 
+        attempt_usage: list[dict] = []
+
         async def _attempt() -> VerificationReport:
             response = await self._llm.complete(
                 messages,
@@ -431,9 +434,11 @@ traced to the evidence above should be flagged.
                 max_tokens=self._config.max_tokens,
                 output_schema=VERIFIER_OUTPUT_SCHEMA,
             )
+            attempt_usage.append(response.usage)
             ensure_complete(response, role="verifier")
             report = self._parse_response(response)
-            report.token_usage = response.usage
+            # A discarded (resent) attempt was paid for too: count it.
+            report.token_usage = sum_usage(attempt_usage)
             return report
 
         # One resend on an unparseable reply, then the error propagates.

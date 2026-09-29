@@ -103,6 +103,22 @@ async def test_editor_flags_dropped_citation(caplog):
     assert any("citation drift" in r.message for r in caplog.records)
 
 
+async def test_editor_drift_log_clips_model_supplied_markers(caplog):
+    smuggled = "[ev:" + "A" * 30 + "\nINJECTED log line " + "B" * 100 + "]"
+    editor, _llm = _editor(_edit_response(f"Sleep [ev:abc] matters. {smuggled}"))
+    unit = _make_unit("Sleep [ev:abc] matters.")
+
+    with caplog.at_level(logging.WARNING):
+        out = await editor.edit(unit)
+
+    assert out.citations_preserved is False
+    (record,) = [r for r in caplog.records if "citation drift" in r.message]
+    assert "\n" not in record.message
+    assert "INJECTED" not in record.message
+    assert "BBBB" not in record.message
+    assert repr(smuggled[:40]) in record.message
+
+
 async def test_editor_flags_added_citation():
     editor, _llm = _editor(
         _edit_response(

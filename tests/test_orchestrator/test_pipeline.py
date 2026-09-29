@@ -6,9 +6,18 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from cce.llm.base import LLMMessage, LLMResponse, UnparseableResponseError
+from cce.llm.base import (
+    IncompleteResponseError,
+    LLMMessage,
+    LLMResponse,
+    UnparseableResponseError,
+)
 from cce.models.job import Job, JobStage, JobStatus
-from cce.orchestrator.pipeline import Pipeline, _per_path_iteration_counts
+from cce.orchestrator.pipeline import (
+    Pipeline,
+    _error_code_and_stage,
+    _per_path_iteration_counts,
+)
 from cce.output.mdx.citations import build_citation_index
 from cce.verification.gate import GateDecision
 from tests.conftest import (
@@ -86,7 +95,40 @@ async def test_pipeline_truncated_writer_reply_fails_job_with_reason(sqlite_stor
     assert "claude-sonnet-5" in message
     assert "max_tokens" in message
     assert result.job.error.stage == JobStage.WRITE
+    assert result.job.error.code == "incomplete_response"
     assert len(llm.calls) == 1
+
+
+@pytest.mark.integration
+async def test_pipeline_truncated_verifier_reply_records_verify_stage(sqlite_store):
+    """A verifier reply cut off at max_tokens fails the job with code
+    incomplete_response at stage VERIFY (the job's own stage is still WRITE
+    during the loop, so the stage comes from the failing role)."""
+    llm = MockLLMProvider(
+        [
+            LLMResponse(content=_writer_json(), model="mock", stop_reason="end_turn"),
+            LLMResponse(
+                content='{"claims": [',
+                model="mock",
+                usage={"output_tokens": 100},
+                stop_reason="max_tokens",
+            ),
+        ],
+        cite_placeholders=True,
+    )
+    pipeline = Pipeline(
+        config=make_engine_config(),
+        crawl_adapter=_make_adapter(),
+        evidence_store=sqlite_store,
+        llm=llm,
+    )
+
+    result = await pipeline.run(make_curation_request(), make_source_policy())
+
+    assert result.job.status == JobStatus.FAILED
+    assert result.job.error is not None
+    assert result.job.error.code == "incomplete_response"
+    assert result.job.error.stage == JobStage.VERIFY
 
 
 @pytest.mark.integration
@@ -400,6 +442,72 @@ async def test_trio_gate_attribution_completes_and_citations_resolve(sqlite_stor
 
 
 @pytest.mark.integration
+async def test_trio_later_path_failure_keeps_completed_paths(sqlite_store, monkeypatch):
+    """A path that raises fails the job, but the package keeps the units and
+    verification records of the paths that finished before it."""
+    monkeypatch.setattr("cce.llm.retry._with_jitter", lambda delay: 0.0)
+    llm = _PathDispatchLLM(
+        writer_by_path={
+            "learn": _trio_writer_json("learn"),
+            "explore": "not json at all",
+            "apply": _trio_writer_json("apply"),
+        },
+        verifier_by_path={
+            "learn": [_verifier_json(supported=10, total=10, gaps=0)],
+            "apply": [_verifier_json(supported=10, total=10, gaps=0)],
+        },
+    )
+    pipeline = Pipeline(
+        config=make_engine_config(),
+        crawl_adapter=_make_adapter(),
+        evidence_store=sqlite_store,
+        llm=llm,
+    )
+
+    result = await pipeline.run(
+        make_curation_request(paths=_TRIO), make_source_policy()
+    )
+
+    assert result.job.status == JobStatus.FAILED
+    assert result.job.error is not None
+    assert result.job.error.code == "unparseable_response"
+    assert result.job.error.stage == JobStage.WRITE
+    assert result.job.stage == JobStage.WRITE
+    assert isinstance(result.error, UnparseableResponseError)
+    assert ("writer", "apply") not in llm.calls
+    assert result.package is not None
+    assert [u.path for u in result.package.units] == ["learn"]
+    [record] = result.package.verification
+    assert record.path == "learn"
+    assert record.decision == "pass"
+    assert record.unit_id == result.package.units[0].id
+    assert result.package.evidence
+
+
+@pytest.mark.integration
+async def test_first_path_failure_has_no_package(sqlite_store, monkeypatch):
+    """Nothing finished before the failure: no partial package."""
+    monkeypatch.setattr("cce.llm.retry._with_jitter", lambda delay: 0.0)
+    llm = _PathDispatchLLM(
+        writer_by_path={p: "not json at all" for p in _TRIO},
+        verifier_by_path={},
+    )
+    pipeline = Pipeline(
+        config=make_engine_config(),
+        crawl_adapter=_make_adapter(),
+        evidence_store=sqlite_store,
+        llm=llm,
+    )
+
+    result = await pipeline.run(
+        make_curation_request(paths=_TRIO), make_source_policy()
+    )
+
+    assert result.job.status == JobStatus.FAILED
+    assert result.package is None
+
+
+@pytest.mark.integration
 async def test_trio_empty_content_path_routes_to_review(sqlite_store):
     """An empty-content path contributes zero gate results → terminal FAIL,
     so the job routes to REVIEW_REQUIRED and yields no unit for that path."""
@@ -485,6 +593,35 @@ def test_update_job_status_transitions():
     assert job2.error.message == "oops"
 
 
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("role", "stage"),
+    [
+        ("writer", JobStage.WRITE),
+        ("verifier", JobStage.VERIFY),
+        ("editor", JobStage.EDIT),
+        ("implied-claim checker", JobStage.EDIT),
+        ("some future role", JobStage.PUBLISH),
+    ],
+)
+def test_error_code_and_stage_follow_the_failing_role(role, stage):
+    reply = LLMResponse(content="x", model="m", stop_reason="max_tokens")
+    assert _error_code_and_stage(
+        IncompleteResponseError(role, reply), JobStage.PUBLISH
+    ) == ("incomplete_response", stage)
+    assert _error_code_and_stage(
+        UnparseableResponseError(role, reply), JobStage.PUBLISH
+    ) == ("unparseable_response", stage)
+
+
+@pytest.mark.unit
+def test_error_code_and_stage_other_errors_keep_pipeline_error():
+    assert _error_code_and_stage(RuntimeError("boom"), JobStage.TAG) == (
+        "pipeline_error",
+        JobStage.TAG,
+    )
+
+
 @pytest.mark.integration
 async def test_pipeline_unparseable_writer_reply_fails_job_without_leaking_it(
     sqlite_store, caplog, monkeypatch
@@ -509,6 +646,8 @@ async def test_pipeline_unparseable_writer_reply_fails_job_without_leaking_it(
     assert result.job.error is not None
     assert "writer" in result.job.error.message
     assert "could not be parsed" in result.job.error.message
+    assert result.job.error.code == "unparseable_response"
+    assert result.job.error.stage == JobStage.WRITE
     assert sentinel not in result.job.error.message
     assert sentinel not in caplog.text
     assert len(llm.calls) == 2

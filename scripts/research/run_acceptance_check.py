@@ -344,7 +344,7 @@ async def judge_repetition(drafts: dict[str, str], llm) -> dict:
         }
 
     # Import lazily so structural-only / test imports don't pull the LLM types.
-    from cce.llm.base import LLMMessage
+    from cce.llm.base import IncompleteResponseError, LLMMessage, ensure_complete
 
     ordered = [r for r in _PATHS if r in drafts]
     ordered += [k for k in drafts if k not in _PATHS]
@@ -358,6 +358,11 @@ async def judge_repetition(drafts: dict[str, str], llm) -> dict:
         temperature=0.0,
         system=_JUDGE_RUBRIC,
     )
+    # A truncated or refused reply is reported as such, not as bad JSON.
+    try:
+        ensure_complete(response, role="repetition judge")
+    except IncompleteResponseError as e:
+        return {"verdict": "error", "offending_passages": [], "rationale": str(e)}
     return _parse_judge_response(response.content)
 
 

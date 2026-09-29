@@ -72,13 +72,15 @@ async def lifespan(app: FastAPI):
         # ADR-006). SystemExit instead of letting ConfigError propagate —
         # Starlette formats propagated lifespan exceptions as full tracebacks
         # in uvicorn's log; the operator should see one actionable line.
+        # The registry load and the providers built in _build_pipeline (e.g.
+        # thinking: disabled on a model that rejects it) raise ConfigError too.
         try:
             validate_required_keys(config)
+            registry = ConfigRegistry.load(Path("."), engine=config)
+            pipeline = _build_pipeline(config, evidence_store, registry)
         except ConfigError as e:
             logger.error("Configuration error: %s", e)
             raise SystemExit(1) from None
-        registry = ConfigRegistry.load(Path("."), engine=config)
-        pipeline = _build_pipeline(config, evidence_store, registry)
         locally_created.add("pipeline")
 
     # -- Policies --

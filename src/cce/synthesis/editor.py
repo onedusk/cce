@@ -27,7 +27,7 @@ from cce.llm.retry import with_llm_retry
 from cce.models.content import ContentUnit
 from cce.models.paths import PathConfig
 from cce.models.style import StyleScores
-from cce.parsing import EV_MARKER_RE
+from cce.parsing import EV_MARKER_RE, clip_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -280,8 +280,8 @@ class Editor:
                 "(first missing=%s, first extra=%s)",
                 len(missing),
                 len(extra),
-                next(iter(missing), None),
-                next(iter(extra), None),
+                clip_for_log(next(iter(missing), None)),
+                clip_for_log(next(iter(extra), None)),
             )
 
         return EditorOutput(

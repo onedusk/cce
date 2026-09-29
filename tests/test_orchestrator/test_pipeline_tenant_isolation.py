@@ -169,7 +169,7 @@ async def test_tenants_sharing_components_never_see_each_others_rows(tmp_path: P
         # blocks, and the editor prompt that carries the checker's hint IDs).
         b_text = _calls_text(b_calls)
         assert token not in b_text and PLANTED_ID not in b_text
-        # The implied-claim checker really ran for B — on B's store, not A's.
+        # The implied-claim checker really ran for B, on B's path evidence.
         assert any((c["system"] or "") == _DISMISSED_TOPIC_PROMPT for c in b_calls)
         assert any(r.stage == JobStage.EDIT for r in result_b.job.stages)
         assert spy_a.search_calls == []
@@ -184,8 +184,9 @@ async def test_tenants_sharing_components_never_see_each_others_rows(tmp_path: P
         # In-tenant URL reuse: A's stored row served the shared URL...
         assert SHARED_URL not in adapter.crawled
         assert any(ev.id == PLANTED_ID for ev in result_a.package.evidence)
-        # ...and A's checker searched A's store and found the planted row.
-        assert spy_a.search_calls == ["sleeping pills"]
+        # ...and A's checker found the planted row in A's path evidence
+        # (it searches the path, never the store).
+        assert spy_a.search_calls == []
         editor_calls = [
             c
             for c in a_calls

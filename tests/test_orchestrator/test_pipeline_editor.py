@@ -336,3 +336,33 @@ async def test_editor_disabled_at_factory_level(monkeypatch, tmp_path):
     pipe_both = _build_pipeline(cfg_both, store)
     assert pipe_both._scorer is not None
     assert pipe_both._editor is not None
+
+
+async def test_truncated_editor_reply_fails_job_at_edit_stage(sqlite_store):
+    """An editor reply cut off at max_tokens fails the job with code
+    incomplete_response at stage EDIT."""
+    llm = MockLLMProvider(
+        [
+            LLMResponse(
+                content=_ai_flat_writer_json(), model="mock", stop_reason="end_turn"
+            ),
+            LLMResponse(
+                content="=== EDITED START ===", model="mock", stop_reason="max_tokens"
+            ),
+        ],
+        cite_placeholders=True,
+    )
+    pipeline = Pipeline(
+        config=make_engine_config(),
+        crawl_adapter=_make_adapter(),
+        evidence_store=sqlite_store,
+        llm=llm,
+        scorer=_scorer(),
+        editor=_editor(llm),
+    )
+
+    result = await pipeline.run(make_curation_request(), make_source_policy())
+
+    assert result.job.error is not None
+    assert result.job.error.code == "incomplete_response"
+    assert result.job.error.stage == JobStage.EDIT

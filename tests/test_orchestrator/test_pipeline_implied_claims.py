@@ -31,10 +31,12 @@ from cce.models.job import JobStage
 from cce.models.style import StyleScores
 from cce.orchestrator.pipeline import Pipeline
 from cce.synthesis.editor import Editor
-from cce.synthesis.implied_claims import ImpliedClaimChecker
+from cce.synthesis.implied_claims import _DISMISSED_TOPIC_PROMPT, ImpliedClaimChecker
 from cce.synthesis.scoring import Scorer
 from tests.conftest import (
+    MockCrawlAdapter,
     MockLLMProvider,
+    make_crawl_result,
     make_curation_request,
     make_engine_config,
     make_source_policy,
@@ -87,8 +89,7 @@ def _checker(
     llm: MockLLMProvider,
     config: ImpliedClaimsConfig | None = None,
 ) -> ImpliedClaimChecker:
-    # The checker searches the store of the Pipeline running it (B6), so the
-    # tests below pass their search-recording wrapper as the Pipeline's store.
+    # The checker searches the path evidence it is handed, never the store.
     return ImpliedClaimChecker(
         llm=llm,
         config=config or ImpliedClaimsConfig(enabled=True),
@@ -156,7 +157,12 @@ async def test_checker_invoked_before_editor_when_score_fails(sqlite_store):
     """Contrastive frame in writer output → checker fires → editor receives
     the rewrite hint via annotations."""
     config = make_engine_config()
-    adapter = _make_adapter()
+    # The checker searches the path's evidence, so the crawled page itself
+    # supports the dismissed side (1 of 1 path items: ratio clears 0.15).
+    adapter = _make_adapter_with_markdown(
+        "Sleeping pills can shorten sleep onset in acute insomnia, "
+        "according to short-term randomised trials."
+    )
     rewritten = (
         "Sleep matters [ev:ev_001]. Sleeping pills can help in acute insomnia, "
         "but they don't change the habits that keep the problem coming back."
@@ -169,31 +175,10 @@ async def test_checker_invoked_before_editor_when_score_fails(sqlite_store):
         _verifier_json(supported=10, total=10, gaps=0),
     )
 
-    # Stub a store that returns enough counter-evidence to clear the release valve
-    class CounterStore:
-        def __init__(self, real):
-            self._real = real
-            self.search_calls = []
-
-        async def search(self, *, url=None, topic=None, limit=50):
-            self.search_calls.append({"topic": topic, "limit": limit})
-            # Return 5 evidence rows so ratio comfortably exceeds 0.15
-            return [
-                # Reuse make_evidence pattern via a quick dict-to-Evidence
-                _make_counter_ev(f"ev_counter_{i}")
-                for i in range(5)
-            ]
-
-        # Forward all other store methods to the real one
-        def __getattr__(self, name):
-            return getattr(self._real, name)
-
-    counter_store = CounterStore(sqlite_store)
-
     pipeline = Pipeline(
         config=config,
         crawl_adapter=adapter,
-        evidence_store=counter_store,
+        evidence_store=sqlite_store,
         llm=llm,
         scorer=_scorer(),
         editor=_editor(llm),
@@ -208,6 +193,50 @@ async def test_checker_invoked_before_editor_when_score_fails(sqlite_store):
     editor_user_msg = editor_call["messages"][0].content
     assert "Implied-claim annotations" in editor_user_msg
     assert "sleeping pills" in editor_user_msg
+
+
+async def test_checker_hints_never_name_evidence_outside_the_path(sqlite_store):
+    """The store holds other jobs' evidence on the dismissed topic, the path
+    holds none: the editor must get no hint naming those IDs, since citing
+    one would be citation drift and the edit would be discarded."""
+    config = make_engine_config()
+    adapter = _make_adapter()  # path evidence never mentions sleeping pills
+    rewritten = "Sleep matters [ev:ev_001]. Studies converge on this consistently."
+    llm = _llm(
+        _ai_flat_with_contrast(),
+        _topic_extract_response("sleeping pills"),
+        _editor_response(rewritten),
+        _verifier_json(supported=10, total=10, gaps=0),
+    )
+
+    class ForeignEvidenceStore:
+        """Answers every topic search with evidence from other jobs."""
+
+        def __init__(self, real):
+            self._real = real
+
+        async def search(self, *, url=None, topic=None, limit=50):
+            if topic is None:
+                return await self._real.search(url=url, limit=limit)
+            return [_make_counter_ev(f"ev_counter_{i}") for i in range(5)]
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+    pipeline = Pipeline(
+        config=config,
+        crawl_adapter=adapter,
+        evidence_store=ForeignEvidenceStore(sqlite_store),
+        llm=llm,
+        scorer=_scorer(),
+        editor=_editor(llm),
+        implied_claim_checker=_checker(llm),
+    )
+    await pipeline.run(make_curation_request(), make_source_policy())
+
+    editor_user_msg = llm.calls[2]["messages"][0].content  # writer, topic, editor
+    assert "ev_counter_" not in editor_user_msg
+    assert "Implied-claim annotations" not in editor_user_msg
 
 
 async def test_checker_skipped_when_score_passes(sqlite_store):
@@ -243,23 +272,10 @@ async def test_checker_skipped_when_score_passes(sqlite_store):
         _verifier_json(supported=10, total=10, gaps=0),
     )
 
-    class TrackingStore:
-        def __init__(self, real):
-            self._real = real
-            self.search_calls = []
-
-        async def search(self, *, url=None, topic=None, limit=50):
-            self.search_calls.append({"topic": topic, "limit": limit})
-            return []
-
-        def __getattr__(self, name):
-            return getattr(self._real, name)
-
-    store = TrackingStore(sqlite_store)
     pipeline = Pipeline(
         config=config,
         crawl_adapter=adapter,
-        evidence_store=store,
+        evidence_store=sqlite_store,
         llm=llm,
         scorer=_AlwaysPassingScorer(),  # type: ignore[arg-type]
         editor=_editor(llm),
@@ -267,8 +283,8 @@ async def test_checker_skipped_when_score_passes(sqlite_store):
     )
     await pipeline.run(make_curation_request(), make_source_policy())
 
-    # Checker would call store.search; that should never have happened.
-    assert store.search_calls == []
+    # The checker never ran: no topic-extraction call was made.
+    assert not _topic_extraction_ran(llm)
 
 
 async def test_checker_skipped_when_no_editor_wired(sqlite_store):
@@ -280,23 +296,10 @@ async def test_checker_skipped_when_no_editor_wired(sqlite_store):
         _verifier_json(supported=10, total=10, gaps=0),
     )
 
-    class TrackingStore:
-        def __init__(self, real):
-            self._real = real
-            self.search_calls = []
-
-        async def search(self, *, url=None, topic=None, limit=50):
-            self.search_calls.append({"topic": topic, "limit": limit})
-            return []
-
-        def __getattr__(self, name):
-            return getattr(self._real, name)
-
-    store = TrackingStore(sqlite_store)
     pipeline = Pipeline(
         config=config,
         crawl_adapter=adapter,
-        evidence_store=store,
+        evidence_store=sqlite_store,
         llm=llm,
         scorer=_scorer(),
         editor=None,  # explicit
@@ -304,8 +307,8 @@ async def test_checker_skipped_when_no_editor_wired(sqlite_store):
     )
     await pipeline.run(make_curation_request(), make_source_policy())
 
-    # Checker is gated on editor being present; store.search must never have run.
-    assert store.search_calls == []
+    # Checker is gated on editor being present; it must never have run.
+    assert not _topic_extraction_ran(llm)
 
 
 async def test_checker_emits_no_annotations_when_no_contrastive_frames(sqlite_store):
@@ -320,23 +323,10 @@ async def test_checker_emits_no_annotations_when_no_contrastive_frames(sqlite_st
         _verifier_json(supported=10, total=10, gaps=0),
     )
 
-    class CounterStore:
-        def __init__(self, real):
-            self._real = real
-            self.search_calls = []
-
-        async def search(self, *, url=None, topic=None, limit=50):
-            self.search_calls.append({"topic": topic, "limit": limit})
-            return []
-
-        def __getattr__(self, name):
-            return getattr(self._real, name)
-
-    store = CounterStore(sqlite_store)
     pipeline = Pipeline(
         config=config,
         crawl_adapter=adapter,
-        evidence_store=store,
+        evidence_store=sqlite_store,
         llm=llm,
         scorer=_scorer(),
         editor=_editor(llm),
@@ -346,8 +336,8 @@ async def test_checker_emits_no_annotations_when_no_contrastive_frames(sqlite_st
 
     edit_records = [r for r in result.job.stages if r.stage == JobStage.EDIT]
     assert len(edit_records) == 1
-    # No frames → no LLM calls into the topic extractor → no store search
-    assert store.search_calls == []
+    # No frames, so no topic-extraction call
+    assert not _topic_extraction_ran(llm)
     # Editor's user-prompt has NO implied-claim annotation block
     editor_call = llm.calls[1]  # writer=0, editor=1, verifier=2
     assert "Implied-claim annotations" not in editor_call["messages"][0].content
@@ -421,6 +411,19 @@ async def test_checker_factory_triple_gate(monkeypatch, tmp_path):
 
 
 # --- helpers ---
+
+
+def _topic_extraction_ran(llm: MockLLMProvider) -> bool:
+    return any((c["system"] or "") == _DISMISSED_TOPIC_PROMPT for c in llm.calls)
+
+
+def _make_adapter_with_markdown(markdown: str) -> MockCrawlAdapter:
+    """The standard one-page adapter, with the page text given."""
+    url = "https://example.com/article"
+    return MockCrawlAdapter(
+        search_map={"test topic": [url]},
+        url_map={url: make_crawl_result(url=url, markdown=markdown)},
+    )
 
 
 def _make_counter_ev(ev_id: str):
