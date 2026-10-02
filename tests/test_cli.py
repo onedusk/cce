@@ -809,3 +809,55 @@ def test_missing_config_file_is_a_one_line_error(tmp_path, monkeypatch, args):
     assert result.exit_code == 1, result.output
     assert "Config file not found" in result.output
     assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+@pytest.mark.parametrize(
+    ("env", "yaml_api", "flags", "expected"),
+    [
+        ({}, None, [], ("0.0.0.0", 8000)),
+        (
+            {"CCE_API_HOST": "127.0.0.1", "CCE_API_PORT": "9001"},
+            None,
+            [],
+            ("127.0.0.1", 9001),
+        ),
+        ({}, {"host": "127.0.0.2", "port": 9100}, [], ("127.0.0.2", 9100)),
+        (
+            {"CCE_API_HOST": "127.0.0.1", "CCE_API_PORT": "9001"},
+            {"host": "127.0.0.2", "port": 9100},
+            [],
+            ("127.0.0.1", 9001),
+        ),
+        (
+            {"CCE_API_HOST": "127.0.0.1", "CCE_API_PORT": "9001"},
+            {"host": "127.0.0.2", "port": 9100},
+            ["--host", "127.0.0.3", "--port", "9200"],
+            ("127.0.0.3", 9200),
+        ),
+    ],
+)
+def test_api_start_bind_precedence(
+    tmp_path, monkeypatch, env, yaml_api, flags, expected
+):
+    """CR-06: flag > env > YAML > default; the flag defaults no longer win."""
+    import uvicorn
+    import yaml
+
+    for var in ("CCE_API_HOST", "CCE_API_PORT"):
+        monkeypatch.delenv(var, raising=False)
+    for var, value in env.items():
+        monkeypatch.setenv(var, value)
+    calls: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        uvicorn, "run", lambda _app, host, port: calls.append((host, port))
+    )
+
+    args = ["api", "start", *flags]
+    if yaml_api is not None:
+        config_file = tmp_path / "cce.yaml"
+        config_file.write_text(yaml.dump({"api": yaml_api}))
+        args += ["--config", str(config_file)]
+    result = runner.invoke(app, args)
+
+    assert result.exit_code == 0, result.output
+    assert calls == [expected]

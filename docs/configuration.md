@@ -294,8 +294,8 @@ stays in the store but no longer reaches a prompt.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `CCE_API_HOST` | `0.0.0.0` | Bind address for `cce api start` |
-| `CCE_API_PORT` | `8000` | Bind port |
+| `CCE_API_HOST` | `0.0.0.0` | Bind address for `cce api start` (YAML `api.host`; the `--host` flag overrides both) |
+| `CCE_API_PORT` | `8000` | Bind port (YAML `api.port`; the `--port` flag overrides both) |
 | `CCE_API_REQUIRE_AUTH` | `true` | `false` disables bearer auth (dev only) |
 | `CCE_API_CORS_ORIGINS` | `*` | Comma-separated allowed origins |
 | `CCE_API_MAX_CONCURRENT_JOBS` | `2` | Parallel pipeline jobs |

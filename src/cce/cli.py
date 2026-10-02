@@ -163,11 +163,18 @@ def batch_command(
 
 @api_app.command("start")
 def start_server(
-    host: str = typer.Option("0.0.0.0", help="Bind address"),
-    port: int = typer.Option(8000, help="Bind port"),
+    host: str | None = typer.Option(
+        None, help="Bind address [default: CCE_API_HOST, api.host, 0.0.0.0]"
+    ),
+    port: int | None = typer.Option(
+        None, help="Bind port [default: CCE_API_PORT, api.port, 8000]"
+    ),
     config: str | None = typer.Option(None, help="Path to config YAML"),
 ) -> None:
-    """Start the CCE API server."""
+    """Start the CCE API server.
+
+    Bind address and port: flag > env var > YAML > default (CR-06).
+    """
     import uvicorn
 
     from cce.api.app import create_app
@@ -178,12 +185,14 @@ def start_server(
     except ConfigError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1) from None
-    # CLI flags override config values
-    engine_config.api.host = host
-    engine_config.api.port = port
+    # CLI flags override config values, only when given
+    if host is not None:
+        engine_config.api.host = host
+    if port is not None:
+        engine_config.api.port = port
 
     application = create_app(engine_config)
-    uvicorn.run(application, host=host, port=port)
+    uvicorn.run(application, host=engine_config.api.host, port=engine_config.api.port)
 
 
 @key_app.command("generate")
