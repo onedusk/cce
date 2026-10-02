@@ -264,7 +264,7 @@ stays in the store but no longer reaches a prompt.
 |----------|---------|---------|
 | `CCE_CRAWL_ADAPTER` | `firecrawl` | Adapter id (only `firecrawl` implemented) |
 | `CCE_CRAWL_API_KEY` | — | Overrides `FIRECRAWL_API_KEY` when set |
-| `CCE_CRAWL_RATE_LIMIT` | `2.0` | Max crawl requests per second |
+| `CCE_CRAWL_RATE_LIMIT` | `2.0` | Max concurrent crawl (scrape) requests per event loop for one Firecrawl API key: `int(value)`, minimum 1. A concurrency cap, not a per-second rate, despite the name; search requests are not counted. A host running several event loops at once (one per thread) gets the cap on each loop |
 | `CCE_CRAWL_TIMEOUT` | `30` | Per-request timeout (seconds) |
 | `CCE_CRAWL_MAX_PER_SOURCE` | `5` | Max excerpts kept per source |
 | `CCE_CRAWL_MAX_EVIDENCE` | `100` | Max evidence objects per request |
