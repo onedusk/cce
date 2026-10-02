@@ -961,8 +961,12 @@ class Pipeline:
         accumulated usage against the budget. ``job_token_usage`` is the
         shared job dict (the baseline of all previously-completed paths, merged
         after each path); see the checkpoint comment for the read pattern.
-        Checkpoint granularity is one iteration, so the worst-case overshoot is
-        one writer+verifier call pair (paths run sequentially since M03).
+        The budget is checked again before the edit step, which is skipped
+        when the budget is spent. The overshoot past a passing check is
+        therefore the calls up to the next check: one writer call, or the
+        edit step (one implied-claim call per contrastive frame that names a
+        topic, plus the editor call), followed by one verifier call (paths
+        run sequentially since M03; retries of a call count too).
         """
         _log = job_logger or logger
         _tokens = token_usage  # may be None if called outside full pipeline
@@ -1012,13 +1016,9 @@ class Pipeline:
                 # path's spend (merged after each path in _run_all_paths) and
                 # there are no in-flight siblings — the checkpoint sees the full
                 # prior spend plus this path's tokens so far.
-                spent_view: dict[str, int] = dict(job_token_usage or {})
-                for key, value in (_tokens or {}).items():
-                    spent_view[key] = spent_view.get(key, 0) + int(value)
+                spent_view = self._job_spend(job_token_usage, _tokens)
                 if self._budget_exceeded(spent_view, budget):
-                    spent = spent_view.get("input_tokens", 0) + spent_view.get(
-                        "output_tokens", 0
-                    )
+                    spent = self._budget_spent(spent_view)
                     _log.warning(
                         "Path '%s': token budget exceeded — spent %d of %d "
                         "before iteration %d; stopping and routing to review "
@@ -1107,17 +1107,49 @@ class Pipeline:
                 and style_scores is not None
                 and not style_scores.humanization_pass
             ):
-                unit = await self._edit_draft(
-                    unit,
-                    style_scores=style_scores,
-                    path_evidence=path_evidence,
-                    path_config=path_config,
-                    path=path,
-                    iteration=iteration,
-                    job=job,
-                    token_usage=_tokens,
-                    log=_log,
-                )
+                # Budget re-check (OPS-03): a spent budget skips the edit step
+                # (implied-claim calls + editor); the writer's draft goes on
+                # to the verifier unedited.
+                spent_view = self._job_spend(job_token_usage, _tokens)
+                if self._budget_exceeded(spent_view, budget):
+                    spent = self._budget_spent(spent_view)
+                    _log.warning(
+                        "Path '%s': token budget spent (%d of %s) before the "
+                        "edit step of iteration %d; skipping the edit (ADR-003)",
+                        path,
+                        spent,
+                        budget,
+                        iteration,
+                    )
+                    if job is not None:
+                        skipped_at = datetime.now(UTC)
+                        job.stages.append(
+                            StageRecord(
+                                stage=JobStage.EDIT,
+                                path=path,
+                                started_at=skipped_at,
+                                completed_at=skipped_at,
+                                metrics={
+                                    "path": path,
+                                    "invoked": False,
+                                    "skipped_over_budget": True,
+                                    "tokens_spent": spent,
+                                    "max_tokens_per_job": budget,
+                                },
+                            )
+                        )
+                else:
+                    unit = await self._edit_draft(
+                        unit,
+                        style_scores=style_scores,
+                        path_evidence=path_evidence,
+                        path_config=path_config,
+                        path=path,
+                        iteration=iteration,
+                        job=job,
+                        token_usage=_tokens,
+                        log=_log,
+                    )
 
             # Verify
             report = await self._run_verifier(
@@ -1169,21 +1201,44 @@ class Pipeline:
         return estimate_cost_usd(usage, self._pricing) if usage else None
 
     @staticmethod
+    def _job_spend(
+        job_token_usage: Mapping[str, int] | None,
+        path_tokens: Mapping[str, int] | None,
+    ) -> dict[str, int]:
+        """Job-level accumulated usage: the job dict plus this path's dict."""
+        spent_view: dict[str, int] = dict(job_token_usage or {})
+        for key, value in (path_tokens or {}).items():
+            spent_view[key] = spent_view.get(key, 0) + int(value)
+        return spent_view
+
+    @staticmethod
+    def _budget_spent(token_usage: Mapping[str, int]) -> int:
+        """Tokens counted against the budget: input + output + cache writes.
+
+        A cache write is billed above the input rate, and with prompt caching
+        the evidence block is reported there rather than as ``input_tokens``
+        (OPS-03). Cache reads are not counted (billed at a tenth of input).
+        """
+        return (
+            token_usage.get("input_tokens", 0)
+            + token_usage.get("output_tokens", 0)
+            + token_usage.get("cache_creation_input_tokens", 0)
+        )
+
+    @staticmethod
     def _budget_exceeded(
         token_usage: Mapping[str, int], max_tokens_per_job: int | None
     ) -> bool:
-        """True when accumulated input+output tokens meet or exceed the budget.
+        """True when the counted tokens (``_budget_spent``) meet or exceed
+        the budget.
 
-        Called at the top of each writer iteration (M08, ADR-003). Only
-        ``input_tokens + output_tokens`` count toward the budget; cache
-        read/write counts are reported separately and stay outside it. Since
-        the checkpoint granularity is one iteration, the worst-case overshoot
-        is one writer+verifier call pair (paths run sequentially since M03).
+        Called at the top of each writer iteration (M08, ADR-003) and again
+        before the edit step (OPS-03); see ``_write_verify_loop`` for the
+        overshoot past a passing check.
         """
         if max_tokens_per_job is None:
             return False
-        spent = token_usage.get("input_tokens", 0) + token_usage.get("output_tokens", 0)
-        return spent >= max_tokens_per_job
+        return Pipeline._budget_spent(token_usage) >= max_tokens_per_job
 
     @staticmethod
     def _record_write_stage(

@@ -487,9 +487,12 @@ class EngineConfig(BaseModel):
         default=None,
         ge=1,
         description=(
-            "Hard ceiling on accumulated LLM tokens (input + output, all "
-            "paths and iterations) per job. None = unlimited. On breach the "
-            "job stops iterating and routes to REVIEW_REQUIRED (ADR-003)."
+            "Token budget per job: input + output + cache-creation tokens, "
+            "all paths and iterations (cache reads are not counted). None = "
+            "unlimited. Checked before each writer iteration (a breach stops "
+            "iterating and routes to REVIEW_REQUIRED, ADR-003) and before each "
+            "edit step (a breach skips the edit). Not a hard ceiling: calls "
+            "past a passing check still run."
         ),
     )
     engine_version: str = Field(default="0.1.0")

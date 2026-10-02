@@ -91,7 +91,8 @@ with only `llm` injected raises). An injected LLM or crawl adapter needs no
 `ANTHROPIC_API_KEY` / `FIRECRAWL_API_KEY`. Injected LLM providers must accept
 `output_schema`, set `stop_reason`, and report the `input_tokens`,
 `output_tokens`, `cache_creation_input_tokens` and `cache_read_input_tokens`
-usage keys (the token budget reads them). Configuration itself still loads
+usage keys (the token budget counts input, output and cache-creation
+tokens; cache reads are not counted). Configuration itself still loads
 only through the registry.
 
 **Non-web sources.** To mix documents that aren't web pages into a run,
@@ -209,8 +210,10 @@ and `effort` (YAML `writer.*`, `verifier.*`, `humanization.editor.*`; env
 `CCE_WRITER_*`, `CCE_VERIFIER_*`, `CCE_EDITOR_*` with the suffixes
 `_MODEL`, `_MAX_TOKENS`, `_THINKING`, `_EFFORT`). Unset values inherit the
 `CCE_LLM_*` ones, and credentials are always shared. A role with any setting
-gets its own provider; the implied-claim checker uses the writer's. The
-values must suit that role's model (e.g. effort `xhigh` fails on a 4.6
+gets its own provider; the implied-claim checker uses the writer's, except
+that its topic-extraction call is capped at 4096 output tokens (thinking
+included) whatever `max_tokens` says, and a reply that hits that cap fails the
+job. The values must suit that role's model (e.g. effort `xhigh` fails on a 4.6
 model). With an injected `llm` (`ComponentOverrides`), setting any of these
 raises `ValueError`: configure the injected provider instead.
 
@@ -295,7 +298,7 @@ stays in the store but no longer reaches a prompt.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `CCE_MAX_TOKENS_PER_JOB` | unset | Hard ceiling on accumulated LLM tokens (input + output, all paths and iterations) per job. On breach the job stops iterating and routes to `REVIEW_REQUIRED`, keeping partial drafts (ADR-003, audit-2026-06-09). Unset = unlimited. |
+| `CCE_MAX_TOKENS_PER_JOB` | unset | Token budget per job: input + output + cache-creation tokens of every LLM call, all paths and iterations (cache reads are not counted). Checked before each writer iteration, where a breach stops iterating and routes the job to `REVIEW_REQUIRED`, keeping partial drafts (ADR-003, audit-2026-06-09), and before each edit step, where a breach skips the edit so the verifier checks the writer's draft. Not a hard ceiling: past a passing check a job can still spend one writer call, or one edit step (one implied-claim call per contrastive frame that names a topic, plus the editor call), and then one verifier call. Unset = unlimited. |
 
 ### Cost estimate
 
