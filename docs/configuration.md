@@ -42,6 +42,15 @@ sampling parameters (Opus 4.7 and later, Sonnet 5, Fable 5).
 `config/humanization_live.yaml` is a working example (the humanization live
 harness uses it). Environment variables override whatever the file says.
 
+The file is checked strictly when it loads. A path that does not exist is a
+`ConfigError` (relative paths resolve against the working directory), not a
+silent fall-back to the defaults, and so is a key that no config model
+defines, at any level (`publish_polcy`, `api.hosst`,
+`humanization.editor.enabld`); the error names every such key. Code that
+builds `EngineConfig` directly gets a pydantic `ValidationError` for an
+unknown field. `embedding.concurrency` is read from YAML only (no env var).
+The engine and the API log the effective `publish_policy` once at start-up.
+
 ## How loading works
 
 `ConfigRegistry.load(root, config_path)` (`src/cce/config/registry.py`) is

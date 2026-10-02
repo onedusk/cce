@@ -5,7 +5,7 @@ import os
 import pytest
 import yaml
 
-from cce.config.loader import load_config
+from cce.config.loader import ConfigError, load_config
 from cce.config.types import EngineConfig, LLMConfig
 
 pytestmark = pytest.mark.unit
@@ -188,10 +188,93 @@ def test_load_config_env_var_fallback_chain(monkeypatch):
 
 
 def test_load_config_missing_yaml(monkeypatch):
+    """A named config file that does not exist is an error, not the defaults
+    (CR-01): a typo'd path would otherwise turn publish_policy: human into
+    auto with no warning."""
     _clear_env(monkeypatch)
-    # Should not crash — uses defaults
-    config = load_config("/nonexistent/path/config.yaml")
-    assert config.llm.provider == "anthropic"
+    with pytest.raises(ConfigError, match="Config file not found: .*config.yaml"):
+        load_config("/nonexistent/path/config.yaml")
+
+
+def test_load_config_without_path_still_uses_defaults(monkeypatch):
+    _clear_env(monkeypatch)
+    assert load_config(None).publish_policy == "auto"
+
+
+def test_unknown_config_keys_raise_and_are_named(monkeypatch, tmp_path):
+    """Misspelled keys at every level fail the load and are all named (CR-01)."""
+    _clear_env(monkeypatch)
+    config_file = tmp_path / "cce.yaml"
+    config_file.write_text(
+        yaml.dump(
+            {
+                "publish_polcy": "human",
+                "max_token_per_job": 1000,
+                "api": {"hosst": "127.0.0.1"},
+                "crawl": {"rate_limit": 3},
+                "writer": {"temprature": 0.3},
+                "humanization": {
+                    "enabld": False,
+                    "editor": {"enabld": False},
+                    "thresholds": {"max_em_dash_per_1000": 1.0},
+                },
+                "quality_gate": {"medium": {"pass_treshold": 0.9}},
+            }
+        )
+    )
+    with pytest.raises(ConfigError) as exc:
+        load_config(config_file)
+    message = str(exc.value)
+    for key in (
+        "publish_polcy",
+        "max_token_per_job",
+        "api.hosst",
+        "crawl.rate_limit",
+        "writer.temprature",
+        "humanization.enabld",
+        "humanization.editor.enabld",
+        "humanization.thresholds.max_em_dash_per_1000",
+        "quality_gate.medium.pass_treshold",
+    ):
+        assert key in message
+    assert str(config_file) in message
+
+
+def test_non_mapping_config_file_raises(monkeypatch, tmp_path):
+    _clear_env(monkeypatch)
+    config_file = tmp_path / "cce.yaml"
+    config_file.write_text("- publish_policy: human\n")
+    with pytest.raises(ConfigError, match="must contain a YAML mapping"):
+        load_config(config_file)
+
+
+def test_config_models_forbid_unknown_fields():
+    """Code-built configs reject typos too (extra='forbid' on the models)."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="publish_polcy"):
+        EngineConfig(llm=LLMConfig(api_key=""), publish_polcy="human")  # type: ignore[call-arg]
+
+
+def test_embedding_concurrency_loads_from_yaml(monkeypatch, tmp_path):
+    """embedding.concurrency is a model field the loader used to drop; the
+    unknown-key check accepts it, so it must take effect."""
+    _clear_env(monkeypatch)
+    config_file = tmp_path / "cce.yaml"
+    config_file.write_text(yaml.dump({"embedding": {"concurrency": 4}}))
+    assert load_config(config_file).embedding.concurrency == 4
+
+
+def test_tracked_engine_config_yaml_loads(monkeypatch):
+    """The engine config YAML tracked in the repo still loads under the strict
+    check (config/'s other files are marker and pricing overrides, not engine
+    config)."""
+    from pathlib import Path
+
+    _clear_env(monkeypatch)
+    repo = Path(__file__).resolve().parents[2]
+    config = load_config(repo / "config" / "humanization_live.yaml")
+    assert config.humanization.implied_claims.search_strategy == "llm_extract"
 
 
 def test_load_gate_config_defaults(monkeypatch):

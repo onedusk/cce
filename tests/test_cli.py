@@ -789,3 +789,23 @@ def test_entry_point_loads_dotenv_without_overriding_the_env(tmp_path, monkeypat
     monkeypatch.delenv("CCE_TEST_FROM_DOTENV", raising=False)
 
     assert seen == {"CCE_TEST_FROM_DOTENV": "file", "CCE_TEST_SET": "env"}
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["emit-mdx", "--all", "--target", "."],
+        ["api", "key", "list"],
+        ["api", "start"],
+    ],
+)
+def test_missing_config_file_is_a_one_line_error(tmp_path, monkeypatch, args):
+    """CR-01: --config naming a missing file exits 1 with one line, no traceback."""
+    import uvicorn
+
+    monkeypatch.setattr(uvicorn, "run", lambda *a, **k: None)  # never bind
+    missing = str(tmp_path / "cce.yml")
+    result = runner.invoke(app, [*args, "--config", missing])
+    assert result.exit_code == 1, result.output
+    assert "Config file not found" in result.output
+    assert result.exception is None or isinstance(result.exception, SystemExit)

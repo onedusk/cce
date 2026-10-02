@@ -114,10 +114,11 @@ async def lifespan(app: FastAPI):
     app.state.auth_dependency = auth_dep
 
     logger.info(
-        "CCE API started (policies=%d, max_concurrent=%d, auth=%s)",
+        "CCE API started (policies=%d, max_concurrent=%d, auth=%s, publish_policy=%s)",
         len(policies),
         config.api.max_concurrent_jobs,
         config.api.require_auth,
+        config.publish_policy,
     )
 
     yield

@@ -171,9 +171,13 @@ def start_server(
     import uvicorn
 
     from cce.api.app import create_app
-    from cce.config.loader import load_config
+    from cce.config.loader import ConfigError, load_config
 
-    engine_config = load_config(config)
+    try:
+        engine_config = load_config(config)
+    except ConfigError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from None
     # CLI flags override config values
     engine_config.api.host = host
     engine_config.api.port = port
@@ -875,10 +879,14 @@ def _validate_taxonomy_data(data: object) -> None:
 
 async def _get_job_store(config_path: str | None = None):
     """Open a JobStore connection using config defaults."""
-    from cce.config.loader import load_config
+    from cce.config.loader import ConfigError, load_config
     from cce.jobs.store import JobStore
 
-    config = load_config(config_path)
+    try:
+        config = load_config(config_path)
+    except ConfigError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from None
     store = JobStore(db_path=config.evidence_store.sqlite_path)
     await store.connect()
     return store

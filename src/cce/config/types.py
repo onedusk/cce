@@ -16,6 +16,8 @@ from pydantic import AliasChoices, BaseModel, Field
 class LLMConfig(BaseModel):
     """Configuration for the LLM provider."""
 
+    model_config = {"extra": "forbid"}
+
     provider: str = Field(
         default="anthropic", description="LLM provider: anthropic, openai"
     )
@@ -76,6 +78,8 @@ class RoleLLMSettings(BaseModel):
     """Per-role overrides of LLMConfig. None (the default) inherits the
     ``llm`` value; credentials and the provider are always shared. A role
     with any override gets its own provider built from ``llm`` plus these."""
+
+    model_config = {"extra": "forbid"}
 
     model: str | None = Field(
         default=None, description="Model for this role. None = LLMConfig.model."
@@ -148,6 +152,8 @@ class VerifierConfig(RoleLLMSettings):
 class EvidenceStoreConfig(BaseModel):
     """Configuration for the evidence store backend."""
 
+    model_config = {"extra": "forbid"}
+
     backend: str = Field(
         default="sqlite", description="Storage backend: sqlite (Phase 1)"
     )
@@ -163,6 +169,8 @@ class EvidenceStoreConfig(BaseModel):
 
 class EmbeddingConfig(BaseModel):
     """Configuration for the embedding provider."""
+
+    model_config = {"extra": "forbid"}
 
     enabled: bool = Field(
         default=True,
@@ -207,6 +215,8 @@ class EmbeddingConfig(BaseModel):
 class CrawlConfig(BaseModel):
     """Configuration for the crawl adapter."""
 
+    model_config = {"extra": "forbid"}
+
     adapter: str = Field(
         default="firecrawl", description="Crawl adapter: firecrawl, crawl4ai"
     )
@@ -233,6 +243,8 @@ class CrawlConfig(BaseModel):
 
 class QualityGateConfig(BaseModel):
     """Threshold configuration for the quality gate, keyed by risk profile."""
+
+    model_config = {"extra": "forbid"}
 
     pass_threshold: float = Field(
         default=0.85,
@@ -295,6 +307,8 @@ def default_quality_gate_profiles() -> dict[str, QualityGateConfig]:
 class APIConfig(BaseModel):
     """API server configuration (Phase 3)."""
 
+    model_config = {"extra": "forbid"}
+
     host: str = Field(default="0.0.0.0", description="Bind address")
     port: int = Field(default=8000, description="Bind port")
     require_auth: bool = Field(
@@ -316,6 +330,8 @@ class HumanizationThresholds(BaseModel):
     Defaults reflect the engine's observed distribution on 1000-2000-word
     single-topic essays, not general-prose baselines from the research.
     """
+
+    model_config = {"extra": "forbid"}
 
     min_sentence_length_stddev: float = Field(
         default=10.0,
@@ -403,6 +419,8 @@ class EditorConfig(RoleLLMSettings):
 class ImpliedClaimsConfig(BaseModel):
     """Implied-claim checker configuration (H4)."""
 
+    model_config = {"extra": "forbid"}
+
     enabled: bool = Field(
         default=True,
         description="Independent kill-switch for H4 (set False to disable).",
@@ -437,6 +455,8 @@ class ImpliedClaimsConfig(BaseModel):
 class HumanizationConfig(BaseModel):
     """Master humanization config attached to EngineConfig."""
 
+    model_config = {"extra": "forbid"}
+
     enabled: bool = Field(
         default=True,
         description=(
@@ -461,6 +481,8 @@ class HumanizationConfig(BaseModel):
 
 class EngineConfig(BaseModel):
     """Top-level engine configuration. Constructed by config/loader.py."""
+
+    model_config = {"extra": "forbid"}
 
     llm: LLMConfig
     writer: WriterConfig = Field(default_factory=WriterConfig)
