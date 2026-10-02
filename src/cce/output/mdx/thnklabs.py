@@ -47,8 +47,10 @@ _WORDS_PER_MINUTE = 200  # observed across deployed thnkLabs articles (~200-210 
 _FOOTNOTE_RE = re.compile(
     r"\[\^(?:[0-9]+|\?)\]"
 )  # rendered markers, stripped from excerpt
+# Only the section the client format defines, as a whole heading (COR-10):
+# a prose heading that merely contains "resources" keeps its cited text.
 _RESOURCES_HEADING_RE = re.compile(
-    r"^#{2,3}[ \t]+.*resources.*$", re.IGNORECASE | re.MULTILINE
+    r"^#{2,3}[ \t]+curated[ \t]+resources[ \t]*$", re.IGNORECASE | re.MULTILINE
 )
 
 

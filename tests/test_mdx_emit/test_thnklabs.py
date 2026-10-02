@@ -104,6 +104,43 @@ class TestFormatThnklabsPage:
         assert "Invented Podcast" not in mdx, "ungrounded source dropped"
         assert "WHO X" in res, "grounded cited source listed"
 
+    @pytest.mark.parametrize(
+        "heading",
+        [
+            "## Job demands and resources",
+            "## Resources for teams under strain",
+            "### Human resources policy",
+            "## Resources",
+        ],
+    )
+    def test_prose_heading_with_resources_keeps_its_text(self, heading):
+        """COR-10: only the client format's 'Curated Resources' section is
+        rebuilt; a model-written section whose heading merely contains the
+        word kept its heading and cited prose."""
+        body = (
+            f"# T\n\n{heading}\n\nDemands strain people [ev:ev_1].\n\n"
+            "KEEPME support buffers them [ev:ev_1].\n\n## Next\n\nMore [ev:ev_1].\n"
+        )
+        lookup = {
+            "ev_1": make_evidence(id="ev_1", url="https://who.int/x", title="WHO X")
+        }
+        mdx = format_thnklabs_page(_unit(body), lookup, topic_slug="t")
+        assert heading in mdx
+        assert "KEEPME support buffers them" in mdx
+        assert "## Curated Resources" not in mdx
+
+    @pytest.mark.parametrize(
+        "heading", ["## curated resources", "### Curated Resources  "]
+    )
+    def test_curated_resources_heading_matches_case_insensitively(self, heading):
+        body = f"# T\n\nA claim [ev:ev_1].\n\n{heading}\n\n- **Invented** x\n"
+        lookup = {
+            "ev_1": make_evidence(id="ev_1", url="https://who.int/x", title="WHO X")
+        }
+        mdx = format_thnklabs_page(_unit(body), lookup, topic_slug="t")
+        assert "## Curated Resources" in mdx and "WHO X" in mdx
+        assert "Invented" not in mdx
+
 
 class TestHelpers:
     def test_read_time_rounds_on_200_wpm(self):
