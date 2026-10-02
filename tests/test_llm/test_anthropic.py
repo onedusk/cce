@@ -520,6 +520,24 @@ async def test_cache_tokens_reported(mock_cls: MagicMock) -> None:
     assert result.usage["cache_read_input_tokens"] == 1200
 
 
+@patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
+async def test_null_cache_tokens_reported_as_zero(mock_cls: MagicMock) -> None:
+    """COR-07: the SDK types both cache counts as Optional; None is 0."""
+    mock_client = MagicMock()
+    route_stream_to_create(mock_client)
+    response = _mock_response()
+    response.usage.cache_creation_input_tokens = None
+    response.usage.cache_read_input_tokens = None
+    mock_client.messages.create = AsyncMock(return_value=response)
+    mock_cls.return_value = mock_client
+
+    provider = AnthropicProvider(_config())
+    result = await provider.complete([LLMMessage(role="user", content="Hi")])
+
+    assert result.usage["cache_creation_input_tokens"] == 0
+    assert result.usage["cache_read_input_tokens"] == 0
+
+
 _SCHEMA = {
     "type": "object",
     "properties": {"ok": {"type": "boolean"}},

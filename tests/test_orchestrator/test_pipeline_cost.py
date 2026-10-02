@@ -138,6 +138,47 @@ async def test_implied_claim_calls_count_toward_the_job_totals(sqlite_store):
     assert staged == totals["input_tokens"]
 
 
+NULL_CACHE = {"cache_creation_input_tokens": None, "cache_read_input_tokens": None}
+
+
+@pytest.mark.parametrize("role", ["topic", "editor"])
+async def test_a_null_cache_count_counts_as_zero(sqlite_store, role):
+    """COR-07: a provider reporting a cache count as None (the SDK types
+    them as Optional) on the implied-claim or editor reply failed the whole
+    job with a TypeError at stage write. None now counts as 0."""
+    from cce.models.job import JobStatus
+
+    topic, editor = TOPIC[1], EDITOR[1]
+    if role == "topic":
+        topic = {**topic, **NULL_CACHE}
+    else:
+        editor = {**editor, **NULL_CACHE}
+    script = [
+        (_ai_flat_with_contrast(), *WRITER),
+        (_topic_extract_response("sleeping pills"), TOPIC[0], topic),
+        (_editor_response(REWRITTEN), EDITOR[0], editor),
+        (_verifier_json(supported=10, total=10, gaps=0), *VERIFIER),
+    ]
+    llm = MockLLMProvider(
+        [
+            LLMResponse(content=c, model=m, usage=u, stop_reason="end_turn")
+            for c, m, u in script
+        ],
+        cite_placeholders=True,
+    )
+    result = await _run(sqlite_store, llm, pricing=load_model_pricing())
+
+    assert result.job.status == JobStatus.COMPLETED
+    totals = _publish_metrics(result)["token_usage"]
+    assert totals["input_tokens"] == 1000 + 100 + 500 + 200
+    assert totals["cache_creation_input_tokens"] == 3000
+    assert totals["cache_read_input_tokens"] == 3000
+    [edit] = [s for s in result.job.stages if s.stage == JobStage.EDIT]
+    assert edit.metrics["tokens_cache_write"] == 0
+    assert edit.metrics["implied_claim_tokens_cache_write"] == 0
+    assert _publish_metrics(result)["cost_estimate_usd"] == pytest.approx(EXPECTED_USD)
+
+
 async def test_implied_claim_calls_count_toward_the_token_budget(sqlite_store):
     """Iteration 1 spends 6000 input+output tokens without the topic call and
     6150 with it; the gate fails, so the loop reaches the iteration-2

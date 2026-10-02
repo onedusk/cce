@@ -65,17 +65,19 @@ def _zero_tokens() -> dict[str, int]:
 
 
 def _merge_tokens(into: dict[str, int], frm: Mapping[str, int]) -> None:
+    # A provider may report a cache count as None (the SDK types them as
+    # Optional): None counts as 0, as in sum_usage (COR-07).
     for k in _TOKEN_KEYS:
-        into[k] += int(frm.get(k, 0))
+        into[k] += int(frm.get(k) or 0)
 
 
 def _stage_tokens(usage: Mapping[str, int], prefix: str = "tokens_") -> dict[str, int]:
     """A usage dict as the flat ``<prefix>input`` etc. stage-metric keys."""
     return {
-        f"{prefix}input": int(usage.get("input_tokens", 0)),
-        f"{prefix}output": int(usage.get("output_tokens", 0)),
-        f"{prefix}cache_read": int(usage.get("cache_read_input_tokens", 0)),
-        f"{prefix}cache_write": int(usage.get("cache_creation_input_tokens", 0)),
+        f"{prefix}input": int(usage.get("input_tokens") or 0),
+        f"{prefix}output": int(usage.get("output_tokens") or 0),
+        f"{prefix}cache_read": int(usage.get("cache_read_input_tokens") or 0),
+        f"{prefix}cache_write": int(usage.get("cache_creation_input_tokens") or 0),
     }
 
 
@@ -1078,7 +1080,7 @@ class Pipeline:
             # Accumulate token usage from writer
             if _tokens and writer_output.token_usage:
                 for key in _tokens:
-                    _tokens[key] += writer_output.token_usage.get(key, 0)
+                    _tokens[key] += writer_output.token_usage.get(key) or 0
 
             if not writer_output.has_content:
                 _log.warning("Writer produced no content for path '%s'", path)
