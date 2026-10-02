@@ -497,6 +497,109 @@ def test_curate_failed_exits_1(monkeypatch):
     assert "Status: failed" in result.output
 
 
+class _TimingOutHandle:
+    """A job handle whose wait() times out, as a job still running would."""
+
+    def __init__(self, job_id: str, waited: list[float]):
+        self.job_id = job_id
+        self._waited = waited
+
+    async def wait(self, timeout: float = 600):
+        self._waited.append(timeout)
+        raise TimeoutError(f"Job {self.job_id} did not complete within {timeout}s")
+
+
+def test_batch_wait_timeout_counts_as_failure_and_continues(tmp_path, monkeypatch):
+    """OPS-08: a job still running at --timeout no longer crashes the batch
+    (which cancelled it and skipped the rest): it is reported with its id,
+    counted as a failure, and the next entry still runs."""
+    from cce.engine import CurationEngine
+    from cce.models.job import JobStatus
+    from tests.conftest import make_job
+
+    submitted: list[str] = []
+    waited: list[float] = []
+    cancelled: list[str] = []
+
+    class _Handle:
+        def __init__(self, request):
+            self._request = request
+
+        async def wait(self, timeout: float = 600):
+            waited.append(timeout)
+            return make_job(request=self._request, status=JobStatus.COMPLETED)
+
+    class _Engine:
+        async def curate(self, request):
+            submitted.append(request.topic)
+            if request.topic == "slow topic":
+                handle = _TimingOutHandle("job_slow00000001", waited)
+                handle.cancel = lambda: cancelled.append("slow")  # type: ignore[attr-defined]
+                return handle
+            return _Handle(request)
+
+        async def close(self) -> None:
+            pass
+
+    async def _fake_embedded(*args, **kwargs):
+        return _Engine()
+
+    monkeypatch.setattr(CurationEngine, "embedded", _fake_embedded)
+    topics_file = tmp_path / "topics.yaml"
+    topics_file.write_text(
+        "- topic: slow topic\n  paths: [blog]\n- topic: next topic\n  paths: [blog]\n"
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "batch",
+            "--topics-file",
+            str(topics_file),
+            "--policy-id",
+            "p",
+            "--timeout",
+            "5",
+        ],
+    )
+
+    assert result.exit_code == 1, result.output
+    assert not isinstance(result.exception, TimeoutError)
+    assert submitted == ["slow topic", "next topic"]
+    assert waited == [5.0, 5.0]
+    assert cancelled == []
+    assert "still running after 5s: slow topic (job job_slow00000001" in result.output
+    assert "completed: next topic" in result.output
+
+
+def test_curate_wait_timeout_exits_1_with_the_job_id(monkeypatch):
+    """OPS-08: curate reports a job still running at --timeout and exits 1."""
+    from cce.engine import CurationEngine
+
+    waited: list[float] = []
+
+    class _Engine:
+        async def curate(self, request):
+            return _TimingOutHandle("job_slow00000002", waited)
+
+        async def close(self) -> None:
+            pass
+
+    async def _fake_embedded(*args, **kwargs):
+        return _Engine()
+
+    monkeypatch.setattr(CurationEngine, "embedded", _fake_embedded)
+    result = runner.invoke(
+        app, ["curate", "topic", "--policy-id", "p", "--timeout", "2.5"]
+    )
+
+    assert result.exit_code == 1, result.output
+    assert not isinstance(result.exception, TimeoutError)
+    assert waited == [2.5]
+    assert "Job: job_slow00000002" in result.output
+    assert "Status: still running after 2.5s" in result.output
+
+
 def test_curate_missing_api_key_exits_1(monkeypatch):
     """ConfigError from the embedded engine → one-line stderr error, exit 1."""
     for var in ("CCE_LLM_API_KEY", "CCE_CRAWL_API_KEY"):
@@ -691,6 +794,22 @@ def test_validate_typo_policy_exits_1_with_suggestion(tmp_path):
     assert "1 error in 4 files" in result.output
 
 
+def test_validate_reports_an_invalid_topic_pattern(tmp_path):
+    """CRIT-02: a topic_pattern re can't compile is a validate error, not OK."""
+    _write_validate_tree(tmp_path)
+    (tmp_path / "policies" / "regex.yaml").write_text(
+        "id: regex\nname: Regex\ntopic_overrides:\n"
+        '  - topic_pattern: "sleep (hygiene"\n'
+    )
+
+    result = runner.invoke(app, ["validate", "--root", str(tmp_path)])
+    assert result.exit_code == 1, result.output
+    line = next(line for line in result.output.splitlines() if "regex.yaml" in line)
+    assert "ERROR" in line
+    assert "topic_overrides.0.topic_pattern" in line
+    assert "sleep (hygiene" in line
+
+
 def test_validate_all_good_tree_exits_0(tmp_path):
     _write_validate_tree(tmp_path)
 
@@ -789,3 +908,75 @@ def test_entry_point_loads_dotenv_without_overriding_the_env(tmp_path, monkeypat
     monkeypatch.delenv("CCE_TEST_FROM_DOTENV", raising=False)
 
     assert seen == {"CCE_TEST_FROM_DOTENV": "file", "CCE_TEST_SET": "env"}
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["emit-mdx", "--all", "--target", "."],
+        ["api", "key", "list"],
+        ["api", "start"],
+    ],
+)
+def test_missing_config_file_is_a_one_line_error(tmp_path, monkeypatch, args):
+    """CR-01: --config naming a missing file exits 1 with one line, no traceback."""
+    import uvicorn
+
+    monkeypatch.setattr(uvicorn, "run", lambda *a, **k: None)  # never bind
+    missing = str(tmp_path / "cce.yml")
+    result = runner.invoke(app, [*args, "--config", missing])
+    assert result.exit_code == 1, result.output
+    assert "Config file not found" in result.output
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+@pytest.mark.parametrize(
+    ("env", "yaml_api", "flags", "expected"),
+    [
+        ({}, None, [], ("0.0.0.0", 8000)),
+        (
+            {"CCE_API_HOST": "127.0.0.1", "CCE_API_PORT": "9001"},
+            None,
+            [],
+            ("127.0.0.1", 9001),
+        ),
+        ({}, {"host": "127.0.0.2", "port": 9100}, [], ("127.0.0.2", 9100)),
+        (
+            {"CCE_API_HOST": "127.0.0.1", "CCE_API_PORT": "9001"},
+            {"host": "127.0.0.2", "port": 9100},
+            [],
+            ("127.0.0.1", 9001),
+        ),
+        (
+            {"CCE_API_HOST": "127.0.0.1", "CCE_API_PORT": "9001"},
+            {"host": "127.0.0.2", "port": 9100},
+            ["--host", "127.0.0.3", "--port", "9200"],
+            ("127.0.0.3", 9200),
+        ),
+    ],
+)
+def test_api_start_bind_precedence(
+    tmp_path, monkeypatch, env, yaml_api, flags, expected
+):
+    """CR-06: flag > env > YAML > default; the flag defaults no longer win."""
+    import uvicorn
+    import yaml
+
+    for var in ("CCE_API_HOST", "CCE_API_PORT"):
+        monkeypatch.delenv(var, raising=False)
+    for var, value in env.items():
+        monkeypatch.setenv(var, value)
+    calls: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        uvicorn, "run", lambda _app, host, port: calls.append((host, port))
+    )
+
+    args = ["api", "start", *flags]
+    if yaml_api is not None:
+        config_file = tmp_path / "cce.yaml"
+        config_file.write_text(yaml.dump({"api": yaml_api}))
+        args += ["--config", str(config_file)]
+    result = runner.invoke(app, args)
+
+    assert result.exit_code == 0, result.output
+    assert calls == [expected]

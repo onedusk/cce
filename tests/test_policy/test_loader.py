@@ -142,6 +142,33 @@ def test_load_policy_rejects_unknown_nested_key(tmp_path):
         load_policy(policy_file)
 
 
+def test_invalid_topic_pattern_rejected_at_load(tmp_path, caplog):
+    """CRIT-02: a pattern re can't compile fails the policy at load (logged
+    with the file and the pattern), not every job at discovery."""
+    from cce.policy.types import TopicOverride
+
+    with pytest.raises(
+        ValidationError, match="invalid topic_pattern 'sleep \\(hygiene'"
+    ):
+        TopicOverride(topic_pattern="sleep (hygiene")
+
+    (tmp_path / "good.yaml").write_text(yaml.dump({"id": "good", "name": "Good"}))
+    bad = tmp_path / "bad.yaml"
+    bad.write_text(
+        yaml.dump(
+            {
+                "id": "bad",
+                "name": "Bad",
+                "topic_overrides": [{"topic_pattern": "sleep (hygiene"}],
+            }
+        )
+    )
+    policies = load_policies(tmp_path)
+    assert set(policies) == {"good"}
+    assert "bad.yaml" in caplog.text
+    assert "sleep (hygiene" in caplog.text
+
+
 def test_repo_policy_and_path_config_yaml_still_load():
     """Regression guard for extra="forbid": every committed policy YAML and
     path_configs YAML must still parse (no legitimate key got rejected)."""

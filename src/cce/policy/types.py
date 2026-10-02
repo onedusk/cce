@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # Legacy marketing indicators, kept verbatim as the default (B9). Matched as
 # whole words/phrases, case-insensitive, any whitespace between words.
@@ -101,6 +101,17 @@ class TopicOverride(BaseModel):
     recency: RecencyRule | None = None
 
     model_config = {"extra": "forbid"}
+
+    @field_validator("topic_pattern")
+    @classmethod
+    def _pattern_compiles(cls, value: str) -> str:
+        """Reject a pattern re.search can't compile when the policy loads,
+        not at discovery of every job that names the policy (CRIT-02)."""
+        try:
+            re.compile(value, re.IGNORECASE)
+        except re.error as e:
+            raise ValueError(f"invalid topic_pattern {value!r}: {e}") from None
+        return value
 
 
 class SourcePolicy(BaseModel):

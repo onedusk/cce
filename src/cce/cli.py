@@ -76,6 +76,12 @@ def batch_command(
     audience: str = typer.Option(
         "general", "--audience", help="Target audience (overridable per-entry)."
     ),
+    timeout: float = typer.Option(
+        1800.0,
+        "--timeout",
+        min=0,
+        help="Seconds to wait for each job; one still running then is a failure.",
+    ),
 ) -> None:
     """Run the pipeline over every topic in a YAML file (audit U4 / PDR-002).
 
@@ -85,6 +91,9 @@ def batch_command(
     Exits with the worst job outcome, in curate's codes: 1 if any job
     FAILED, else 2 if any is REVIEW_REQUIRED, else 3 if any is
     READY_FOR_APPROVAL, else 0. Skipped (malformed) entries don't change it.
+    A job still running after ``--timeout`` seconds counts as a failure and
+    the batch moves on (OPS-08): the job keeps running in this process while
+    the later entries run, and is cancelled if still running when cce exits.
     """
     import yaml
 
@@ -135,7 +144,16 @@ def batch_command(
 
                 typer.echo(f"[{i}/{len(entries)}] Starting: {topic}")
                 handle = await engine.curate(request)
-                job = await handle.wait(timeout=1800)
+                try:
+                    job = await handle.wait(timeout=timeout)
+                except TimeoutError:
+                    statuses.append(JobStatus.RUNNING)
+                    typer.echo(
+                        f"[{i}/{len(entries)}] still running after {timeout:g}s: "
+                        f"{topic} (job {handle.job_id} keeps running; cancelled "
+                        "if unfinished when the batch exits)"
+                    )
+                    continue
                 statuses.append(job.status)
                 typer.echo(
                     f"[{i}/{len(entries)}] {job.status.value}: {topic}"
@@ -163,23 +181,36 @@ def batch_command(
 
 @api_app.command("start")
 def start_server(
-    host: str = typer.Option("0.0.0.0", help="Bind address"),
-    port: int = typer.Option(8000, help="Bind port"),
+    host: str | None = typer.Option(
+        None, help="Bind address [default: CCE_API_HOST, api.host, 0.0.0.0]"
+    ),
+    port: int | None = typer.Option(
+        None, help="Bind port [default: CCE_API_PORT, api.port, 8000]"
+    ),
     config: str | None = typer.Option(None, help="Path to config YAML"),
 ) -> None:
-    """Start the CCE API server."""
+    """Start the CCE API server.
+
+    Bind address and port: flag > env var > YAML > default (CR-06).
+    """
     import uvicorn
 
     from cce.api.app import create_app
-    from cce.config.loader import load_config
+    from cce.config.loader import ConfigError, load_config
 
-    engine_config = load_config(config)
-    # CLI flags override config values
-    engine_config.api.host = host
-    engine_config.api.port = port
+    try:
+        engine_config = load_config(config)
+    except ConfigError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from None
+    # CLI flags override config values, only when given
+    if host is not None:
+        engine_config.api.host = host
+    if port is not None:
+        engine_config.api.port = port
 
     application = create_app(engine_config)
-    uvicorn.run(application, host=host, port=port)
+    uvicorn.run(application, host=engine_config.api.host, port=engine_config.api.port)
 
 
 @key_app.command("generate")
@@ -316,7 +347,9 @@ def emit_mdx_command(
     topic: str | None = typer.Option(
         None, help="Topic name (emits latest completed job)"
     ),
-    all_jobs: bool = typer.Option(False, "--all", help="Emit all completed jobs"),
+    all_jobs: bool = typer.Option(
+        False, "--all", help="Emit the newest completed job of each topic"
+    ),
     target: str = typer.Option(..., help="Target content directory"),
     config: str | None = typer.Option(None, help="Path to config YAML"),
     dry_run: bool = typer.Option(
@@ -344,7 +377,11 @@ def emit_mdx_command(
         ),
     ),
 ) -> None:
-    """Emit MDX files from a completed curation job."""
+    """Emit MDX files from a completed curation job.
+
+    ``--all`` emits the newest completed job of each topic directory (topics
+    that slugify alike share one) and lists the older ones as skipped.
+    """
     if sum([bool(job), bool(topic), all_jobs]) > 1:
         typer.echo("Error: --job, --topic, and --all are mutually exclusive", err=True)
         raise typer.Exit(1)
@@ -386,9 +423,19 @@ def emit_mdx_command(
                     typer.echo("Error: no completed jobs found", err=True)
                     raise typer.Exit(1)
                 packages: list[tuple[PublishPackage, str | None, str | None]] = []
+                # Newest first (list_jobs order): keep one job per topic
+                # directory, so an older run can't overwrite a newer one (SEC-07).
+                emitted: dict[str, str] = {}  # slug -> job id
                 for j in jobs:
+                    slug = slugify(j.request.topic)
+                    if slug in emitted:
+                        typer.echo(
+                            f"Skipped: {j.id} (older than {emitted[slug]} for {slug}/)"
+                        )
+                        continue
                     package = await store.get_package(j.id)
                     if package is not None:
+                        emitted[slug] = j.id
                         packages.append((package, None, j.request.topic))
                 if not packages:
                     typer.echo(
@@ -528,12 +575,20 @@ def curate(
     config_path: Path | None = typer.Option(  # noqa: B008
         None, "--config", help="Path to config YAML"
     ),
+    timeout: float = typer.Option(
+        1800.0,
+        "--timeout",
+        min=0,
+        help="Seconds to wait for the job; still running then is a failure.",
+    ),
 ) -> None:
     """Submit a single-topic job via the embedded engine and wait.
 
     Exits 0 on COMPLETED, 2 on REVIEW_REQUIRED, 3 on READY_FOR_APPROVAL
     (publish_policy: human — passed, awaiting a person), 1 on
     FAILED/ConfigError.
+    Also 1 when the job is still running after ``--timeout`` seconds
+    (OPS-08). The job runs in this process, so it is cancelled on exit.
     """
     from cce.config.loader import ConfigError
     from cce.engine import CurationEngine
@@ -552,7 +607,14 @@ def curate(
         try:
             handle = await engine.curate(request)
             typer.echo(f"Job: {handle.job_id}")
-            job = await handle.wait(timeout=1800)
+            try:
+                job = await handle.wait(timeout=timeout)
+            except TimeoutError:
+                typer.echo(
+                    f"Status: still running after {timeout:g}s; cancelled on exit "
+                    "(the embedded engine runs the job in this process)"
+                )
+                return JobStatus.RUNNING
             typer.echo(
                 f"Status: {job.status.value}"
                 + (f" — {job.error.message}" if job.error else "")
@@ -875,10 +937,14 @@ def _validate_taxonomy_data(data: object) -> None:
 
 async def _get_job_store(config_path: str | None = None):
     """Open a JobStore connection using config defaults."""
-    from cce.config.loader import load_config
+    from cce.config.loader import ConfigError, load_config
     from cce.jobs.store import JobStore
 
-    config = load_config(config_path)
+    try:
+        config = load_config(config_path)
+    except ConfigError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from None
     store = JobStore(db_path=config.evidence_store.sqlite_path)
     await store.connect()
     return store

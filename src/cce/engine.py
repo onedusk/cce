@@ -382,8 +382,9 @@ class CurationEngine:
         engine._semaphore = asyncio.Semaphore(engine._config.api.max_concurrent_jobs)
 
         logger.info(
-            "CurationEngine (embedded) ready — %d policies loaded",
+            "CurationEngine (embedded) ready: %d policies loaded, publish_policy=%s",
             len(engine._policies),
+            engine._config.publish_policy,
         )
         return engine
 

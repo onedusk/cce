@@ -46,7 +46,7 @@ uv add --dev <package>
 **CLI** (installed as `cce` via `[project.scripts]`; the supported front door — finding 4.8):
 
 ```bash
-# Run a single topic through the embedded engine and wait (exit 0 COMPLETED / 2 REVIEW_REQUIRED / 3 READY_FOR_APPROVAL / 1 FAILED)
+# Run a single topic through the embedded engine and wait (exit 0 COMPLETED / 2 REVIEW_REQUIRED / 3 READY_FOR_APPROVAL / 1 FAILED or still running at --timeout, default 1800 s)
 uv run cce curate "sleep hygiene" --policy-id peer-reviewed --path learn
 
 # Run the pipeline over a YAML topics file (exits with the worst job outcome, in curate's codes)
@@ -65,7 +65,7 @@ uv run cce api start
 # Generate an API key (written to ~/.cce/api-key, mode 0600)
 uv run cce api key generate
 
-# Emit MDX from completed jobs
+# Emit MDX from completed jobs (--all: the newest completed job of each topic)
 uv run cce emit-mdx --all --target <content-dir>
 ```
 

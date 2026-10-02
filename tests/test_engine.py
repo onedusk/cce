@@ -480,3 +480,25 @@ async def test_embedded_closes_the_stores_it_opened_when_setup_fails(
 
     assert len(opened) == 2
     assert all(store._db is None for store in opened)
+
+
+async def test_embedded_logs_the_effective_publish_policy(
+    tmp_path: Path, monkeypatch, caplog
+):
+    """CR-01: the start-up log names the publish policy actually in force."""
+    import logging
+
+    caplog.set_level(logging.INFO, logger="cce.engine")
+    engine = await _make_engine(
+        tmp_path, monkeypatch, extra_yaml="publish_policy: human\n"
+    )
+    await engine.close()
+    assert "publish_policy=human" in caplog.text
+
+
+async def test_embedded_missing_config_file_raises(tmp_path: Path):
+    """CR-01: a config_path that does not exist no longer boots on defaults."""
+    from cce.config.loader import ConfigError
+
+    with pytest.raises(ConfigError, match="Config file not found"):
+        await CurationEngine.embedded(config_path=str(tmp_path / "cce.yml"))
