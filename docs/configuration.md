@@ -134,6 +134,24 @@ completes leaves the job FAILED with no package. A retry whose policy is no
 longer loaded is refused (`ValueError` in embedded mode, 404
 `policy_not_found` from the API) and the job is left as it was.
 
+**Recovering a job left by a crash.** A QUEUED or RUNNING job is refused by
+retry (409 `already_running`, `ValueError` in embedded mode). Only a graceful
+API shutdown marks its running jobs FAILED (`server_shutdown`); after a kill,
+OOM or host crash the row keeps its status with nothing running it, and cce
+does not fail such jobs at start-up. To recover one, call
+`POST /v1/curate/jobs/{id}/retry?force=true` (or `JobHandle.retry(force=True)`).
+When the serving process runs no task for the job, it records the job FAILED
+with error code `orphaned` and then re-queues it; when it does run one, the
+answer is still 409. The `orphaned` failure is recorded before the policy is
+checked: if the policy is no longer loaded the retry is still refused (404
+`policy_not_found`, `ValueError` in embedded mode), and the job stays FAILED,
+retryable without force once the policy is back. In embedded mode
+`JobHandle.cancel()` on such a job
+records the same `orphaned` failure without re-running it (the API's DELETE
+removes the job instead). Force only a job that no process runs: the CLI and
+the API can share one SQLite file, and a forced retry of a job another
+process is still running starts a second run of it.
+
 **New configuration surfaces must enter through the registry** — add a field
 to `ConfigRegistry`, load it in `load()`, and consume it from
 `build_components`. Do not add `load_*` calls to `engine.py` or

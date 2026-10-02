@@ -260,6 +260,18 @@
               "type": "string",
               "title": "Job Id"
             }
+          },
+          {
+            "name": "force",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Re-run a QUEUED or RUNNING job this process runs no task for (left by a crash or kill): it is recorded FAILED with code 'orphaned', then re-queued. Only when no other process is running the job.",
+              "default": false,
+              "title": "Force"
+            },
+            "description": "Re-run a QUEUED or RUNNING job this process runs no task for (left by a crash or kill): it is recorded FAILED with code 'orphaned', then re-queued. Only when no other process is running the job."
           }
         ],
         "responses": {

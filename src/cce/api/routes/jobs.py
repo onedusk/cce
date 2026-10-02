@@ -6,6 +6,8 @@ GET    /v1/curate/jobs              — list jobs (filtered, paginated)
 DELETE /v1/curate/jobs/:jobId       — cancel/delete job
 POST   /v1/curate/jobs/:jobId/retry — re-run pipeline
 GET    /v1/curate/jobs/:jobId/package — get completed output
+
+retry?force=true re-runs a job a crash or kill left QUEUED or RUNNING.
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ from cce.api.schemas import (
     error_envelope,
     job_to_response,
 )
-from cce.engine import run_pipeline_task
+from cce.engine import mark_orphaned, run_pipeline_task
 from cce.models.job import Job, JobStatus
 from cce.models.request import CurationConstraints, CurationRequest
 
@@ -241,6 +243,15 @@ async def delete_job(
 async def retry_job(
     job_id: str,
     request: Request,
+    force: bool = Query(
+        default=False,
+        description=(
+            "Re-run a QUEUED or RUNNING job this process runs no task for "
+            "(left by a crash or kill): it is recorded FAILED with code "
+            "'orphaned', then re-queued. Only when no other process is "
+            "running the job."
+        ),
+    ),
 ) -> JSONResponse:
     """Re-run a completed or failed job."""
     state = request.app.state
@@ -257,14 +268,16 @@ async def retry_job(
         )
 
     if job.status in (JobStatus.QUEUED, JobStatus.RUNNING):
-        return JSONResponse(
-            status_code=409,
-            content=error_envelope(
-                code="already_running",
-                message="Job is already queued or running",
-                request_id=get_request_id(),
-            ).model_dump(mode="json"),
-        )
+        if not force or job_id in state.running_tasks:
+            return JSONResponse(
+                status_code=409,
+                content=error_envelope(
+                    code="already_running",
+                    message="Job is already queued or running",
+                    request_id=get_request_id(),
+                ).model_dump(mode="json"),
+            )
+        await mark_orphaned(job, state.job_store)
 
     # Resolve policy before any write: a 404 leaves the job as it was
     policy = state.policies.get(job.request.policy_id)
