@@ -291,6 +291,18 @@ def test_passes_date_filter_exceeds_max_age_fails():
     assert Discoverer._passes_date_filter(ev, policy, None) is False
 
 
+def test_passes_date_filter_measures_age_from_now_when_given():
+    """COR-01: a reused row's age runs to now; a fresh one's to its crawl."""
+    ev = make_evidence(
+        published_at=_NOW - timedelta(days=10),
+        retrieved_at=_NOW,
+    )
+    policy = make_source_policy(recency=RecencyRule(max_age_days=30))
+    later = _NOW + timedelta(days=60)
+    assert Discoverer._passes_date_filter(ev, policy, None) is True
+    assert Discoverer._passes_date_filter(ev, policy, None, now=later) is False
+
+
 def test_passes_date_filter_no_max_age_passes():
     """max_age_days=None means no age limit."""
     ev = make_evidence(

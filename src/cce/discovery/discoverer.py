@@ -215,6 +215,15 @@ class Discoverer:
             return candidates, []
         fresh = [u for u in candidates if u not in already]
         reusable = await self._evidence_store.get_by_urls(list(already))
+        # A row stored before naive published dates were read as UTC can
+        # still be naive: normalize it the same way, or the date filters
+        # fail open on it (COR-01).
+        reusable = [
+            ev.model_copy(update={"published_at": ev.published_at.replace(tzinfo=UTC)})
+            if ev.published_at is not None and ev.published_at.tzinfo is None
+            else ev
+            for ev in reusable
+        ]
         logger.info(
             "URL dedup: %d/%d candidates already indexed "
             "(reusing %d stored evidence rows)",
@@ -417,6 +426,11 @@ class Discoverer:
         Returns ``(evidence, metrics)`` where metrics carries the
         crawl_success / crawl_failed / crawl_failure_rate keys previously
         stashed on the instance side-channel (finding 1.2).
+
+        Reusable rows pass the same date and reputation filters as fresh
+        ones (COR-01). Limitation: their ``source_quality`` flags are the
+        ones stored at crawl time, under the storing job's policy; they are
+        not recomputed against this policy's phrase and suffix lists.
         """
         # Step 4: Crawl fresh URLs (skip entirely if there are none to crawl)
         crawl_results: list[CrawlResult] = []
@@ -479,9 +493,20 @@ class Discoverer:
         crawl_failed = len(fresh_urls) - crawl_success
 
         # Merge reusable evidence from previously-crawled URLs (audit P3).
+        # Stored rows pass this job's date and reputation filters like fresh
+        # ones (COR-01), with age measured from now: the stored retrieved_at
+        # is when the page was crawled, not when it is being used.
         # Same excerpt-hash dedup applies so nothing is double-counted.
         counts["excerpts_gathered"] += len(reusable_evidence)
+        now = datetime.now(UTC)
         for ev in reusable_evidence:
+            if not self._passes_date_filter(ev, effective_policy, constraints, now=now):
+                counts["dropped_date"] += 1
+                continue
+            reason = self._reputation_drop_reason(ev, effective_policy.reputation)
+            if reason is not None:
+                counts[f"dropped_{reason}"] += 1
+                continue
             if ev.excerpt_hash in seen_hashes:
                 counts["deduplicated"] += 1
                 continue
@@ -558,18 +583,24 @@ class Discoverer:
         ev: Evidence,
         policy: SourcePolicy,
         constraints: CurationConstraints | None,
+        *,
+        now: datetime | None = None,
     ) -> bool:
         """Check if evidence meets date constraints from request + policy.
 
         Fail-open: evidence with no published_at always passes.
+
+        ``now`` is passed for rows reused from the store, whose retrieved_at
+        is an earlier job's crawl time: their age is measured from ``now``.
         """
         if ev.published_at is None:
             return True
 
-        # Policy-level: max_age_days relative to retrieval time
+        # Policy-level: max_age_days relative to retrieval time (or to now,
+        # for a reused row)
         if policy.recency.max_age_days is not None:
             try:
-                age_days = (ev.retrieved_at - ev.published_at).days
+                age_days = ((now or ev.retrieved_at) - ev.published_at).days
             except TypeError:
                 return True  # fail-open on naive/aware mismatch
             if age_days > policy.recency.max_age_days:
