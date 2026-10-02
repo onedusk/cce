@@ -194,3 +194,50 @@ async def test_absent_or_empty_constraints_change_nothing(constraints):
     assert crawled == [BAD, GOOD, OTHER]
     assert metrics["urls_dropped_policy"] == 0
     assert metrics["dropped_date"] == 0
+
+
+@pytest.mark.parametrize(
+    ("date_from", "date_to", "inside", "outside"),
+    [
+        (
+            "2023-06-01",
+            "2023-06-01",
+            "2023-06-01T12:00:00+00:00",
+            "2023-06-02T00:00:00+00:00",
+        ),
+        (
+            "2024-06",
+            "2024-06",
+            "2024-06-30T23:00:00+00:00",
+            "2024-07-01T00:00:00+00:00",
+        ),
+        ("2024", "2024", "2024-12-31T23:59:00+00:00", "2025-01-01T00:00:00+00:00"),
+    ],
+)
+def test_date_only_bounds_cover_the_whole_day_month_or_year(
+    date_from, date_to, inside, outside
+):
+    """Review of CR-03: a date-only upper bound used to mean midnight (a
+    one-day window kept nothing published after 00:00), and '2024' or
+    '2024-06' were rejected."""
+    from datetime import datetime
+
+    low, high = CurationConstraints(date_from=date_from, date_to=date_to).date_bounds()
+    assert low <= datetime.fromisoformat(inside) <= high
+    assert not datetime.fromisoformat(outside) <= high
+
+
+def test_wildcard_and_suffix_allow_entries_are_not_seeded_as_urls():
+    """Review of CR-03: '.gov' and '*.nih.gov' used to become the crawl seeds
+    https://.gov and https://*.nih.gov."""
+    import asyncio
+
+    from tests.conftest import MockCrawlAdapter, make_curation_request
+
+    adapter = MockCrawlAdapter()  # no search: only seeds would be crawled
+    discoverer = Discoverer(adapter=adapter, config=CrawlConfig(api_key="k"))
+    request = make_curation_request(
+        constraints=CurationConstraints(domains_allow=[".gov", "*.nih.gov", "who.int"])
+    )
+    urls = asyncio.run(discoverer._search_candidates(request))[0]
+    assert urls == ["https://who.int"]

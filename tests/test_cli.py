@@ -980,3 +980,17 @@ def test_api_start_bind_precedence(
 
     assert result.exit_code == 0, result.output
     assert calls == [expected]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["curate", "t", "--policy-id", "p"],
+        ["batch", "--topics-file", "x.yaml", "--policy-id", "p"],
+    ],
+)
+def test_timeout_must_be_at_least_one_second(command):
+    """Review of OPS-08: --timeout 0 reported a job as still running without
+    checking it once, and the cancelled task left the job QUEUED for good."""
+    result = runner.invoke(app, [*command, "--timeout", "0"])
+    assert result.exit_code == 2

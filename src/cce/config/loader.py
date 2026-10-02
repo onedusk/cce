@@ -11,6 +11,7 @@ Usage:
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,8 @@ from cce.config.types import (
     WriterConfig,
     default_quality_gate_profiles,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ConfigError(ValueError):
@@ -138,6 +141,15 @@ def _unknown_keys(file_data: dict[str, Any]) -> list[str]:
     gate = file_data.get("quality_gate")
     if isinstance(gate, dict):
         for profile, data in gate.items():
+            if profile not in default_quality_gate_profiles():
+                # Loaded (custom profiles are supported) but no request can
+                # select it: risk_profile accepts only the built-in names. A
+                # typo such as "hihg" leaves the real profile on its defaults.
+                logger.warning(
+                    "quality_gate.%s is not one of %s: no request can select it",
+                    profile,
+                    ", ".join(default_quality_gate_profiles()),
+                )
             unknown += _unknown_in(data, QualityGateConfig, f"quality_gate.{profile}.")
     return unknown
 

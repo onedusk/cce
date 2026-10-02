@@ -427,9 +427,11 @@ class Discoverer:
                 }
 
         # Add any seed domains from constraints as fallback
+        # (only plain host entries: ".gov" or "*.nih.gov" names no page)
         if request.constraints and request.constraints.domains_allow:
             for domain in request.constraints.domains_allow:
-                candidate_urls.append(f"https://{domain}")
+                if not domain.startswith((".", "*")):
+                    candidate_urls.append(f"https://{domain}")
 
         # Deduplicate
         candidate_urls = list(dict.fromkeys(candidate_urls))

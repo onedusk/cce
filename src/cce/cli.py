@@ -79,7 +79,7 @@ def batch_command(
     timeout: float = typer.Option(
         1800.0,
         "--timeout",
-        min=0,
+        min=1,
         help="Seconds to wait for each job; one still running then is a failure.",
     ),
 ) -> None:
@@ -578,7 +578,7 @@ def curate(
     timeout: float = typer.Option(
         1800.0,
         "--timeout",
-        min=0,
+        min=1,
         help="Seconds to wait for the job; still running then is a failure.",
     ),
 ) -> None:

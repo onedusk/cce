@@ -141,6 +141,25 @@ class TestFormatThnklabsPage:
         assert "## Curated Resources" in mdx and "WHO X" in mdx
         assert "Invented" not in mdx
 
+    @pytest.mark.parametrize(
+        "heading",
+        [
+            "## Curated Resources for Further Exploration",
+            "## Curated Resources and Research Connections",
+            "## **Curated Resources**",
+        ],
+    )
+    def test_suffixed_curated_resources_heading_is_still_rebuilt(self, heading):
+        """Review of COR-10: the writer adds suffixes to the required section;
+        the grounded rebuild must still replace the model-written list."""
+        body = f"# T\n\nA claim [ev:ev_1].\n\n{heading}\n\n- **Invented** x\n"
+        lookup = {
+            "ev_1": make_evidence(id="ev_1", url="https://who.int/x", title="WHO X")
+        }
+        mdx = format_thnklabs_page(_unit(body), lookup, topic_slug="t")
+        assert "## Curated Resources\n" in mdx and "WHO X" in mdx
+        assert "Invented" not in mdx
+
 
 class TestHelpers:
     def test_read_time_rounds_on_200_wpm(self):

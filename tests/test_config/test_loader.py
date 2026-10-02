@@ -510,3 +510,16 @@ def test_role_settings_load_from_yaml_and_env(monkeypatch, tmp_path):
     assert config.humanization.editor.max_tokens == 9000
     assert config.verifier.thinking == "adaptive"
     assert config.verifier.model is None  # unset: inherits llm.model
+
+
+def test_unselectable_quality_gate_profile_is_warned(monkeypatch, tmp_path, caplog):
+    """Review of CR-01: a typo in a profile name ('hihg') made a profile
+    nothing reads, and the real one silently kept its defaults. Custom
+    profiles stay loadable, so it is a warning that names the profile."""
+    _clear_env(monkeypatch)
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        yaml.dump({"quality_gate": {"hihg": {"pass_threshold": 0.99}}})
+    )
+    load_config(config_file)
+    assert "quality_gate.hihg is not one of" in caplog.text

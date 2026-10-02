@@ -49,8 +49,10 @@ _FOOTNOTE_RE = re.compile(
 )  # rendered markers, stripped from excerpt
 # Only the section the client format defines, as a whole heading (COR-10):
 # a prose heading that merely contains "resources" keeps its cited text.
+# A heading that starts with "Curated Resources" (the writer adds suffixes such
+# as "for Further Exploration"); "Resources for families" is left alone.
 _RESOURCES_HEADING_RE = re.compile(
-    r"^#{2,3}[ \t]+curated[ \t]+resources[ \t]*$", re.IGNORECASE | re.MULTILINE
+    r"^#{2,3}[ \t]+\**curated[ \t]+resources\b[^\n]*$", re.IGNORECASE | re.MULTILINE
 )
 
 

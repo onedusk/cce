@@ -147,8 +147,9 @@ longer loaded is refused (`ValueError` in embedded mode, 404
 `policy_not_found` from the API) and the job is left as it was.
 
 **Recovering a job left by a crash.** A QUEUED or RUNNING job is refused by
-retry (409 `already_running`, `ValueError` in embedded mode). Only a graceful
-API shutdown marks its running jobs FAILED (`server_shutdown`); after a kill,
+retry (409 `already_running`, `ValueError` in embedded mode). A graceful API
+shutdown marks every RUNNING job in its store FAILED (`server_shutdown`),
+including one a CLI process sharing the same file is running; after a kill,
 OOM or host crash the row keeps its status with nothing running it, and cce
 does not fail such jobs at start-up. To recover one, call
 `POST /v1/curate/jobs/{id}/retry?force=true` (or `JobHandle.retry(force=True)`).

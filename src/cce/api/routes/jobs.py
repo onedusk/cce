@@ -282,6 +282,16 @@ async def retry_job(
             ).model_dump(mode="json"),
         )
 
+    # A run whose status is already terminal may still be storing its
+    # package: let it finish so it can't land after this retry's delete.
+    tail = state.running_tasks.get(job_id)
+    if (
+        tail is not None
+        and not tail.done()
+        and job.status not in (JobStatus.QUEUED, JobStatus.RUNNING)
+    ):
+        await asyncio.wait({tail})
+
     if job.status in (JobStatus.QUEUED, JobStatus.RUNNING):
         if not force or job_id in state.running_tasks:
             return JSONResponse(

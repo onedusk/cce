@@ -119,7 +119,10 @@ async def run_pipeline_task(
             job.completed_at = datetime.now(UTC)
             await job_store.update_job(job)
     finally:
-        running_tasks.pop(job_id, None)
+        # Only this run's own entry: a retry launched while this task was
+        # still finishing has put its own task there (review of OPS-04).
+        if running_tasks.get(job_id) is asyncio.current_task():
+            running_tasks.pop(job_id, None)
 
 
 async def mark_orphaned(job: Job, job_store: JobStore) -> None:
@@ -246,6 +249,14 @@ class JobHandle:
         when no other process is running the job (OPS-04).
         """
         if self._engine is not None:
+            # A run whose status is already terminal may still be storing its
+            # package: let it finish so it can't land after this retry's
+            # delete_package (review of COR-02).
+            tail = (self._running_tasks or {}).get(self._job_id)
+            if tail is not None and not tail.done():
+                job = await self.status()
+                if job.status not in (JobStatus.QUEUED, JobStatus.RUNNING):
+                    await asyncio.wait({tail})
             job = await self.status()
             if job.status in (JobStatus.QUEUED, JobStatus.RUNNING):
                 if not force or self._job_id in (self._running_tasks or {}):
