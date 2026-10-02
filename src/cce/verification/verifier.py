@@ -411,13 +411,16 @@ class Verifier:
                 "Validate claims within this regulatory and geographic context.\n"
             )
 
-        user_prompt = f"""=== DRAFT CONTENT TO VERIFY ===
-{quote_untrusted("draft", unit.content)}
-=== END DRAFT ===
-
-=== EVIDENCE AVAILABLE (the ONLY acceptable sources) ===
+        # Evidence first (OPS-02): the provider caches the prompt up to
+        # "=== END EVIDENCE ===", so that prefix must not hold the draft,
+        # which changes on every iteration.
+        user_prompt = f"""=== EVIDENCE AVAILABLE (the ONLY acceptable sources) ===
 {evidence_block}
 === END EVIDENCE ===
+
+=== DRAFT CONTENT TO VERIFY ===
+{quote_untrusted("draft", unit.content)}
+=== END DRAFT ===
 {jurisdiction_line}
 Verify every factual claim in the draft against the evidence provided. \
 Any claim containing specific facts, data, or assertions that cannot be \

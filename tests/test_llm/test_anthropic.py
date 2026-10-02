@@ -473,16 +473,19 @@ def test_split_for_cache_writer_marker() -> None:
 
 
 def test_split_for_cache_verifier_marker() -> None:
-    """Verifier-style evidence end marker also splits correctly."""
+    """Verifier-style evidence end marker also splits correctly: the evidence
+    comes first and is cached, the draft after it is not (OPS-02)."""
     content = (
-        "=== DRAFT CONTENT ===\nSome draft\n=== END DRAFT ===\n\n"
         "=== EVIDENCE AVAILABLE ===\n[ev_001] Evidence\n=== END EVIDENCE ===\n\n"
+        "=== DRAFT CONTENT ===\nSome draft\n=== END DRAFT ===\n\n"
         "Verify every factual claim."
     )
     blocks = AnthropicProvider._split_for_cache(content)
     assert len(blocks) == 2
     assert blocks[0]["text"].endswith("=== END EVIDENCE ===")
     assert blocks[0]["cache_control"] == {"type": "ephemeral"}
+    assert "Some draft" not in blocks[0]["text"]
+    assert "Some draft" in blocks[1]["text"]
     assert "Verify every factual claim" in blocks[1]["text"]
     assert "cache_control" not in blocks[1]
 
