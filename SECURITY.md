@@ -94,8 +94,10 @@ cached prompt prefixes stay byte-stable. Implementation:
   job that didn't complete only with `--job ... --force`.)
 - An editor rewrite whose citation markers differ from the draft's is
   discarded; the writer's draft is kept.
-- The quality gate reads the verifier's counts, the draft's markers, the
-  evidence IDs and config, never excerpt or title text. For fixed evidence
+- The quality gate reads counts tallied from the verifier's per-claim
+  verdicts (the reply's own summary counts are only cross-checked, with a
+  warning when they disagree), the draft's markers, the evidence IDs and
+  config, never excerpt or title text. For fixed evidence
   IDs and a fixed verifier reply, the decision is the same whatever the
   excerpts say.
 - Writer and verifier replies are parsed as JSON of a fixed shape

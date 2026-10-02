@@ -20,6 +20,7 @@ from cce.verification.verifier import (
     Verifier,
 )
 from tests.conftest import MockLLMProvider, make_content_unit, make_evidence
+from tests.test_orchestrator.conftest import claim_assessments
 
 # ---------------------------------------------------------------------------
 # VerificationReport.pass_rate
@@ -91,11 +92,21 @@ def _make_valid_verifier_json(
                 {
                     "claim": f"Claim {i}",
                     "citation_ids": ["ev_001"],
-                    "assessment": "supported",
+                    "assessment": assessment,
                     "explanation": "Matches evidence",
                     "suggestion": "",
                 }
-                for i in range(supported)
+                for i, assessment in enumerate(
+                    claim_assessments(
+                        total=total,
+                        supported=supported,
+                        unsupported=unsupported,
+                        uncited=uncited,
+                        leakage=leakage,
+                        conflicts=conflicts,
+                        gaps=gaps,
+                    )
+                )
             ],
             "summary": {
                 "total_claims": total,
@@ -121,7 +132,7 @@ class TestParseResponse:
     def test_parse_response_valid_json(self):
         raw = _make_valid_verifier_json()
         report = self._verifier()._parse_response(LLMResponse(content=raw))
-        assert len(report.claims) == 8
+        assert len(report.claims) == 10
         assert report.total_claims == 10
         assert report.supported == 8
         assert report.gaps_acknowledged == 2
@@ -167,6 +178,114 @@ class TestParseResponse:
             self._verifier()._parse_response(LLMResponse(content=raw))
 
 
+_ALL_SUPPORTED_3 = {
+    "total_claims": 3,
+    "supported": 3,
+    "unsupported": 0,
+    "uncited": 0,
+    "leakage": 0,
+    "conflicts": 0,
+    "gaps_acknowledged": 0,
+}
+
+
+def _reply(assessments: list, summary: dict) -> str:
+    """A verifier reply with these claim assessments and this summary."""
+    return json.dumps(
+        {
+            "claims": [
+                {
+                    "claim": f"Secret claim text {i}",
+                    "citation_ids": [],
+                    "assessment": a,
+                    "explanation": "Secret explanation",
+                    "suggestion": "",
+                }
+                for i, a in enumerate(assessments)
+            ],
+            "summary": summary,
+            "overall_feedback": "Secret feedback",
+            "contradictions": [],
+        }
+    )
+
+
+class TestCountsFromClaimList:
+    """COR-06: counts are tallied from the claim list; the summary is only a
+    cross-check."""
+
+    pytestmark = pytest.mark.unit
+
+    def _parse(self, raw: str) -> VerificationReport:
+        return Verifier(MockLLMProvider([]))._parse_response(LLMResponse(content=raw))
+
+    def test_summary_cannot_override_the_claim_verdicts(self, caplog):
+        """Leakage and unsupported verdicts under an all-supported summary
+        score as what the claims say, with one warning holding counts only."""
+        raw = _reply(["leakage", "unsupported", "supported"], _ALL_SUPPORTED_3)
+        with caplog.at_level(logging.WARNING, logger="cce.verification.verifier"):
+            report = self._parse(raw)
+
+        assert (report.total_claims, report.supported) == (3, 1)
+        assert (report.leakage, report.unsupported) == (1, 1)
+        # base 1/3, leakage penalty 1 - (1/3) * 1.5 = 0.5
+        assert report.confidence_score == pytest.approx(0.167, abs=0.001)
+        assert report.pass_rate == pytest.approx(1 / 3)
+        warnings = [r.getMessage() for r in caplog.records]
+        assert len(warnings) == 1
+        assert "disagrees with its claim list" in warnings[0]
+        assert "'supported': 3" in warnings[0]
+        assert "'leakage': 1" in warnings[0]
+        assert "Secret" not in warnings[0]
+
+    def test_negative_summary_count_is_ignored(self):
+        """A negative count used to make pass_rate negative and fail the job
+        on ContentScores validation, with no resend."""
+        report = self._parse(
+            _reply(
+                ["supported", "supported"],
+                {**_ALL_SUPPORTED_3, "total_claims": 2, "supported": -1},
+            )
+        )
+
+        assert (report.total_claims, report.supported) == (2, 2)
+        assert report.pass_rate == 1.0
+        assert report.confidence_score == 1.0
+
+    def test_summary_counts_without_claims_score_zero(self):
+        report = self._parse(
+            _reply([], {**_ALL_SUPPORTED_3, "total_claims": 0, "supported": 7})
+        )
+
+        assert (report.total_claims, report.supported) == (0, 0)
+        assert report.confidence_score == 0.0
+        assert report.pass_rate == 0.0
+
+    def test_assessment_outside_the_vocabulary_counts_as_not_supported(self):
+        report = self._parse(
+            _reply(["supported", "probably fine", ["supported"]], _ALL_SUPPORTED_3)
+        )
+
+        assert (report.total_claims, report.supported) == (3, 1)
+        assert report.unsupported + report.uncited + report.leakage == 0
+        assert report.confidence_score == pytest.approx(0.333, abs=0.001)
+
+    def test_no_warning_when_summary_matches(self, caplog):
+        matching = {
+            **_ALL_SUPPORTED_3,
+            "supported": 1,
+            "conflicts": 1,
+            "gaps_acknowledged": 1,
+        }
+        raw = _reply(["supported", "gap_acknowledged", "conflict"], matching)
+        with caplog.at_level(logging.WARNING, logger="cce.verification.verifier"):
+            report = self._parse(raw)
+
+        assert report.conflicts == 1
+        assert report.gaps_acknowledged == 1
+        assert caplog.records == []
+
+
 # ---------------------------------------------------------------------------
 # Confidence calculation — unit tests (sync)
 # ---------------------------------------------------------------------------
@@ -196,22 +315,23 @@ class TestConfidence:
         assert c == pytest.approx(0.56, abs=0.01)
 
     def test_confidence_conflict_penalty(self):
-        # base = (8+2)/10 = 1.0, conflict penalty = *0.9
-        c = self._confidence(total=10, supported=8, gaps=2, conflicts=1, leakage=0)
-        assert c == pytest.approx(0.9, abs=0.01)
+        # base = (8+1)/10 = 0.9 (the conflict claim is one of the ten),
+        # conflict penalty = *0.9 -> 0.81
+        c = self._confidence(total=10, supported=8, gaps=1, conflicts=1, leakage=0)
+        assert c == pytest.approx(0.81, abs=0.01)
 
     def test_confidence_both_penalties(self):
         # base = (7+1)/10 = 0.8
         # leakage: 0.8 * max(0, 1 - (1/10)*1.5) = 0.8 * 0.85 = 0.68
         # conflict: 0.68 * 0.9 = 0.612
         c = self._confidence(
-            total=10, supported=7, gaps=1, leakage=1, conflicts=1, unsupported=1
+            total=10, supported=7, gaps=1, leakage=1, conflicts=1, unsupported=0
         )
         assert c == pytest.approx(0.612, abs=0.01)
 
     def test_confidence_clamped(self):
         # Even with extreme leakage, confidence should not go below 0
-        c = self._confidence(total=10, supported=0, gaps=0, leakage=10, conflicts=5)
+        c = self._confidence(total=15, supported=0, gaps=0, leakage=10, conflicts=5)
         assert 0.0 <= c <= 1.0
 
 

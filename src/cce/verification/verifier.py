@@ -259,12 +259,13 @@ class VerificationReport:
     def pass_rate(self) -> float:
         """Fraction of claims that are supported or acknowledged gaps.
 
-        Clamped to [0.0, 1.0]. LLM-reported summary counts can be
-        inconsistent (e.g., a single claim counted as both ``supported``
-        and ``gaps_acknowledged``), which would otherwise push the ratio
-        above 1.0 and fail downstream Pydantic validation
-        (``ContentScores.coverage`` is ``le=1.0``). The clamp keeps the
-        contract correct without rejecting an otherwise-valid run.
+        Clamped to [0.0, 1.0]. Counts parsed from a verifier reply are
+        tallied from its claim list and cannot exceed the total (COR-06);
+        a report built with inconsistent counts (e.g., a single claim
+        counted as both ``supported`` and ``gaps_acknowledged``) would
+        otherwise push the ratio above 1.0 and fail downstream Pydantic
+        validation (``ContentScores.coverage`` is ``le=1.0``). The clamp
+        keeps the contract correct without rejecting an otherwise-valid run.
         """
         passing = self.supported + self.gaps_acknowledged
         ratio = passing / max(1, self.total_claims)
@@ -327,6 +328,16 @@ _SUMMARY_COUNTS = (
     "conflicts",
     "gaps_acknowledged",
 )
+
+# Summary count -> the claim assessment it tallies.
+_COUNT_ASSESSMENTS = {
+    "supported": "supported",
+    "unsupported": "unsupported",
+    "uncited": "uncited",
+    "leakage": "leakage",
+    "conflicts": "conflict",
+    "gaps_acknowledged": "gap_acknowledged",
+}
 
 
 def _report_shape_ok(parsed: dict) -> bool:
@@ -452,6 +463,9 @@ traced to the evidence above should be flagged.
         Raises UnparseableResponseError when the reply is not a JSON object
         with a claims list and integer summary counts, instead of returning
         a zero-score report that routed straight to REVIEW with no rewrite.
+
+        The counts, and so confidence and pass rate, are tallied from the
+        claim list. The reply's own summary is only cross-checked.
         """
         raw = response.content
         parsed = extract_json(raw)
@@ -471,15 +485,29 @@ traced to the evidence above should be flagged.
                 )
             )
 
-        # Parse summary counts
-        summary = parsed.get("summary", {})
-        total = summary.get("total_claims", len(claims))
-        supported = summary.get("supported", 0)
-        unsupported = summary.get("unsupported", 0)
-        uncited = summary.get("uncited", 0)
-        leakage = summary.get("leakage", 0)
-        conflicts = summary.get("conflicts", 0)
-        gaps = summary.get("gaps_acknowledged", 0)
+        # Tally the counts from the claim list (COR-06). The model-written
+        # summary can contradict the verdicts beside it or hold a count no
+        # claim list produces (negative, or above the total). An assessment
+        # outside the vocabulary counts toward the total as not supported.
+        counts = {"total_claims": len(claims)}
+        for key, assessment in _COUNT_ASSESSMENTS.items():
+            counts[key] = sum(1 for c in claims if c.assessment == assessment)
+        summary = parsed["summary"]
+        reported = {key: summary[key] for key in _SUMMARY_COUNTS}
+        if reported != counts:
+            # Counts only: the reply can hold confidential content.
+            logger.warning(
+                "Verifier summary disagrees with its claim list: summary=%s claims=%s",
+                reported,
+                counts,
+            )
+        total = counts["total_claims"]
+        supported = counts["supported"]
+        unsupported = counts["unsupported"]
+        uncited = counts["uncited"]
+        leakage = counts["leakage"]
+        conflicts = counts["conflicts"]
+        gaps = counts["gaps_acknowledged"]
 
         # Parse contradictions
         contradictions = [
