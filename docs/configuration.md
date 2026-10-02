@@ -273,6 +273,27 @@ want a copy of the old shape).
 |----------|---------|---------|
 | `CCE_MAX_TOKENS_PER_JOB` | unset | Hard ceiling on accumulated LLM tokens (input + output, all paths and iterations) per job. On breach the job stops iterating and routes to `REVIEW_REQUIRED`, keeping partial drafts (ADR-003, audit-2026-06-09). Unset = unlimited. |
 
+### Cost estimate
+
+Each job records an estimated LLM cost in USD: `cost_estimate_usd` on its
+PUBLISH stage record, and `est_cost=$...` on the "Pipeline complete" log
+line. It is priced per model from the token counts on the WRITE, VERIFY and
+EDIT stage records (each names the model that answered), so a job whose
+writer, verifier and editor run on different models is priced correctly.
+
+Prices come from a table in USD per million tokens (input, output, cache
+write, cache read): the packaged `src/cce/config/model_pricing.yaml`
+(Anthropic first-party list prices), with the entries of
+`config/model_pricing.yaml` in the working directory on top when that file
+exists. Use the override when prices change, for Bedrock or Vertex AI rates,
+or to price an injected provider's own model IDs. A model ID matches its own
+entry, or the entry without a trailing `-YYYYMMDD` snapshot date; there is no
+prefix matching, so a new model has no price until it is listed. The
+estimate is `null` when any model the job used has no price (never a partial
+sum), and when a provider reports no usage. It is an estimate at list
+prices: batch or negotiated discounts and 1-hour cache writes are not
+modelled.
+
 ### Publish policy
 
 | Variable | Default | Purpose |

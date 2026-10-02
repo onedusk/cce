@@ -23,6 +23,26 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sources"): `scheme://host/path`. The policy matches allow and deny lists
   against the host and drops a URL without one (`file:///x.pdf`).
 
+### Added: per-job cost estimate; implied-claim calls counted (B15, audit 5.1)
+- **Each job records `cost_estimate_usd`** on its PUBLISH stage record, and
+  the "Pipeline complete" line carries `est_cost=$...`. Priced per model
+  from the WRITE, VERIFY and EDIT stage records, which now name the `model`
+  that answered (VERIFY also gains the four `tokens_*` counts), so
+  per-role models are priced separately.
+- **Price table as data:** packaged `cce/config/model_pricing.yaml` (USD per
+  million tokens: input, output, 5-minute cache write, cache read; list
+  prices checked 2026-10-02), overridden or extended by
+  `config/model_pricing.yaml` in the working directory, loaded through
+  `ConfigRegistry` (`registry.pricing`). A model ID matches its own entry
+  or the entry without a snapshot date, never a prefix. The estimate is
+  `null` rather than partial when a used model has no price.
+- **Audit 5.1:** the implied-claim checker's LLM calls were invisible to the
+  job's token totals, `CCE_MAX_TOKENS_PER_JOB` and the completion line.
+  `ImpliedClaimChecker.check(usage_log=...)` now reports each call, the
+  pipeline adds them to the totals and the budget, and the EDIT record
+  carries `implied_claim_calls`, `implied_claim_model` and
+  `implied_claim_tokens_*`.
+
 ## [Unreleased] emit path traversal (audit 2.1)
 
 ### Security: emit can no longer write outside its target directory

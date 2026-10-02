@@ -117,6 +117,7 @@ class TagMetrics(TypedDict):
 class WriteMetrics(TypedDict):
     path: str
     iterations: int
+    model: str  # the model that answered (B15: cost is priced per model)
     tokens_input: int
     tokens_output: int
     tokens_cache_read: int
@@ -129,10 +130,18 @@ class VerifyMetrics(TypedDict):
     supported: int
     pass_rate: float
     confidence_score: float
+    model: str
+    tokens_input: int
+    tokens_output: int
+    tokens_cache_read: int
+    tokens_cache_write: int
 
 
 class PublishMetrics(TypedDict):
     token_usage: dict[str, int]
+    # USD, from the model price table (B15). None: no table, no usage, or a
+    # model without a price.
+    cost_estimate_usd: float | None
 
 
 class ScoreMetrics(TypedDict):
@@ -172,10 +181,18 @@ class EditMetrics(TypedDict):
     citations_preserved: bool
     word_count_before: int
     word_count_after: int
+    model: str
     tokens_input: int
     tokens_output: int
     tokens_cache_read: int
     tokens_cache_write: int
+    # The implied-claim checker's LLM calls before this edit (audit 5.1).
+    implied_claim_calls: int
+    implied_claim_model: str
+    implied_claim_tokens_input: int
+    implied_claim_tokens_output: int
+    implied_claim_tokens_cache_read: int
+    implied_claim_tokens_cache_write: int
 
 
 class Job(BaseModel):

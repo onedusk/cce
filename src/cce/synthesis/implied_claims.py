@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from cce.config.markers import ContrastiveSubtype, HumanizationMarkers
@@ -117,10 +118,16 @@ class ImpliedClaimChecker:
         self,
         content: str,
         cited_evidence: list[Evidence],
+        *,
+        usage_log: list[tuple[str, Mapping[str, int]]] | None = None,
     ) -> list[ImpliedClaimAnnotation]:
         """Return annotations for frames whose dismissed side has counter-evidence.
 
         Args:
+            usage_log: When given, each LLM call made here appends its
+                ``(model, usage)``, so the caller can count these calls toward
+                the job's tokens, budget and cost (audit 5.1). The checker is
+                shared across jobs, so usage is never kept on the instance.
             content: Draft body (citation markers may be present).
             cited_evidence: Evidence the path can cite (the writer's pool).
                 Counter-evidence is searched in this list only, not the
@@ -151,7 +158,7 @@ class ImpliedClaimChecker:
             # just spends a request on "I don't see a fragment" replies.
             if not _names_a_topic(frame.matched_text):
                 continue
-            dismissed = await self._extract_dismissed_topic(frame)
+            dismissed = await self._extract_dismissed_topic(frame, usage_log)
             if not dismissed:
                 continue
             counter = self._search_counter_evidence(dismissed, cited_evidence)
@@ -192,7 +199,11 @@ class ImpliedClaimChecker:
                 )
         return sorted(results, key=lambda f: f.char_start)
 
-    async def _extract_dismissed_topic(self, frame: ContrastiveFrame) -> str:
+    async def _extract_dismissed_topic(
+        self,
+        frame: ContrastiveFrame,
+        usage_log: list[tuple[str, Mapping[str, int]]] | None = None,
+    ) -> str:
         """Ask the LLM to name the dismissed-side topic in one line."""
 
         async def _attempt() -> str:
@@ -207,6 +218,8 @@ class ImpliedClaimChecker:
                 system=_DISMISSED_TOPIC_PROMPT,
                 temperature=0.0,
             )
+            if usage_log is not None:
+                usage_log.append((response.model, response.usage))
             ensure_complete(response, role="implied-claim checker")
             parsed = extract_json(response.content)
             if not isinstance(parsed, dict):  # unreadable: no topic, no hint

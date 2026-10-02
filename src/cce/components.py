@@ -286,6 +286,7 @@ def build_pipeline(
         scorer=components.scorer,
         editor=components.editor,
         implied_claim_checker=components.implied_claims,
+        pricing=registry.pricing,
     )
 
 
