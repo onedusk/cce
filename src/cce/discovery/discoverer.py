@@ -57,6 +57,7 @@ _CRAWL_FAILURE_WARN_THRESHOLD = 0.3
 SEARCH_RESULT_LIMIT = 20  # max URLs from search
 MIN_FRAGMENT_SIZE = 50  # min chars for evidence excerpt
 MAX_CHUNK_SIZE = 1500  # max chars per evidence chunk
+_UP_TO_LAST_WHITESPACE = re.compile(r".*\s")  # within one line (no "\n")
 
 
 # -- Discovery drop ledger (B10) ---------------------------------------------
@@ -497,21 +498,30 @@ class Discoverer:
         # ones (COR-01), with age measured from now: the stored retrieved_at
         # is when the page was crawled, not when it is being used.
         # Same excerpt-hash dedup applies so nothing is double-counted.
-        counts["excerpts_gathered"] += len(reusable_evidence)
+        # A row over MAX_CHUNK_SIZE (stored before chunks were bounded) is
+        # re-split first, its pieces counted like a fresh page's chunks.
+        excerpts_reused = 0
         now = datetime.now(UTC)
-        for ev in reusable_evidence:
-            if not self._passes_date_filter(ev, effective_policy, constraints, now=now):
-                counts["dropped_date"] += 1
-                continue
-            reason = self._reputation_drop_reason(ev, effective_policy.reputation)
-            if reason is not None:
-                counts[f"dropped_{reason}"] += 1
-                continue
-            if ev.excerpt_hash in seen_hashes:
-                counts["deduplicated"] += 1
-                continue
-            seen_hashes.add(ev.excerpt_hash)
-            evidence.append(ev)
+        for stored in reusable_evidence:
+            rows, n_chunks = self._bounded_rows(stored)
+            excerpts_reused += n_chunks
+            counts["dropped_fragment"] += n_chunks - len(rows)
+            for ev in rows:
+                if not self._passes_date_filter(
+                    ev, effective_policy, constraints, now=now
+                ):
+                    counts["dropped_date"] += 1
+                    continue
+                reason = self._reputation_drop_reason(ev, effective_policy.reputation)
+                if reason is not None:
+                    counts[f"dropped_{reason}"] += 1
+                    continue
+                if ev.excerpt_hash in seen_hashes:
+                    counts["deduplicated"] += 1
+                    continue
+                seen_hashes.add(ev.excerpt_hash)
+                evidence.append(ev)
+        counts["excerpts_gathered"] += excerpts_reused
 
         # Track crawl success/failure metrics
         total_crawls = crawl_success + crawl_failed
@@ -527,7 +537,7 @@ class Discoverer:
             "crawl_success": crawl_success,
             "crawl_failed": crawl_failed,
             "crawl_failure_rate": round(failure_rate, 2),
-            "excerpts_reused": len(reusable_evidence),
+            "excerpts_reused": excerpts_reused,
             **counts,
         }
 
@@ -828,13 +838,42 @@ class Discoverer:
         return evidence, len(chunks)
 
     @staticmethod
+    def _bounded_rows(ev: Evidence) -> tuple[list[Evidence], int]:
+        """A reused row as rows of at most MAX_CHUNK_SIZE characters, plus
+        the number of chunks considered (CRIT-01).
+
+        A row stored before ``_chunk_content`` bounded long lines can be any
+        size, and its URL is never crawled again. It is re-chunked: each
+        piece keeps the row's provenance and locator, with a new ID and its
+        own hash; pieces under MIN_FRAGMENT_SIZE are dropped, as on a fresh
+        crawl. Any other row is returned unchanged.
+        """
+        if len(ev.excerpt) <= MAX_CHUNK_SIZE:
+            return [ev], 1
+        chunks = Discoverer._chunk_content(ev.excerpt)
+        rows = [
+            ev.model_copy(
+                update={
+                    "id": f"ev_{uuid.uuid4().hex[:12]}",
+                    "excerpt": text,
+                    "excerpt_hash": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                }
+            )
+            for text in chunks
+            if len(text) >= MIN_FRAGMENT_SIZE
+        ]
+        return rows, len(chunks)
+
+    @staticmethod
     def _chunk_content(
         markdown: str, max_chunk_size: int = MAX_CHUNK_SIZE
     ) -> list[str]:
         """Split markdown into chunks, preferring section/paragraph boundaries.
 
         Strategy: split on double newlines (paragraph breaks) first. If a
-        chunk exceeds max_chunk_size, split it further on single newlines.
+        chunk exceeds max_chunk_size, split it further on single newlines,
+        and a single line over the limit at whitespace (CRIT-01). No chunk
+        is longer than max_chunk_size; each is a verbatim substring.
         """
         if not markdown:
             return []
@@ -853,7 +892,15 @@ class Discoverer:
                 lines = para.split("\n")
                 current = ""
                 for line in lines:
-                    if len(current) + len(line) + 1 > max_chunk_size and current:
+                    if len(line) > max_chunk_size:
+                        # A line over the limit used to be kept whole, at any
+                        # size. Its pieces are chunks of their own, never
+                        # joined to a neighbour, so each stays verbatim.
+                        if current.strip():
+                            chunks.append(current.strip())
+                        current = ""
+                        chunks.extend(Discoverer._split_long_line(line, max_chunk_size))
+                    elif len(current) + len(line) + 1 > max_chunk_size and current:
                         chunks.append(current.strip())
                         current = line
                     else:
@@ -862,6 +909,30 @@ class Discoverer:
                     chunks.append(current.strip())
 
         return chunks
+
+    @staticmethod
+    def _split_long_line(line: str, max_chunk_size: int) -> list[str]:
+        """Cut one line into pieces of at most max_chunk_size characters.
+
+        Each cut is at the last whitespace at or before the limit, or a hard
+        cut at the limit when there is none. Index-based, so a very long
+        line costs linear time.
+        """
+        line = line.strip()
+        pieces: list[str] = []
+        pos = 0
+        while len(line) - pos > max_chunk_size:
+            match = _UP_TO_LAST_WHITESPACE.match(line, pos, pos + max_chunk_size + 1)
+            cut = match.end() - 1 if match else pos
+            if cut == pos:  # no whitespace to cut at
+                cut = pos + max_chunk_size
+            pieces.append(line[pos:cut].rstrip())
+            pos = cut
+            while line[pos].isspace():  # the stripped line ends in a non-space
+                pos += 1
+        if pos < len(line):
+            pieces.append(line[pos:])
+        return pieces
 
     # -- Evidence capping --
 

@@ -1,19 +1,22 @@
-"""Evidence reused from the store passes the job's filters (COR-01).
+"""Evidence reused from the store passes the job's filters (COR-01) and
+the chunk-size bound (CRIT-01).
 
 A URL already in the evidence store is not re-crawled: its stored rows join
 the run. They used to join after hash dedup only, so a row stored under a
 permissive policy reached a later job whose policy or request would have
-dropped the same page on a fresh crawl.
+dropped the same page on a fresh crawl, and a row stored before chunks were
+bounded reached every prompt at full size.
 """
 
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from cce.config.types import CrawlConfig
-from cce.discovery.discoverer import Discoverer
+from cce.discovery.discoverer import MAX_CHUNK_SIZE, Discoverer
 from cce.models.request import CurationConstraints
 from cce.policy.types import RecencyRule, ReputationRule
 from tests.conftest import (
@@ -206,3 +209,57 @@ async def test_reused_row_age_is_measured_from_now_not_from_its_crawl(sqlite_sto
     assert result.metrics["urls_reused"] == 2
     assert result.metrics["dropped_date"] == 1
     assert_ledgers_balance(result.metrics)
+
+
+async def test_an_oversized_stored_row_is_split_on_reuse(sqlite_store):
+    """CRIT-01: a store written before chunks were bounded can hold a row of
+    any size, and its URL is never crawled again: the row is split on reuse.
+    Rows within the bound pass through unchanged."""
+    big_url, small_url = "https://example.org/transcript", "https://example.org/a"
+    big = make_evidence(
+        url=big_url,
+        excerpt="w" * 1500 + " " + "v" * 1500 + " end",
+        locator="chunk:3",
+    )
+    small = make_evidence(url=small_url, excerpt=BODY)
+    await sqlite_store.put_many([big, small])
+    discoverer = Discoverer(
+        MockCrawlAdapter(search_map={"test topic": [big_url, small_url]}),
+        CrawlConfig(api_key="test"),
+        evidence_store=sqlite_store,
+    )
+    request, policy = make_curation_request(), make_source_policy()
+
+    result = await discoverer.discover(request, policy)
+
+    pieces = [ev for ev in result.evidence if ev.url == big_url]
+    assert [ev.excerpt for ev in pieces] == ["w" * 1500, "v" * 1500]
+    assert max(len(ev.excerpt) for ev in result.evidence) <= MAX_CHUNK_SIZE
+    for ev in pieces:
+        assert ev.excerpt in big.excerpt
+        assert ev.excerpt_hash == hashlib.sha256(ev.excerpt.encode()).hexdigest()
+        assert ev.id != big.id
+        assert ev.model_dump(exclude={"id", "excerpt", "excerpt_hash"}) == (
+            big.model_dump(exclude={"id", "excerpt", "excerpt_hash"})
+        )
+    assert len({ev.id for ev in pieces}) == 2
+    assert [ev for ev in result.evidence if ev.url == small_url] == [small]
+    m = result.metrics
+    assert (m["urls_reused"], m["crawl_success"]) == (2, 0)
+    # Three chunks of the big row ("end" is a fragment) plus the small row
+    assert (m["excerpts_reused"], m["dropped_fragment"], m["kept"]) == (4, 1, 3)
+    assert_ledgers_balance(m)
+
+    # The pipeline stores the pieces; a later run dedups the stored copies
+    # against the re-split ones, whose IDs resolve to the stored rows.
+    await sqlite_store.put_many(result.evidence)
+    again = await discoverer.discover(request, policy)
+
+    assert sorted(ev.excerpt for ev in again.evidence) == sorted(
+        ev.excerpt for ev in result.evidence
+    )
+    assert again.metrics["deduplicated"] == 2
+    assert_ledgers_balance(again.metrics)
+    remap = await sqlite_store.get_stored_ids(again.evidence)
+    stored_ids = {ev.id for ev in pieces}
+    assert {remap[ev.id] for ev in again.evidence if ev.url == big_url} == stored_ids

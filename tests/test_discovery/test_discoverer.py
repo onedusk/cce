@@ -7,7 +7,7 @@ import pytest
 
 from cce.config.types import CrawlConfig
 from cce.discovery.adapters.base import CrawlResult
-from cce.discovery.discoverer import Discoverer
+from cce.discovery.discoverer import MAX_CHUNK_SIZE, Discoverer
 from cce.models.evidence import SourceQuality
 from cce.models.request import CurationConstraints
 from cce.policy.types import RecencyRule, ReputationRule, TopicOverride
@@ -165,6 +165,120 @@ def test_chunk_content_long_paragraph():
     assert len(chunks) >= 2
     for chunk in chunks:
         assert len(chunk) <= 1500
+
+
+_SENTENCES = [
+    "Adults who keep a regular bedtime report better sleep quality than those "
+    "whose bedtime drifts.",
+    "Morning light exposure advances the circadian phase and shortens sleep "
+    "onset latency.",
+    "Caffeine taken six hours before bed still reduces total sleep time by "
+    "about an hour.",
+    "A cool, dark and quiet bedroom is associated with fewer night-time awakenings.",
+]
+_AT_LIMIT = "limit " * 249 + "limit."  # one line of exactly MAX_CHUNK_SIZE
+# Headings, a list, a table, a code block, a paragraph over the limit made of
+# short wrapped lines, lines exactly at the limit, a whitespace-only line and
+# a fragment: every line at or under MAX_CHUNK_SIZE.
+_NORMAL_MARKDOWN = "\n\n".join(
+    [
+        "# Sleep hygiene: what the evidence says",
+        "Short intro.",
+        _SENTENCES[0] + " " + _SENTENCES[1],
+        "## Habits\n- Keep a fixed wake time, including weekends, to anchor the "
+        "body clock.\n- Avoid screens in the last hour before bed.\n"
+        "- Get daylight early.",
+        "\n".join(f"{i:02d}. {_SENTENCES[i % 4]}" for i in range(30)),
+        "| Factor | Effect |\n| --- | --- |\n| Caffeine | Shorter sleep |\n"
+        "| Light | Earlier phase |",
+        "```python\nfor night in nights:\n"
+        "    record(night.sleep_onset, night.wake_time)\n```",
+        _AT_LIMIT,
+        "   \n" + _SENTENCES[2] + "\n" + _AT_LIMIT + "\n" + _SENTENCES[3],
+        "> A quoted line that is long enough to be kept as its own piece of "
+        "evidence.\n\n\n\nLast paragraph, after extra blank lines, closes the "
+        "page with one more full sentence.",
+    ]
+)
+
+
+def test_chunk_content_normal_markdown_is_unchanged_by_the_line_bound():
+    """CRIT-01: pages whose lines fit the limit chunk exactly as before the
+    bound (expected values captured from the code before the fix), so their
+    excerpts, hashes and chunk:N locators are unchanged."""
+    assert len(_AT_LIMIT) == MAX_CHUNK_SIZE
+    assert max(len(line) for line in _NORMAL_MARKDOWN.split("\n")) <= MAX_CHUNK_SIZE
+
+    chunks = Discoverer._chunk_content(_NORMAL_MARKDOWN)
+
+    assert [len(c) for c in chunks] == [
+        39, 12, 180, 148, 1443, 1271, 88, 81, 1500, 84, 1500, 78, 76, 85,
+    ]  # fmt: skip
+    assert (
+        hashlib.sha256("\x1e".join(chunks).encode()).hexdigest()
+        == "e70d7c7bcdfdf909545df67e78fc6c20eecd97b3f56fca7ea891dcdb92877a69"
+    )
+    evidence = Discoverer(adapter=None, config=None)._extract_evidence(  # type: ignore[arg-type]
+        make_crawl_result(markdown=_NORMAL_MARKDOWN), make_source_policy()
+    )
+    assert [ev.locator for ev in evidence] == [f"chunk:{i}" for i in range(2, 14)]
+
+
+_WORDS = "sleep quality depends on regular timing and light exposure "
+
+
+@pytest.mark.parametrize(
+    "markdown",
+    [
+        pytest.param(_WORDS * 6800, id="one-400k-char-line"),
+        pytest.param("\n".join(["word " * 500] * 3), id="three-2500-char-lines"),
+        pytest.param(
+            _SENTENCES[0] + "\n" + _WORDS * 60 + "\n" + _SENTENCES[1],
+            id="long-line-between-short-lines",
+        ),
+        pytest.param("x" * 4000, id="no-whitespace"),
+        pytest.param("  " + "y" * 1600 + " " * 2000 + "z" * 30, id="padded"),
+    ],
+)
+def test_chunk_content_bounds_a_single_long_line(markdown):
+    """CRIT-01: a line over MAX_CHUNK_SIZE was kept whole at any size (one
+    400,000-character line gave one 399,999-character chunk)."""
+    chunks = Discoverer._chunk_content(markdown)
+
+    assert max(len(c) for c in chunks) <= MAX_CHUNK_SIZE
+    assert all(c and c in markdown for c in chunks)  # verbatim substrings
+    # Nothing but whitespace at a cut is lost
+    assert "".join("".join(chunks).split()) == "".join(markdown.split())
+
+
+@pytest.mark.parametrize(
+    ("line", "pieces"),
+    [
+        # the last whitespace at or before the limit is the cut
+        ("a" * 9 + " " + "b" * 5, ["a" * 9, "b" * 5]),
+        ("a" * 10 + " " + "b" * 5, ["a" * 10, "b" * 5]),
+        ("aaa bbb ccc" + " " * 6 + "d", ["aaa bbb", "ccc      d"]),
+        # no whitespace in reach: a hard cut at the limit
+        ("a" * 11 + " " + "b" * 5, ["a" * 10, "a bbbbb"]),
+        ("x" * 25, ["x" * 10, "x" * 10, "x" * 5]),
+    ],
+)
+def test_split_long_line_cuts_at_the_last_whitespace_or_hard(line, pieces):
+    assert Discoverer._split_long_line(line, 10) == pieces
+
+
+def test_extracted_excerpts_from_a_one_line_page_are_bounded():
+    markdown = _WORDS * 100
+    evidence = Discoverer(adapter=None, config=None)._extract_evidence(  # type: ignore[arg-type]
+        make_crawl_result(markdown=markdown), make_source_policy()
+    )
+
+    assert len(evidence) == 4  # 6,000 characters
+    assert [ev.locator for ev in evidence] == [f"chunk:{i}" for i in range(4)]
+    for ev in evidence:
+        assert len(ev.excerpt) <= MAX_CHUNK_SIZE
+        assert ev.excerpt in markdown
+        assert ev.excerpt_hash == hashlib.sha256(ev.excerpt.encode()).hexdigest()
 
 
 # ---------------------------------------------------------------------------

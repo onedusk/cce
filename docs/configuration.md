@@ -248,6 +248,16 @@ stored at crawl time, under the policy of the job that crawled the page;
 they are not recomputed against the current policy's phrase and suffix
 lists.
 
+**Excerpt size.** A crawled page is cut into excerpts of at most 1,500
+characters, at paragraph breaks, then line breaks, then (for a single line
+longer than that, as in a transcript or a PDF text layer) the last
+whitespace at or before the limit, or a hard cut where there is none. Every
+excerpt stays a verbatim substring of the page. A stored row longer than the
+limit (written before lines were bounded) is split the same way when its URL
+is reused: the pieces keep the row's provenance and locator and take new
+IDs, and the ones a job keeps are stored as new rows. The oversized row
+stays in the store but no longer reaches a prompt.
+
 ### Crawl
 
 | Variable | Default | Purpose |
