@@ -462,7 +462,13 @@ class Discoverer:
         )
         good_results = 0
         for result in crawl_results:
-            if result.status_code == 0 or not result.markdown.strip():
+            # An HTTP error page (4xx/5xx) is a failed crawl, not evidence:
+            # stored, it would be reused by every later job (COR-03).
+            if (
+                result.status_code == 0
+                or result.status_code >= 400
+                or not result.markdown.strip()
+            ):
                 logger.debug("Skipping empty or failed crawl: %s", result.url)
                 continue
 

@@ -211,9 +211,16 @@ class FirecrawlAdapter:
                 return val if val is not None else default
             return default
 
+        # The v2 SDK carries the target page's status on metadata.status_code
+        # (COR-03); the top-level attribute is kept for other shapes.
+        if isinstance(metadata, dict):
+            meta_status = metadata.get("status_code")
+        else:
+            meta_status = getattr(metadata, "status_code", None)
+
         return CrawlResult(
             url=url,
-            status_code=_get(response, "status_code", 200) or 200,
+            status_code=meta_status or _get(response, "status_code", 200) or 200,
             title=_meta("title") or _meta("og:title") or _get(response, "title", ""),
             author=_meta("author") or _meta("og:author", ""),
             published_date=(

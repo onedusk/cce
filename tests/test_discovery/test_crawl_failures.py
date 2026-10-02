@@ -132,3 +132,59 @@ class TestCrawlFailureTracking:
         assert evidence == []
         assert result.metrics["crawl_failed"] == 1
         assert result.metrics["crawl_success"] == 0
+
+
+@pytest.mark.parametrize("status", [400, 403, 404, 429, 500, 503])
+async def test_http_error_page_is_a_failed_crawl_not_evidence(status):
+    """COR-03: a page answering 4xx/5xx is a failed crawl: never extracted,
+    counted in crawl_failed, and both ledgers stay exact."""
+    from tests.test_discovery.test_discovery_ledger import assert_ledgers_balance
+
+    error_body = (
+        f"# {status} Error\n\nThe page you requested could not be served. "
+        "Please try again later or contact the site administrator."
+    )
+    adapter = MockCrawlAdapter(
+        search_map={"test topic": ["https://ok.com/a", "https://err.com/b"]},
+        url_map={
+            "https://ok.com/a": make_crawl_result(url="https://ok.com/a"),
+            "https://err.com/b": make_crawl_result(
+                url="https://err.com/b", status_code=status, markdown=error_body
+            ),
+        },
+    )
+    discoverer = Discoverer(adapter=adapter, config=_config())
+
+    result = await discoverer.discover(
+        make_curation_request(topic="test topic"), make_source_policy()
+    )
+
+    assert {ev.url for ev in result.evidence} == {"https://ok.com/a"}
+    assert result.metrics["crawl_success"] == 1
+    assert result.metrics["crawl_failed"] == 1
+    assert_ledgers_balance(result.metrics)
+
+
+async def test_2xx_and_3xx_pages_are_still_extracted():
+    """Only status 0 and >= 400 are failures; other codes are unchanged."""
+    adapter = MockCrawlAdapter(
+        search_map={"test topic": ["https://a.com/x", "https://b.com/y"]},
+        url_map={
+            "https://a.com/x": make_crawl_result(
+                url="https://a.com/x", status_code=203
+            ),
+            "https://b.com/y": make_crawl_result(
+                url="https://b.com/y",
+                status_code=304,
+                markdown="A different page body, long enough to be kept as evidence.",
+            ),
+        },
+    )
+    discoverer = Discoverer(adapter=adapter, config=_config())
+
+    result = await discoverer.discover(
+        make_curation_request(topic="test topic"), make_source_policy()
+    )
+
+    assert {ev.url for ev in result.evidence} == {"https://a.com/x", "https://b.com/y"}
+    assert result.metrics["crawl_failed"] == 0
