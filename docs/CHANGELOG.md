@@ -42,6 +42,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pipeline adds them to the totals and the budget, and the EDIT record
   carries `implied_claim_calls`, `implied_claim_model` and
   `implied_claim_tokens_*`.
+- Live-checked 2026-10-02: a `cce curate` run with the writer and editor on
+  `claude-sonnet-5` and the verifier on `claude-haiku-4-5` recorded
+  `cost_estimate_usd` 0.102826, equal to the hand sum of its stage records
+  at list prices; the API's dated ID `claude-haiku-4-5-20251001` matched
+  the table.
 
 ## [Unreleased] emit path traversal (audit 2.1)
 
