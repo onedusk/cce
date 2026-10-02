@@ -52,7 +52,7 @@ pytestmark = pytest.mark.integration
 
 
 def _markers():
-    return load_markers("config/humanization_markers.yaml")
+    return load_markers()
 
 
 def _scorer() -> Scorer:

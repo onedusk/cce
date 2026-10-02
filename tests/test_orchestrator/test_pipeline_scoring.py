@@ -40,7 +40,7 @@ def _make_scorer() -> Scorer:
     """Real marker YAML — integration-level wiring, not a stub."""
     return Scorer(
         thresholds=HumanizationThresholds(),
-        markers=load_markers("config/humanization_markers.yaml"),
+        markers=load_markers(),
     )
 
 

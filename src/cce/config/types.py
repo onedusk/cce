@@ -441,9 +441,14 @@ class HumanizationConfig(BaseModel):
             "the pipeline behaves identically to pre-humanization."
         ),
     )
-    markers_path: Path = Field(
-        default=Path("config/humanization_markers.yaml"),
-        description="Path to the marker-lists YAML (vocab, hedging, transitions, regex).",
+    markers_path: Path | None = Field(
+        default=None,
+        description=(
+            "Marker-lists YAML (vocab, hedging, transitions, regex). None = "
+            "config/humanization_markers.yaml in the working directory when "
+            "that file exists, else the lists packaged with cce. A path set "
+            "here must exist."
+        ),
     )
     thresholds: HumanizationThresholds = Field(default_factory=HumanizationThresholds)
     editor: EditorConfig = Field(default_factory=EditorConfig)

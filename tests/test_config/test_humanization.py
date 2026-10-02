@@ -32,11 +32,12 @@ def _clear_env(monkeypatch):
 
 
 def test_humanization_config_defaults():
-    """Defaults: full stack ON (operator preference 2026-06-24), marker path in config/."""
+    """Defaults: full stack ON (operator preference 2026-06-24); no marker
+    path set, so the registry picks the override file or the packaged lists."""
     cfg = HumanizationConfig()
 
     assert cfg.enabled is True
-    assert cfg.markers_path == Path("config/humanization_markers.yaml")
+    assert cfg.markers_path is None
     assert isinstance(cfg.thresholds, HumanizationThresholds)
     assert isinstance(cfg.editor, EditorConfig)
     assert isinstance(cfg.implied_claims, ImpliedClaimsConfig)
@@ -88,7 +89,7 @@ def test_humanization_env_var_overrides_yaml(monkeypatch, tmp_path):
 
 def test_load_markers_returns_seeded_lists():
     """The checked-in marker YAML has the expected research-grounded lists."""
-    markers = load_markers("config/humanization_markers.yaml")
+    markers = load_markers()
 
     assert isinstance(markers, HumanizationMarkers)
     # Juzek/Ward 21 + Stanford 8 with some plurals ≈ 26 entries
@@ -116,7 +117,7 @@ def test_compiled_contrastive_patterns_match_known_ai_prose():
     After 0.2.0 the compiled list is ``list[tuple[Pattern, subtype]]``
     where subtype is ``"parasitic"`` or ``"genuine_alternative"``.
     """
-    markers = load_markers("config/humanization_markers.yaml")
+    markers = load_markers()
     patterns = markers.compiled_contrastive_patterns()
 
     assert patterns
@@ -139,7 +140,7 @@ def test_compiled_contrastive_patterns_match_known_ai_prose():
 def test_parasitic_patterns_tagged_and_match_reframe_construction():
     """Parasitic period-split and comma-split patterns land under the
     ``parasitic`` subtype and catch the canonical reframe shape."""
-    markers = load_markers("config/humanization_markers.yaml")
+    markers = load_markers()
     patterns = markers.compiled_contrastive_patterns()
 
     parasitic = [p for p, s in patterns if s == "parasitic"]
@@ -164,3 +165,44 @@ def test_parasitic_patterns_tagged_and_match_reframe_construction():
         p.search("Unlike sleeping pills, CBT-I addresses the underlying causes")
         for p in parasitic
     )
+
+
+# --- Packaged marker lists (audit 3.1: the file was not in the wheel) --------
+
+
+def _registry_in(root, **humanization):
+    from cce.config.registry import ConfigRegistry
+    from cce.config.types import EngineConfig, LLMConfig
+
+    engine = EngineConfig(
+        llm=LLMConfig(api_key="k"), humanization=HumanizationConfig(**humanization)
+    )
+    return ConfigRegistry.load(root, engine=engine)
+
+
+def test_packaged_markers_load_with_no_file_in_the_working_directory(tmp_path):
+    """A consumer that installs cce as a dependency has no config/ directory:
+    humanization (on by default) must still boot, on the packaged lists."""
+    packaged = load_markers()
+
+    assert packaged.suppressed_vocabulary and packaged.contrastive_patterns
+    assert packaged.compiled_contrastive_patterns()  # every regex compiles
+    assert _registry_in(tmp_path).markers == packaged
+
+
+def test_working_directory_markers_file_replaces_the_packaged_lists(tmp_path):
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "humanization_markers.yaml").write_text(
+        "suppressed_vocabulary: [synergy]\n"
+    )
+    markers = _registry_in(tmp_path).markers
+
+    assert markers.suppressed_vocabulary == ["synergy"]
+    assert markers.contrastive_patterns == []  # replaced whole, not merged
+
+
+def test_explicit_markers_path_that_is_missing_still_fails_fast(tmp_path):
+    from cce.config.loader import ConfigError
+
+    with pytest.raises(ConfigError, match="markers file not found"):
+        _registry_in(tmp_path, markers_path=Path("config/nope.yaml"))

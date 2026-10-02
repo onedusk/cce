@@ -15,7 +15,6 @@
 
 humanization:
   enabled: true
-  markers_path: config/humanization_markers.yaml
   editor:
     enabled: true
     temperature: 0.4

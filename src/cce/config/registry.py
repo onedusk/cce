@@ -38,6 +38,9 @@ _TAXONOMY_FILENAME = "wellbeing-8d.yaml"
 # Operator file first (untracked), then the committed Tier B template.
 _PATH_CONFIG_CANDIDATES = ("thnklabs.yaml", "default.yaml")
 
+# Operator file that replaces the packaged humanization marker lists.
+_MARKERS_OVERRIDE = Path("config") / "humanization_markers.yaml"
+
 # Operator overrides for the packaged model price table (B15).
 _PRICING_OVERRIDE = Path("config") / "model_pricing.yaml"
 
@@ -82,11 +85,16 @@ class ConfigRegistry:
         4. Taxonomy — record ``root / "taxonomies" / "wellbeing-8d.yaml"``
            (or under ``taxonomies_dir``) when the file exists; parsing stays
            in ``build_components``, which constructs the plugin.
-        5. Markers — loaded iff ``engine.humanization.enabled``; a missing
-           markers file raises ``ConfigError`` (intentional fail-fast —
-           an operator who enabled humanization must not silently ship
-           unscored drafts; ConfigError so every CLI/app entry point renders
-           it as one actionable line, same as missing API keys).
+        5. Markers — loaded iff ``engine.humanization.enabled``. With no
+           ``humanization.markers_path``: ``root / "config" /
+           "humanization_markers.yaml"`` when it exists (it replaces the
+           packaged lists whole), else the lists packaged with cce, so an
+           installed wheel boots with no file in the working directory. A
+           ``markers_path`` that is set but missing raises ``ConfigError``
+           (intentional fail-fast — an operator who named a marker file must
+           not silently get another; ConfigError so every CLI/app entry
+           point renders it as one actionable line, same as missing API
+           keys).
         6. Model pricing — the packaged table, with the entries of
            ``root / "config" / "model_pricing.yaml"`` on top when that file
            exists. Forgiving: an unreadable override is logged and the
@@ -131,10 +139,17 @@ class ConfigRegistry:
 
         markers: HumanizationMarkers | None = None
         if engine.humanization.enabled:
-            try:
-                markers = load_markers(root / engine.humanization.markers_path)
-            except FileNotFoundError as e:
-                raise ConfigError(str(e)) from e
+            configured = engine.humanization.markers_path
+            if configured is not None:
+                try:
+                    markers = load_markers(root / configured)
+                except FileNotFoundError as e:
+                    raise ConfigError(str(e)) from e
+            elif (root / _MARKERS_OVERRIDE).exists():
+                markers = load_markers(root / _MARKERS_OVERRIDE)
+                logger.info("Humanization markers from %s", root / _MARKERS_OVERRIDE)
+            else:
+                markers = load_markers()
 
         return cls(
             engine=engine,
