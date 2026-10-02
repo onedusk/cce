@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from datetime import UTC, datetime
 from typing import ClassVar
 
 from pydantic import BaseModel, Field, field_validator
@@ -25,24 +26,62 @@ _CITABLE_ID_RE = re.compile(r"[^\s\[\],]+")
 _ENGINE_ID_RE = re.compile(r"ev_[0-9a-f]{12}")
 
 
+def _parse_bound(value: str) -> datetime:
+    """ISO 8601 date or datetime -> aware datetime; no offset means UTC, as
+    for a page's published date (CR-03)."""
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
 class CurationConstraints(BaseModel):
     """Filters applied to source discovery."""
 
     date_from: str | None = Field(
-        default=None, description="ISO date string, lower bound for source recency"
+        default=None,
+        description=(
+            "ISO 8601 date or datetime, lower bound on a source's published "
+            "date (no offset means UTC)"
+        ),
     )
     date_to: str | None = Field(
-        default=None, description="ISO date string, upper bound for source recency"
+        default=None,
+        description=(
+            "ISO 8601 date or datetime, upper bound on a source's published "
+            "date (no offset means UTC)"
+        ),
     )
     domains_allow: list[str] = Field(
-        default_factory=list, description="Only include sources from these domains"
+        default_factory=list,
+        description=(
+            "Only include sources from these domains (narrows the policy's allow list)"
+        ),
     )
     domains_deny: list[str] = Field(
-        default_factory=list, description="Exclude sources from these domains"
+        default_factory=list,
+        description="Exclude sources from these domains (added to the policy's)",
     )
     jurisdiction: str | None = Field(
         default=None, description="Legal/regulatory jurisdiction filter"
     )
+
+    @field_validator("date_from", "date_to")
+    @classmethod
+    def _iso_date(cls, v: str | None) -> str | None:
+        if v:
+            try:
+                _parse_bound(v)
+            except ValueError:
+                raise ValueError(
+                    f"{v[:50]!r} is not an ISO 8601 date or datetime"
+                ) from None
+        return v
+
+    def date_bounds(self) -> tuple[datetime | None, datetime | None]:
+        """``(date_from, date_to)`` as aware datetimes (None when unset)."""
+        return (
+            _parse_bound(self.date_from) if self.date_from else None,
+            _parse_bound(self.date_to) if self.date_to else None,
+        )
 
     model_config = {"frozen": True}
 

@@ -265,7 +265,9 @@ class Discoverer:
 
         # Step 3: Filter against policy
         effective_policy = self._resolve_overrides(request.topic, policy)
-        filtered_urls = self._apply_policy_filters(candidate_urls, effective_policy)
+        filtered_urls = self._apply_policy_filters(
+            candidate_urls, effective_policy, request.constraints
+        )
         urls_dropped_policy = len(candidate_urls) - len(filtered_urls)
 
         # Step 3b: Split into fresh URLs (need crawling) and reusable stored evidence
@@ -437,10 +439,19 @@ class Discoverer:
         return candidate_urls, search_metrics
 
     def _apply_policy_filters(
-        self, candidate_urls: list[str], policy: SourcePolicy
+        self,
+        candidate_urls: list[str],
+        policy: SourcePolicy,
+        constraints: CurationConstraints | None = None,
     ) -> list[str]:
-        """Drop candidate URLs the (override-resolved) source policy rejects."""
-        return [url for url in candidate_urls if self._passes_policy(url, policy)]
+        """Drop candidate URLs the (override-resolved) source policy or the
+        request's domain constraints reject."""
+        return [
+            url
+            for url in candidate_urls
+            if self._passes_policy(url, policy)
+            and self._passes_constraints(url, constraints)
+        ]
 
     async def _crawl_and_extract(
         self,
@@ -619,6 +630,23 @@ class Discoverer:
 
         return True
 
+    @staticmethod
+    def _passes_constraints(url: str, constraints: CurationConstraints | None) -> bool:
+        """Check a URL against the request's domain lists (CR-03).
+
+        Applied on top of the policy, with the same host matching: a deny
+        entry from either side drops the URL, and a request allow list
+        narrows the policy's (the URL must pass both).
+        """
+        if constraints is None:
+            return True
+        host = _url_host(url)
+        if any(_host_contains(host, denied) for denied in constraints.domains_deny):
+            return False
+        return not constraints.domains_allow or any(
+            _host_matches(host, allowed) for allowed in constraints.domains_allow
+        )
+
     # -- Post-extraction filters --
 
     @staticmethod
@@ -649,27 +677,17 @@ class Discoverer:
             if age_days > policy.recency.max_age_days:
                 return False
 
-        # Request-level: absolute date bounds
+        # Request-level: absolute date bounds, aware (a date-only or
+        # offset-less bound is UTC) and validated on the model (CR-03)
         if constraints:
-            if constraints.date_from:
-                try:
-                    lower = datetime.fromisoformat(
-                        constraints.date_from.replace("Z", "+00:00")
-                    )
-                    if ev.published_at < lower:
-                        return False
-                except (ValueError, TypeError):
-                    pass  # fail-open on bad/naive date
-
-            if constraints.date_to:
-                try:
-                    upper = datetime.fromisoformat(
-                        constraints.date_to.replace("Z", "+00:00")
-                    )
-                    if ev.published_at > upper:
-                        return False
-                except (ValueError, TypeError):
-                    pass  # fail-open on bad/naive date
+            lower, upper = constraints.date_bounds()
+            try:
+                if lower is not None and ev.published_at < lower:
+                    return False
+                if upper is not None and ev.published_at > upper:
+                    return False
+            except TypeError:
+                pass  # fail-open on a naive published_at
 
         return True
 

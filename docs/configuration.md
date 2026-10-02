@@ -145,7 +145,13 @@ shaped*. Loaded by id at job time, not part of `EngineConfig`:
   `domains_deny` match the URL's host at label boundaries: an allow entry
   admits the host or its subdomains, a deny entry blocks any host containing
   its labels in sequence (`x.com` doesn't block `fox.com`; `amazon.com` does
-  block `amazon.com.au`). `reputation` also takes `marketing_phrases`
+  block `amazon.com.au`). A request's `constraints.domains_allow` /
+  `domains_deny` are matched the same way on top of the policy: a deny entry
+  from either drops the URL, and a request allow list narrows the policy's
+  (counted in `urls_dropped_policy`). Its `date_from` / `date_to` take an
+  ISO 8601 date or datetime (no offset means UTC; anything else is a
+  validation error) and apply to fresh and reused excerpts alike. The REST
+  API and remote mode pass all of them through. `reputation` also takes `marketing_phrases`
   (whole-word; `[]` flags nothing), `primary_source_suffixes` (default
   `.gov`, `.edu`) and `penalize_conflict_of_interest` (default true) — see
   `policies/peer-reviewed.yaml`. `trusted_institutions` matches the host

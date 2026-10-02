@@ -472,16 +472,15 @@ def test_passes_date_filter_composes_max_age_and_constraints():
     assert Discoverer._passes_date_filter(ev, policy, constraints) is False
 
 
-def test_passes_date_filter_naive_constraint_passes():
-    """Fail-open when constraint date has no timezone (naive vs aware comparison)."""
+def test_passes_date_filter_naive_constraint_is_read_as_utc():
+    """A bare date bound is UTC, so it filters (it failed open, CR-03)."""
     ev = make_evidence(
         published_at=datetime(2024, 1, 1, tzinfo=UTC),
         retrieved_at=_NOW,
     )
     policy = make_source_policy(recency=RecencyRule(max_age_days=None))
-    # Bare date with no timezone → naive datetime → TypeError on comparison → fail-open
     constraints = CurationConstraints(date_from="2025-01-01")
-    assert Discoverer._passes_date_filter(ev, policy, constraints) is True
+    assert Discoverer._passes_date_filter(ev, policy, constraints) is False
 
 
 def test_passes_date_filter_naive_published_at_with_max_age_passes():
@@ -494,15 +493,10 @@ def test_passes_date_filter_naive_published_at_with_max_age_passes():
     assert Discoverer._passes_date_filter(ev, policy, None) is True
 
 
-def test_passes_date_filter_invalid_constraint_passes():
-    """Fail-open on unparseable constraint dates."""
-    ev = make_evidence(
-        published_at=datetime(2024, 1, 1, tzinfo=UTC),
-        retrieved_at=_NOW,
-    )
-    policy = make_source_policy(recency=RecencyRule(max_age_days=None))
-    constraints = CurationConstraints(date_from="not-a-date", date_to="also-bad")
-    assert Discoverer._passes_date_filter(ev, policy, constraints) is True
+def test_invalid_constraint_date_is_rejected():
+    """An unparseable bound is a validation error, not a silent no-op (CR-03)."""
+    with pytest.raises(ValueError, match="ISO 8601"):
+        CurationConstraints(date_from="not-a-date", date_to="also-bad")
 
 
 # ---------------------------------------------------------------------------
