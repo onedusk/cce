@@ -237,6 +237,27 @@ Schema v4 (B6) makes evidence unique on `(url, excerpt_hash)` rather than
 time the new code opens it (one transaction; back the file up first if you
 want a copy of the old shape).
 
+**URL reuse.** A URL that already has rows in the evidence store is not
+crawled again: its stored rows join the run. They pass the current job's
+recency, reputation and marketing filters like freshly crawled excerpts
+(counted in the same `dropped_date` / `dropped_reputation` /
+`dropped_marketing` metrics), with `max_age_days` measured from today rather
+than from the day the page was crawled. Their source-quality flags
+(peer-reviewed, primary source, marketing, reputation tier) are the ones
+stored at crawl time, under the policy of the job that crawled the page;
+they are not recomputed against the current policy's phrase and suffix
+lists.
+
+**Excerpt size.** A crawled page is cut into excerpts of at most 1,500
+characters, at paragraph breaks, then line breaks, then (for a single line
+longer than that, as in a transcript or a PDF text layer) the last
+whitespace at or before the limit, or a hard cut where there is none. Every
+excerpt stays a verbatim substring of the page. A stored row longer than the
+limit (written before lines were bounded) is split the same way when its URL
+is reused: the pieces keep the row's provenance and locator and take new
+IDs, and the ones a job keeps are stored as new rows. The oversized row
+stays in the store but no longer reaches a prompt.
+
 ### Crawl
 
 | Variable | Default | Purpose |

@@ -17,6 +17,7 @@ import pytest
 from cce.config.types import CrawlConfig
 from cce.discovery.adapters.base import CrawlRequest, CrawlResult
 from cce.discovery.discoverer import Discoverer
+from cce.models.evidence import SourceQuality
 from cce.models.job import DiscoverMetrics
 from cce.policy.types import RecencyRule, ReputationRule
 from tests.conftest import (
@@ -65,6 +66,7 @@ P1, P2, P3, P4, P5, P6, P7, P8 = (
     )
 )
 STORED_UNIQUE = _para("stored")
+GOV = SourceQuality(is_primary_source=True)
 
 
 class _StubStore:
@@ -130,10 +132,18 @@ async def test_every_drop_reason_is_counted_and_both_ledgers_balance(caplog):
     )
     store = _StubStore(
         {
-            # Kept (first reused URL); one row duplicates a fresh excerpt
+            # Kept (first reused URL); one row duplicates a fresh excerpt.
+            # Flagged as a .gov crawl stores them: reused rows pass the
+            # policy's reputation filters too (COR-01).
             "https://stored.gov/1": [
-                make_evidence(url="https://stored.gov/1", excerpt=P1),
-                make_evidence(url="https://stored.gov/1", excerpt=STORED_UNIQUE),
+                make_evidence(
+                    url="https://stored.gov/1", excerpt=P1, source_quality=GOV
+                ),
+                make_evidence(
+                    url="https://stored.gov/1",
+                    excerpt=STORED_UNIQUE,
+                    source_quality=GOV,
+                ),
             ],
             # Past the max_sources_per_run headroom: capped
             "https://stored.gov/2": [
