@@ -119,7 +119,7 @@ The pipeline flows: `CurationRequest → SourcePolicy → Discoverer → Evidenc
 
 Requires `ANTHROPIC_API_KEY` and `FIRECRAWL_API_KEY` in `.env` (gitignored).
 
-Optional: `CCE_MAX_TOKENS_PER_JOB` caps accumulated LLM tokens (input + output, all paths and iterations) per job — on breach the job stops iterating at the next writer-iteration checkpoint and routes to REVIEW_REQUIRED, keeping partial drafts (ADR-003, audit-2026-06-09). Unset = unlimited. Full env inventory: `docs/configuration.md`.
+Optional: `CCE_MAX_TOKENS_PER_JOB` is a per-job token budget counting input + output + cache-creation tokens (cache reads are not counted), all paths and iterations. It is checked before each writer iteration (on breach the job stops iterating and routes to REVIEW_REQUIRED, keeping partial drafts; ADR-003, audit-2026-06-09) and before each edit step (on breach the edit is skipped). Not a hard ceiling: calls past a passing check (one writer call, or one edit step, then one verifier call) still run. Unset = unlimited. Full env inventory: `docs/configuration.md`.
 
 <!-- decompose:start -->
 ## Decompose Code Intelligence

@@ -138,21 +138,116 @@ async def test_implied_claim_calls_count_toward_the_job_totals(sqlite_store):
     assert staged == totals["input_tokens"]
 
 
+NULL_CACHE = {"cache_creation_input_tokens": None, "cache_read_input_tokens": None}
+
+
+@pytest.mark.parametrize("role", ["topic", "editor"])
+async def test_a_null_cache_count_counts_as_zero(sqlite_store, role):
+    """COR-07: a provider reporting a cache count as None (the SDK types
+    them as Optional) on the implied-claim or editor reply failed the whole
+    job with a TypeError at stage write. None now counts as 0."""
+    from cce.models.job import JobStatus
+
+    topic, editor = TOPIC[1], EDITOR[1]
+    if role == "topic":
+        topic = {**topic, **NULL_CACHE}
+    else:
+        editor = {**editor, **NULL_CACHE}
+    script = [
+        (_ai_flat_with_contrast(), *WRITER),
+        (_topic_extract_response("sleeping pills"), TOPIC[0], topic),
+        (_editor_response(REWRITTEN), EDITOR[0], editor),
+        (_verifier_json(supported=10, total=10, gaps=0), *VERIFIER),
+    ]
+    llm = MockLLMProvider(
+        [
+            LLMResponse(content=c, model=m, usage=u, stop_reason="end_turn")
+            for c, m, u in script
+        ],
+        cite_placeholders=True,
+    )
+    result = await _run(sqlite_store, llm, pricing=load_model_pricing())
+
+    assert result.job.status == JobStatus.COMPLETED
+    totals = _publish_metrics(result)["token_usage"]
+    assert totals["input_tokens"] == 1000 + 100 + 500 + 200
+    assert totals["cache_creation_input_tokens"] == 3000
+    assert totals["cache_read_input_tokens"] == 3000
+    [edit] = [s for s in result.job.stages if s.stage == JobStage.EDIT]
+    assert edit.metrics["tokens_cache_write"] == 0
+    assert edit.metrics["implied_claim_tokens_cache_write"] == 0
+    assert _publish_metrics(result)["cost_estimate_usd"] == pytest.approx(EXPECTED_USD)
+
+
 async def test_implied_claim_calls_count_toward_the_token_budget(sqlite_store):
-    """Iteration 1 spends 6000 input+output tokens without the topic call and
-    6150 with it; the gate fails, so the loop reaches the iteration-2
-    checkpoint. A budget of 6100 stops the run there only if the topic call
-    is counted (uncounted, the writer would be called again)."""
+    """Iteration 1 spends 9000 counted tokens (input + output + cache writes)
+    without the topic call and 9150 with it; the gate fails, so the loop
+    reaches the iteration-2 checkpoint. A budget of 9100 stops the run there
+    only if the topic call is counted (uncounted, the writer would be called
+    again). The writer's 6000 is under it, so the edit step still runs."""
     from cce.models.job import JobStatus
 
     failing = _verifier_json(supported=3, total=10, unsupported=5, gaps=2)
     llm = _llm(verdict=failing)
-    result = await _run(sqlite_store, llm, pricing=None, max_tokens_per_job=6100)
+    result = await _run(sqlite_store, llm, pricing=None, max_tokens_per_job=9100)
 
     assert len(llm.calls) == 4
     assert result.job.status == JobStatus.REVIEW_REQUIRED
     [stop] = [s for s in result.job.stages if (s.metrics or {}).get("budget_exceeded")]
-    assert stop.metrics["tokens_spent"] == 6150
+    assert stop.metrics["tokens_spent"] == 9150
+
+
+async def test_a_spent_budget_skips_the_edit_step(sqlite_store, caplog):
+    """OPS-03: the budget is re-checked before the edit step. The writer's
+    6000 counted tokens meet a budget of 6000, so neither the implied-claim
+    call nor the editor runs; the verifier checks the writer's draft."""
+    from cce.synthesis.editor import EDITOR_SYSTEM_PROMPT
+    from cce.synthesis.implied_claims import _DISMISSED_TOPIC_PROMPT
+
+    llm = MockLLMProvider(
+        [
+            LLMResponse(
+                content=_ai_flat_with_contrast(),
+                model=WRITER[0],
+                usage=WRITER[1],
+                stop_reason="end_turn",
+            ),
+            LLMResponse(
+                content=_verifier_json(supported=10, total=10, gaps=0),
+                model=VERIFIER[0],
+                usage=VERIFIER[1],
+                stop_reason="end_turn",
+            ),
+        ],
+        cite_placeholders=True,
+    )
+    with caplog.at_level(logging.WARNING, logger="cce.orchestrator.pipeline"):
+        result = await _run(sqlite_store, llm, pricing=None, max_tokens_per_job=6000)
+
+    systems = [c["system"] for c in llm.calls]
+    assert len(llm.calls) == 2
+    assert _DISMISSED_TOPIC_PROMPT not in systems
+    assert EDITOR_SYSTEM_PROMPT not in systems
+    [edit] = [s for s in result.job.stages if s.stage == JobStage.EDIT]
+    assert edit.metrics["invoked"] is False
+    assert edit.metrics["skipped_over_budget"] is True
+    assert edit.metrics["tokens_spent"] == 6000
+    assert result.package is not None
+    assert "Unlike sleeping pills" in result.package.units[0].content
+    assert result.package.units[0].draft_source == "writer"
+    assert "skipping the edit" in caplog.text
+
+
+async def test_topic_call_has_a_small_output_cap(sqlite_store):
+    """OPS-03: the topic-extraction call no longer goes out with the model's
+    maximum output (it passed no max_tokens)."""
+    from cce.synthesis.implied_claims import _DISMISSED_TOPIC_PROMPT, _TOPIC_MAX_TOKENS
+
+    llm = _llm()
+    await _run(sqlite_store, llm, pricing=None)
+
+    [topic_call] = [c for c in llm.calls if c["system"] == _DISMISSED_TOPIC_PROMPT]
+    assert topic_call["max_tokens"] == _TOPIC_MAX_TOKENS == 4096
 
 
 @pytest.mark.parametrize("pricing", [None, {}])

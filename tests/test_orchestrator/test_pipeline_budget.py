@@ -73,7 +73,57 @@ def test_budget_exceeded_below_at_and_above_threshold():
 @pytest.mark.unit
 def test_budget_exceeded_missing_keys_count_as_zero():
     assert Pipeline._budget_exceeded({}, 1) is False
+    # Cache reads stay outside the budget (billed at a tenth of input).
     assert Pipeline._budget_exceeded({"cache_read_input_tokens": 10**6}, 1) is False
+
+
+@pytest.mark.unit
+def test_budget_counts_cache_writes():
+    """OPS-03: with prompt caching the evidence block is reported as
+    cache-creation tokens, so leaving them out let a job spend far past the
+    budget. Input, output and cache writes now all count."""
+    usage = {
+        "input_tokens": 100,
+        "output_tokens": 400,
+        "cache_creation_input_tokens": 1500,
+        "cache_read_input_tokens": 10**6,
+    }
+    assert Pipeline._budget_spent(usage) == 2000
+    assert Pipeline._budget_exceeded(usage, 2001) is False
+    assert Pipeline._budget_exceeded(usage, 2000) is True
+    assert Pipeline._budget_exceeded({"cache_creation_input_tokens": 1}, 1) is True
+
+
+@pytest.mark.integration
+async def test_cache_writes_stop_the_loop(sqlite_store):
+    """OPS-03 Case A: each writer call reports most of its prompt as a cache
+    write. Counting input + output only (960), a 10,000 budget never bit and
+    the writer was called again; counted with cache writes, the iteration-2
+    checkpoint stops the run."""
+    config = make_engine_config(max_tokens_per_job=10_000)
+    cached_writer = {
+        "input_tokens": 60,
+        "output_tokens": 900,
+        "cache_creation_input_tokens": 30_000,
+    }
+    llm = _llm_with_usage(
+        (_writer_json(content="Draft v1 [ev:ev_001]."), cached_writer),
+        (_verifier_json(supported=3, total=10, unsupported=5, gaps=2), VERIFIER_USAGE),
+    )
+    pipeline = Pipeline(
+        config=config,
+        crawl_adapter=_make_adapter(),
+        evidence_store=sqlite_store,
+        llm=llm,
+    )
+    result = await pipeline.run(make_curation_request(), make_source_policy())
+
+    assert len(llm.calls) == 2
+    assert result.job.status == JobStatus.REVIEW_REQUIRED
+    [stop] = [
+        rec for rec in result.job.stages if (rec.metrics or {}).get("budget_exceeded")
+    ]
+    assert stop.metrics["tokens_spent"] == 30_960 + 500
 
 
 # ---------------------------------------------------------------------------

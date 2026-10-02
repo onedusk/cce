@@ -473,16 +473,19 @@ def test_split_for_cache_writer_marker() -> None:
 
 
 def test_split_for_cache_verifier_marker() -> None:
-    """Verifier-style evidence end marker also splits correctly."""
+    """Verifier-style evidence end marker also splits correctly: the evidence
+    comes first and is cached, the draft after it is not (OPS-02)."""
     content = (
-        "=== DRAFT CONTENT ===\nSome draft\n=== END DRAFT ===\n\n"
         "=== EVIDENCE AVAILABLE ===\n[ev_001] Evidence\n=== END EVIDENCE ===\n\n"
+        "=== DRAFT CONTENT ===\nSome draft\n=== END DRAFT ===\n\n"
         "Verify every factual claim."
     )
     blocks = AnthropicProvider._split_for_cache(content)
     assert len(blocks) == 2
     assert blocks[0]["text"].endswith("=== END EVIDENCE ===")
     assert blocks[0]["cache_control"] == {"type": "ephemeral"}
+    assert "Some draft" not in blocks[0]["text"]
+    assert "Some draft" in blocks[1]["text"]
     assert "Verify every factual claim" in blocks[1]["text"]
     assert "cache_control" not in blocks[1]
 
@@ -515,6 +518,24 @@ async def test_cache_tokens_reported(mock_cls: MagicMock) -> None:
 
     assert result.usage["cache_creation_input_tokens"] == 500
     assert result.usage["cache_read_input_tokens"] == 1200
+
+
+@patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
+async def test_null_cache_tokens_reported_as_zero(mock_cls: MagicMock) -> None:
+    """COR-07: the SDK types both cache counts as Optional; None is 0."""
+    mock_client = MagicMock()
+    route_stream_to_create(mock_client)
+    response = _mock_response()
+    response.usage.cache_creation_input_tokens = None
+    response.usage.cache_read_input_tokens = None
+    mock_client.messages.create = AsyncMock(return_value=response)
+    mock_cls.return_value = mock_client
+
+    provider = AnthropicProvider(_config())
+    result = await provider.complete([LLMMessage(role="user", content="Hi")])
+
+    assert result.usage["cache_creation_input_tokens"] == 0
+    assert result.usage["cache_read_input_tokens"] == 0
 
 
 _SCHEMA = {

@@ -91,7 +91,8 @@ with only `llm` injected raises). An injected LLM or crawl adapter needs no
 `ANTHROPIC_API_KEY` / `FIRECRAWL_API_KEY`. Injected LLM providers must accept
 `output_schema`, set `stop_reason`, and report the `input_tokens`,
 `output_tokens`, `cache_creation_input_tokens` and `cache_read_input_tokens`
-usage keys (the token budget reads them). Configuration itself still loads
+usage keys (the token budget counts input, output and cache-creation
+tokens; cache reads are not counted). Configuration itself still loads
 only through the registry.
 
 **Non-web sources.** To mix documents that aren't web pages into a run,
@@ -99,7 +100,9 @@ write a `CrawlAdapter` for them and combine it with the web adapter:
 `CompositeCrawlAdapter({"local": my_adapter}, default=FirecrawlAdapter(config.crawl))`
 (`src/cce/discovery/adapters/composite.py`), injected as
 `ComponentOverrides(crawl_adapter=...)`. The composite dispatches each URL on
-its scheme; a scheme with no adapter counts as a failed crawl.
+its scheme; a scheme with no adapter counts as a failed crawl. An adapter
+that serves one tenant's documents must not sit in a `ComponentSet` other
+tenants share (see the per-tenant note under Evidence store).
 
 - **URL shape:** `scheme://host/path`, for example `local://acme/q3-report.pdf`
   or `gdrive://<file-id>`. The host part is required: the source policy
@@ -246,8 +249,10 @@ and `effort` (YAML `writer.*`, `verifier.*`, `humanization.editor.*`; env
 `CCE_WRITER_*`, `CCE_VERIFIER_*`, `CCE_EDITOR_*` with the suffixes
 `_MODEL`, `_MAX_TOKENS`, `_THINKING`, `_EFFORT`). Unset values inherit the
 `CCE_LLM_*` ones, and credentials are always shared. A role with any setting
-gets its own provider; the implied-claim checker uses the writer's. The
-values must suit that role's model (e.g. effort `xhigh` fails on a 4.6
+gets its own provider; the implied-claim checker uses the writer's, except
+that its topic-extraction call is capped at 4096 output tokens (thinking
+included) whatever `max_tokens` says, and a reply that hits that cap fails the
+job. The values must suit that role's model (e.g. effort `xhigh` fails on a 4.6
 model). With an injected `llm` (`ComponentOverrides`), setting any of these
 raises `ValueError`: configure the injected provider instead.
 
@@ -267,7 +272,21 @@ shares one evidence pool and one job store. For per-tenant separation, give
 each tenant its own stores — `CurationEngine.embedded(evidence_store=...,
 job_store=...)` (injected stores are the caller's to connect and close), or
 one `build_pipeline(config, registry, tenant_store, components)` per tenant.
-Tenants may share one `ComponentSet`; it holds no tenant data.
+Tenants may share one `ComponentSet` only while its crawl adapter is
+tenant-neutral (a web adapter). `CrawlAdapter.search(query, limit)` takes no
+tenant, so a document adapter in a shared set offers one tenant's documents
+to every tenant's run: into its prompts, its package and its evidence store.
+Give each tenant its own adapter instead:
+`build_pipeline(config, registry, tenant_store, components, crawl_adapter=tenant_composite)`
+replaces the set's adapter for that Pipeline only, and the LLM providers and
+the rest of the set stay shared (with `CurationEngine.embedded()`, build one
+engine per tenant with `overrides=ComponentOverrides(llm=shared_llm,
+crawl_adapter=tenant_composite)`). Also run each such tenant under a source
+policy whose `domains_allow` is non-empty and names that tenant's pseudo-host
+(`acme` for `local://acme/...`), so another tenant's documents are refused even
+if an adapter is shared by mistake: an empty `domains_allow` admits every
+host. A non-empty list also limits web sources to the domains it names, so
+list those too.
 
 Schema v4 (B6) makes evidence unique on `(url, excerpt_hash)` rather than
 `excerpt_hash` alone. An existing database is rebuilt losslessly the first
@@ -340,7 +359,7 @@ evidence after any search or crawl failed fails with error code
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `CCE_MAX_TOKENS_PER_JOB` | unset | Hard ceiling on accumulated LLM tokens (input + output, all paths and iterations) per job. On breach the job stops iterating and routes to `REVIEW_REQUIRED`, keeping partial drafts (ADR-003, audit-2026-06-09). Unset = unlimited. |
+| `CCE_MAX_TOKENS_PER_JOB` | unset | Token budget per job: input + output + cache-creation tokens of every LLM call, all paths and iterations (cache reads are not counted). Checked before each writer iteration, where a breach stops iterating and routes the job to `REVIEW_REQUIRED`, keeping partial drafts (ADR-003, audit-2026-06-09), and before each edit step, where a breach skips the edit so the verifier checks the writer's draft. Not a hard ceiling: past a passing check a job can still spend one writer call, or one edit step (one implied-claim call per contrastive frame that names a topic, plus the editor call), and then one verifier call. Unset = unlimited. |
 
 ### Cost estimate
 
