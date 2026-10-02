@@ -224,7 +224,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20" },
-    { name = "anthropic", specifier = ">=0.40" },
+    { name = "anthropic", specifier = ">=0.96" },
     { name = "fastapi", specifier = ">=0.135.2" },
     { name = "firecrawl-py", specifier = ">=1.0" },
     { name = "httpx", specifier = ">=0.27" },

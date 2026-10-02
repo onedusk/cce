@@ -23,7 +23,40 @@ from cce.verification.verifier import VerificationReport
 
 MIN_SUBSTANTIVE_WORDS = 15  # min words for a paragraph to be checked for citations
 
+# The writer's gap marker, in the grammar emit strips from the page
+# (output/mdx _GAP_RE), so a draft the gate calls empty is one emit would
+# write as an empty page.
+_GAP_MARKER_RE = re.compile(r"\[INSUFFICIENT EVIDENCE:\s*([^\]]*)\]", re.DOTALL)
+
 logger = logging.getLogger(__name__)
+
+
+# A heading is 1-6 "#" followed by whitespace or the end of the line
+# (CommonMark): "#1 cause of insomnia" is prose.
+_HEADING_LINE_RE = re.compile(r"#{1,6}(\s|$)")
+
+
+def _strip_headings(text: str) -> str:
+    """``text`` without its markdown heading lines."""
+    return "\n".join(
+        line for line in text.split("\n") if not _HEADING_LINE_RE.match(line.strip())
+    )
+
+
+def _published_text(content: str) -> str:
+    """The body as emit publishes it: gap markers removed. A citation the
+    writer put inside a gap marker goes with it, so it can't count here."""
+    return _GAP_MARKER_RE.sub("", content)
+
+
+def _resolved_ids(text: str, by_id: dict[str, Evidence]) -> set[str]:
+    """Canonical IDs of the markers in ``text`` that resolve to evidence."""
+    ids: set[str] = set()
+    for match in EV_MARKER_RE.finditer(text):
+        ev_id, resolved = resolve_evidence_id(match.group(1) or match.group(2), by_id)
+        if resolved is not None:
+            ids.add(ev_id)
+    return ids
 
 
 class GateDecision(Enum):
@@ -74,10 +107,13 @@ class QualityGate:
         """Decide whether to pass, fail, or route to review.
 
         Decision logic:
-        1. If every inline citation marker resolves to ``evidence`` AND
-           confidence >= pass_threshold AND citation density is met -> PASS
+        1. If every inline citation marker resolves to ``evidence`` AND at
+           least one does AND the draft has text besides headings and gap
+           markers AND confidence >= pass_threshold AND citation density is
+           met -> PASS
         2. If we haven't hit max iterations AND there are fixable issues
-           (including unresolved markers) -> FAIL (rewrite)
+           (including unresolved markers, a draft with no citation or no
+           text, and a citation density miss) -> FAIL (rewrite)
         3. Otherwise -> REVIEW (needs human)
 
         ``evidence`` is the set the draft was written and verified against
@@ -93,8 +129,17 @@ class QualityGate:
         # meet the threshold while citing nothing real.
         unresolved = self._unresolved_markers(unit, evidence)
 
+        # No citation, no ship: a draft with no marker that resolves, or with
+        # nothing left once headings and gap markers are removed, never
+        # passes, whatever the verifier scored (a gap-only draft is all
+        # gap_acknowledged, confidence 1.0).
+        # Both read the text emit publishes, not the raw draft.
+        published = _published_text(unit.content)
+        uncited_draft = not _resolved_ids(published, {ev.id: ev for ev in evidence})
+        empty_draft = not EV_MARKER_RE.sub("", _strip_headings(published)).strip()
+
         # Check citation density per paragraph
-        citation_ok, citation_ratio = self._check_citation_density(unit)
+        citation_ok, citation_ratio = self._check_citation_density(unit, evidence)
 
         # Build feedback for the writer
         feedback_parts: list[str] = []
@@ -114,6 +159,19 @@ class QualityGate:
                 f"{len(multi_id)} citation marker(s) put several IDs in one "
                 f"bracket: {' '.join(f'[{m}]' for m in multi_id)}. Use one marker "
                 f"per source, e.g. [ev:ID1][ev:ID2]."
+            )
+
+        if empty_draft:
+            feedback_parts.append(
+                "The draft has no text once headings and [INSUFFICIENT EVIDENCE] "
+                "markers are removed. Write what the evidence supports and cite "
+                "it with [ev:ID] markers."
+            )
+        elif uncited_draft and not unresolved:
+            feedback_parts.append(
+                "The draft has no citation marker that resolves to provided "
+                "evidence. Cite the evidence behind each claim with [ev:ID] "
+                "markers."
             )
 
         if report.unsupported > 0:
@@ -165,6 +223,8 @@ class QualityGate:
         # Decision logic
         if (
             not unresolved
+            and not uncited_draft
+            and not empty_draft
             and confidence >= self._config.pass_threshold
             and citation_ok
             and report.leakage == 0
@@ -177,7 +237,11 @@ class QualityGate:
                 iteration,
             )
         elif iteration < self._config.max_writer_iterations and (
-            bool(unresolved) or self._has_fixable_issues(report)
+            bool(unresolved)
+            or uncited_draft
+            or empty_draft
+            or not citation_ok
+            or self._has_fixable_issues(report)
         ):
             decision = GateDecision.FAIL
             logger.info(
@@ -223,16 +287,27 @@ class QualityGate:
                 unresolved.append(raw)
         return unresolved
 
-    def _check_citation_density(self, unit: ContentUnit) -> tuple[bool, float]:
-        """Check citation density. Returns (passes, ratio of paragraphs meeting threshold)."""
+    def _check_citation_density(
+        self, unit: ContentUnit, evidence: list[Evidence]
+    ) -> tuple[bool, float]:
+        """Check citation density. Returns (passes, ratio of paragraphs meeting threshold).
+
+        A paragraph meets the threshold on distinct evidence IDs that resolve
+        to ``evidence``: the same marker twice counts once.
+        """
         if not unit.content:
             return False, 0.0
 
-        # Split content into paragraphs (skip headings and empty lines)
+        # Split content into paragraphs (skip heading lines and empty blocks).
+        # Only the heading lines go: the text under a heading in the same
+        # block is checked like any other paragraph.
         paragraphs = [
-            p.strip()
-            for p in unit.content.split("\n\n")
-            if p.strip() and not p.strip().startswith("#")
+            p
+            for p in (
+                _strip_headings(block).strip()
+                for block in _published_text(unit.content).split("\n\n")
+            )
+            if p
         ]
 
         # Only check substantive paragraphs
@@ -240,11 +315,11 @@ class QualityGate:
         if not substantive:
             return True, 1.0
 
+        by_id = {ev.id: ev for ev in evidence}
         passing = sum(
             1
             for p in substantive
-            if len(re.findall(r"\[ev[_:][^\]]+\]", p))
-            >= self._config.min_citations_per_paragraph
+            if len(_resolved_ids(p, by_id)) >= self._config.min_citations_per_paragraph
         )
 
         ratio = passing / len(substantive)

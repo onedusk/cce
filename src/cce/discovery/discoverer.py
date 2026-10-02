@@ -57,6 +57,7 @@ _CRAWL_FAILURE_WARN_THRESHOLD = 0.3
 SEARCH_RESULT_LIMIT = 20  # max URLs from search
 MIN_FRAGMENT_SIZE = 50  # min chars for evidence excerpt
 MAX_CHUNK_SIZE = 1500  # max chars per evidence chunk
+_UP_TO_LAST_WHITESPACE = re.compile(r".*\s")  # within one line (no "\n")
 
 
 # -- Discovery drop ledger (B10) ---------------------------------------------
@@ -215,6 +216,15 @@ class Discoverer:
             return candidates, []
         fresh = [u for u in candidates if u not in already]
         reusable = await self._evidence_store.get_by_urls(list(already))
+        # A row stored before naive published dates were read as UTC can
+        # still be naive: normalize it the same way, or the date filters
+        # fail open on it (COR-01).
+        reusable = [
+            ev.model_copy(update={"published_at": ev.published_at.replace(tzinfo=UTC)})
+            if ev.published_at is not None and ev.published_at.tzinfo is None
+            else ev
+            for ev in reusable
+        ]
         logger.info(
             "URL dedup: %d/%d candidates already indexed "
             "(reusing %d stored evidence rows)",
@@ -417,6 +427,11 @@ class Discoverer:
         Returns ``(evidence, metrics)`` where metrics carries the
         crawl_success / crawl_failed / crawl_failure_rate keys previously
         stashed on the instance side-channel (finding 1.2).
+
+        Reusable rows pass the same date and reputation filters as fresh
+        ones (COR-01). Limitation: their ``source_quality`` flags are the
+        ones stored at crawl time, under the storing job's policy; they are
+        not recomputed against this policy's phrase and suffix lists.
         """
         # Step 4: Crawl fresh URLs (skip entirely if there are none to crawl)
         crawl_results: list[CrawlResult] = []
@@ -479,14 +494,34 @@ class Discoverer:
         crawl_failed = len(fresh_urls) - crawl_success
 
         # Merge reusable evidence from previously-crawled URLs (audit P3).
+        # Stored rows pass this job's date and reputation filters like fresh
+        # ones (COR-01), with age measured from now: the stored retrieved_at
+        # is when the page was crawled, not when it is being used.
         # Same excerpt-hash dedup applies so nothing is double-counted.
-        counts["excerpts_gathered"] += len(reusable_evidence)
-        for ev in reusable_evidence:
-            if ev.excerpt_hash in seen_hashes:
-                counts["deduplicated"] += 1
-                continue
-            seen_hashes.add(ev.excerpt_hash)
-            evidence.append(ev)
+        # A row over MAX_CHUNK_SIZE (stored before chunks were bounded) is
+        # re-split first, its pieces counted like a fresh page's chunks.
+        excerpts_reused = 0
+        now = datetime.now(UTC)
+        for stored in reusable_evidence:
+            rows, n_chunks = self._bounded_rows(stored)
+            excerpts_reused += n_chunks
+            counts["dropped_fragment"] += n_chunks - len(rows)
+            for ev in rows:
+                if not self._passes_date_filter(
+                    ev, effective_policy, constraints, now=now
+                ):
+                    counts["dropped_date"] += 1
+                    continue
+                reason = self._reputation_drop_reason(ev, effective_policy.reputation)
+                if reason is not None:
+                    counts[f"dropped_{reason}"] += 1
+                    continue
+                if ev.excerpt_hash in seen_hashes:
+                    counts["deduplicated"] += 1
+                    continue
+                seen_hashes.add(ev.excerpt_hash)
+                evidence.append(ev)
+        counts["excerpts_gathered"] += excerpts_reused
 
         # Track crawl success/failure metrics
         total_crawls = crawl_success + crawl_failed
@@ -502,7 +537,7 @@ class Discoverer:
             "crawl_success": crawl_success,
             "crawl_failed": crawl_failed,
             "crawl_failure_rate": round(failure_rate, 2),
-            "excerpts_reused": len(reusable_evidence),
+            "excerpts_reused": excerpts_reused,
             **counts,
         }
 
@@ -558,18 +593,24 @@ class Discoverer:
         ev: Evidence,
         policy: SourcePolicy,
         constraints: CurationConstraints | None,
+        *,
+        now: datetime | None = None,
     ) -> bool:
         """Check if evidence meets date constraints from request + policy.
 
         Fail-open: evidence with no published_at always passes.
+
+        ``now`` is passed for rows reused from the store, whose retrieved_at
+        is an earlier job's crawl time: their age is measured from ``now``.
         """
         if ev.published_at is None:
             return True
 
-        # Policy-level: max_age_days relative to retrieval time
+        # Policy-level: max_age_days relative to retrieval time (or to now,
+        # for a reused row)
         if policy.recency.max_age_days is not None:
             try:
-                age_days = (ev.retrieved_at - ev.published_at).days
+                age_days = ((now or ev.retrieved_at) - ev.published_at).days
             except TypeError:
                 return True  # fail-open on naive/aware mismatch
             if age_days > policy.recency.max_age_days:
@@ -797,13 +838,42 @@ class Discoverer:
         return evidence, len(chunks)
 
     @staticmethod
+    def _bounded_rows(ev: Evidence) -> tuple[list[Evidence], int]:
+        """A reused row as rows of at most MAX_CHUNK_SIZE characters, plus
+        the number of chunks considered (CRIT-01).
+
+        A row stored before ``_chunk_content`` bounded long lines can be any
+        size, and its URL is never crawled again. It is re-chunked: each
+        piece keeps the row's provenance and locator, with a new ID and its
+        own hash; pieces under MIN_FRAGMENT_SIZE are dropped, as on a fresh
+        crawl. Any other row is returned unchanged.
+        """
+        if len(ev.excerpt) <= MAX_CHUNK_SIZE:
+            return [ev], 1
+        chunks = Discoverer._chunk_content(ev.excerpt)
+        rows = [
+            ev.model_copy(
+                update={
+                    "id": f"ev_{uuid.uuid4().hex[:12]}",
+                    "excerpt": text,
+                    "excerpt_hash": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                }
+            )
+            for text in chunks
+            if len(text) >= MIN_FRAGMENT_SIZE
+        ]
+        return rows, len(chunks)
+
+    @staticmethod
     def _chunk_content(
         markdown: str, max_chunk_size: int = MAX_CHUNK_SIZE
     ) -> list[str]:
         """Split markdown into chunks, preferring section/paragraph boundaries.
 
         Strategy: split on double newlines (paragraph breaks) first. If a
-        chunk exceeds max_chunk_size, split it further on single newlines.
+        chunk exceeds max_chunk_size, split it further on single newlines,
+        and a single line over the limit at whitespace (CRIT-01). No chunk
+        is longer than max_chunk_size; each is a verbatim substring.
         """
         if not markdown:
             return []
@@ -822,7 +892,15 @@ class Discoverer:
                 lines = para.split("\n")
                 current = ""
                 for line in lines:
-                    if len(current) + len(line) + 1 > max_chunk_size and current:
+                    if len(line) > max_chunk_size:
+                        # A line over the limit used to be kept whole, at any
+                        # size. Its pieces are chunks of their own, never
+                        # joined to a neighbour, so each stays verbatim.
+                        if current.strip():
+                            chunks.append(current.strip())
+                        current = ""
+                        chunks.extend(Discoverer._split_long_line(line, max_chunk_size))
+                    elif len(current) + len(line) + 1 > max_chunk_size and current:
                         chunks.append(current.strip())
                         current = line
                     else:
@@ -831,6 +909,30 @@ class Discoverer:
                     chunks.append(current.strip())
 
         return chunks
+
+    @staticmethod
+    def _split_long_line(line: str, max_chunk_size: int) -> list[str]:
+        """Cut one line into pieces of at most max_chunk_size characters.
+
+        Each cut is at the last whitespace at or before the limit, or a hard
+        cut at the limit when there is none. Index-based, so a very long
+        line costs linear time.
+        """
+        line = line.strip()
+        pieces: list[str] = []
+        pos = 0
+        while len(line) - pos > max_chunk_size:
+            match = _UP_TO_LAST_WHITESPACE.match(line, pos, pos + max_chunk_size + 1)
+            cut = match.end() - 1 if match else pos
+            if cut == pos:  # no whitespace to cut at
+                cut = pos + max_chunk_size
+            pieces.append(line[pos:cut].rstrip())
+            pos = cut
+            while line[pos].isspace():  # the stripped line ends in a non-space
+                pos += 1
+        if pos < len(line):
+            pieces.append(line[pos:])
+        return pieces
 
     # -- Evidence capping --
 

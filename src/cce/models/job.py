@@ -98,7 +98,8 @@ class DiscoverMetrics(TypedDict):
     crawl_failure_rate: float
     # Excerpt ledger (B10): excerpts_gathered == dropped_fragment
     # + dropped_date + dropped_reputation + dropped_marketing + deduplicated
-    # + capped + kept. excerpts_reused is the stored-row share of gathered.
+    # + capped + kept. excerpts_reused is the reused-excerpt share of gathered
+    # (a stored row over the chunk limit counts as its pieces).
     excerpts_gathered: int
     excerpts_reused: int
     dropped_fragment: int

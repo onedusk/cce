@@ -214,7 +214,11 @@ class CrawlConfig(BaseModel):
         default=None, description="API key if required by the adapter"
     )
     rate_limit_rps: float = Field(
-        default=2.0, description="Max requests per second to crawl sources"
+        default=2.0,
+        description=(
+            "Max concurrent crawl requests per event loop: int(value), "
+            "minimum 1. A concurrency cap, not a per-second rate"
+        ),
     )
     timeout_seconds: int = Field(default=30, description="Per-page crawl timeout")
     max_excerpts_per_source: int = Field(

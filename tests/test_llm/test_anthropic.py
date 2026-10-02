@@ -131,7 +131,7 @@ async def test_temperature_override(mock_cls: MagicMock) -> None:
     )
 
     call_kwargs = mock_client.messages.create.call_args[1]
-    assert call_kwargs["temperature"] == 0.9
+    assert call_kwargs["extra_body"]["temperature"] == 0.9
 
 
 @patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
@@ -149,7 +149,7 @@ async def test_config_defaults_used(mock_cls: MagicMock) -> None:
     )
 
     call_kwargs = mock_client.messages.create.call_args[1]
-    assert call_kwargs["temperature"] == config.temperature
+    assert call_kwargs["extra_body"]["temperature"] == config.temperature
     assert call_kwargs["max_tokens"] == config.max_tokens
     assert call_kwargs["model"] == config.model
 
@@ -202,8 +202,9 @@ async def test_sampling_params_follow_model_capability(
             if explicit_temperature is not None
             else config.temperature
         )
-        assert call_kwargs["temperature"] == expected
+        assert call_kwargs["extra_body"]["temperature"] == expected
     else:
+        assert "extra_body" not in call_kwargs
         assert "temperature" not in call_kwargs
         assert "top_p" not in call_kwargs
 
@@ -327,9 +328,9 @@ async def test_adaptive_thinking_drops_temperature_on_4_6(
         [LLMMessage(role="user", content="Hi")], temperature=0.2
     )
 
-    assert ("temperature" in mock_client.messages.create.call_args[1]) is (
-        sends_temperature
-    )
+    call_kwargs = mock_client.messages.create.call_args[1]
+    assert ("extra_body" in call_kwargs) is sends_temperature
+    assert "temperature" not in call_kwargs
 
 
 @patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
@@ -655,3 +656,39 @@ async def test_failed_model_lookup_falls_back(mock_cls: MagicMock, caplog) -> No
     )
     assert "Could not read max_tokens" in caplog.text
     provider_module._MODEL_MAX_TOKENS.clear()
+
+
+@patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
+@pytest.mark.parametrize(
+    "model",
+    ["claude-sonnet-4-6", "claude-haiku-4-5", "claude-sonnet-5", "claude-opus-5"],
+)
+async def test_request_keywords_are_ones_the_installed_sdk_accepts(
+    mock_cls: MagicMock, model: str
+) -> None:
+    """Audit OPS-01: SDK 1.x has no `temperature` keyword, so every call on a
+    model that takes sampling params raised TypeError before any request. The
+    request must bind to the real `messages.stream` signature on whichever SDK
+    is installed, with temperature carried in extra_body."""
+    import inspect
+
+    from anthropic.resources.messages import AsyncMessages
+
+    mock_client = MagicMock()
+    route_stream_to_create(mock_client)
+    mock_client.messages.create = AsyncMock(return_value=_mock_response())
+    mock_cls.return_value = mock_client
+    config = _config().model_copy(update={"model": model, "effort": "low"})
+
+    await AnthropicProvider(config).complete(
+        [LLMMessage(role="user", content="hi")],
+        system="s",
+        temperature=0.1,
+        output_schema={"type": "object", "properties": {}},
+    )
+
+    call_kwargs = mock_client.messages.create.call_args[1]
+    inspect.signature(AsyncMessages.stream).bind(None, **call_kwargs)
+    assert "temperature" not in call_kwargs
+    if model in ("claude-sonnet-4-6", "claude-haiku-4-5"):
+        assert call_kwargs["extra_body"] == {"temperature": 0.1}

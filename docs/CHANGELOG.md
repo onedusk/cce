@@ -5,6 +5,51 @@ All notable changes to the Content Curation Engine (CCE).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] audit 2026-10-02: high-severity fixes
+
+Fixes from the 2026-10-02 audit (`docs/internal/`, local): the four
+high-severity findings and the two that break "no citation, no ship".
+
+### Fixed: every job failed on Anthropic SDK 1.x (OPS-01)
+- `anthropic>=0.40` had no upper bound, so installing cce without the
+  lockfile (any consumer of the wheel) resolved SDK 1.x, whose
+  `messages.stream` has no `temperature` keyword. Every writer and verifier
+  call on a model that takes sampling parameters (`claude-sonnet-4-6`, the
+  default, and `claude-haiku-4-5`) raised `TypeError` before any request.
+  The suite did not notice: its SDK stand-in accepted any keyword.
+- `temperature` now travels in `extra_body`, which both SDK lines merge
+  into the request, so cce runs on 0.96 and on 1.x. The floor moves to
+  `anthropic>=0.96`, the version the suite runs on.
+- The test stand-in now binds every request to the installed SDK's real
+  signature, and CI installs the built wheel with no lockfile and runs
+  `scripts/check_installed_wheel.py` (boots the engine from an empty
+  directory and binds the provider's requests; no network).
+- Live-checked 2026-10-02 on SDK 1.11.0 and 0.96.0, `claude-sonnet-4-6`
+  and `claude-haiku-4-5`: calls complete, and an out-of-range temperature
+  sent this way is rejected by the API, so the value is honoured.
+
+### Fixed: evidence reused from the store passes the job's filters (COR-01, also SEC-04)
+- A URL already in the evidence store is not crawled again; its stored rows join the run. They used to join after excerpt-hash dedup only, so a row stored by a job under a permissive policy reached a later job whose `recency.max_age_days`, `reputation.require_peer_reviewed`, `require_primary_source`, `block_marketing`, or request `date_from` / `date_to` would have dropped the same page on a fresh crawl. Reused rows now pass the same date, reputation and marketing filters, counted in the existing `dropped_date` / `dropped_reputation` / `dropped_marketing` metrics (both discovery ledgers still sum exactly).
+- For a reused row, `max_age_days` is measured from today, not from the day the page was crawled: a page that was fresh when stored can age out. Fresh crawls are unchanged.
+- A reused row with a naive `published_at` (stored before date-only published dates were read as UTC) is read as UTC, so the date filters no longer fail open on it.
+- Note: reused rows keep the source-quality flags computed at crawl time under the storing job's policy; they are not recomputed against the current policy's phrase and suffix lists.
+
+### Fixed: no evidence excerpt exceeds 1,500 characters (CRIT-01)
+- A page line longer than the 1,500-character chunk limit (minified text, a transcript, a PDF text layer, a hostile page) used to become one excerpt of any size: one 400,000-character line gave one 399,999-character excerpt, sent in full to every writer and verifier call and stored for reuse. Such a line is now cut at the last whitespace at or before the limit, or hard-cut where there is none; every excerpt stays a verbatim substring of the page. Pages whose lines fit the limit chunk exactly as before (same excerpts, hashes and `chunk:N` locators).
+- Stores written before this fix can hold oversized rows, and their URLs are never crawled again. On reuse such a row is split the same way: the pieces keep the row's provenance and locator, take new IDs, count in the discovery ledger like a crawled page's chunks (`excerpts_reused` counts the pieces; pieces under 50 characters count as `dropped_fragment`), and the kept ones are stored as new rows. The oversized row stays in the store but no longer reaches a prompt.
+
+### Fixed: Firecrawl crawls fail after the first event loop (CR-02)
+- The Firecrawl adapter no longer fails every crawl of more URLs than `crawl.rate_limit_rps` after the first event loop in a process (hosts using `asyncio.run` per job or one event loop per thread), which showed up as `RuntimeError: ... is bound to a different event loop` and a job FAILED at discover. The semaphore registry is now keyed by the running event loop as well as (API key, base URL), so the concurrency cap holds per event loop, not per process: a host running several loops at once gets the cap on each loop. Single-loop hosts (`cce curate`, `cce batch`, `cce api start`) are unaffected (audit CR-02).
+
+Docs: `CCE_CRAWL_RATE_LIMIT` / `crawl.rate_limit_rps` is now documented as what the code enforces: a cap of `int(value)` (minimum 1) concurrent scrape requests per event loop, not a per-second rate. No behaviour change.
+
+### Fixed: the quality gate passed drafts with no citations (COR-05)
+- The quality gate no longer passes a draft with no citations (COR-05). A draft with no [ev:ID] marker that resolves to the path's evidence, or with no text once headings and [INSUFFICIENT EVIDENCE: ...] markers are removed, is now rewritten while iterations remain and then routed to review, with feedback that says why. Before, a gap-only draft scored confidence 1.0 and completed with zero citations. The citation density check now checks the text under a heading in the same block (only the heading line is skipped) and counts distinct resolved evidence IDs per paragraph, so the same marker twice no longer meets a two-citation rule. A density miss now triggers a rewrite instead of going to review at iteration 1. Some drafts that used to pass now take extra iterations and may end in review. Cited paragraphs directly under a heading now count toward the density ratio, which can let a draft pass that used to miss it.
+- The citation and emptiness checks read the text emit publishes (gap markers removed): a citation the writer put inside a gap marker is stripped with it, and a page that is only a footnote marker counts as empty. A line counts as a heading only when `#` is followed by whitespace, so `#1 cause ...` is prose.
+
+### Fixed: verifier scores came from its summary, not its claims (COR-06)
+- The verifier's scores now come from its own per-claim verdicts, not from the summary counts the model writes beside them (COR-06). Before, a reply whose claims said leakage and unsupported but whose summary said all supported passed the gate at confidence 1.0, a negative summary count failed the job with a validation error, and a summary of supported claims over an empty claim list passed. Total, supported, unsupported, uncited, leakage, conflict and gap counts are now tallied from claims[].assessment. An assessment outside the vocabulary counts as not supported. The summary is only cross-checked: a warning with the counts (no reply text) is logged when it disagrees. Confidence, pass rate, the gate decision and the stored verification record all use the tallied counts.
+
 ## [Unreleased] packaged humanization markers (audit 3.1)
 
 ### Fixed: an installed wheel could not boot with humanization on

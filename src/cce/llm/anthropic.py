@@ -174,9 +174,15 @@ class AnthropicProvider:
             "max_tokens": max_tokens or await self._default_max_tokens(),
         }
         if self._accepts_sampling:
-            kwargs["temperature"] = (
-                temperature if temperature is not None else self._config.temperature
-            )
+            # Through extra_body, not as a keyword: SDK 1.x dropped
+            # `temperature` from its signatures (a TypeError before any
+            # request) while the API still takes it on these models, and
+            # extra_body is merged into the request JSON on 0.x and 1.x alike.
+            kwargs["extra_body"] = {
+                "temperature": (
+                    temperature if temperature is not None else self._config.temperature
+                )
+            }
         output_config: dict = {}
         if self._accepts_adaptive and self._config.thinking is not None:
             kwargs["thinking"] = {"type": self._config.thinking}

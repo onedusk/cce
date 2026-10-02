@@ -186,6 +186,80 @@ async def test_pipeline_phantom_marker_triggers_rewrite_naming_it(sqlite_store):
 
 
 @pytest.mark.integration
+async def test_pipeline_gap_only_draft_is_rewritten_then_reviewed(sqlite_store):
+    """COR-05: a draft that is only a heading and a gap marker scores
+    confidence 1.0 (gap_acknowledged passes) but cites nothing. It no longer
+    completes: the writer is asked again with the reason, and the job goes to
+    review when the iterations run out."""
+    gap_only = json.dumps(
+        {
+            "content": "# Sleep\n\n[INSUFFICIENT EVIDENCE: nothing in the sources]",
+            "citations_used": [],
+            "evidence_map": [],
+            "gaps": ["nothing in the sources"],
+        }
+    )
+    llm = _llm(*[gap_only, _verifier_json(supported=0, total=1, gaps=1)] * 3)
+    pipeline = Pipeline(
+        config=make_engine_config(),
+        crawl_adapter=_make_adapter(),
+        evidence_store=sqlite_store,
+        llm=llm,
+    )
+
+    result = await pipeline.run(make_curation_request(), make_source_policy())
+
+    assert [gr.decision for gr in result.gate_results] == [
+        GateDecision.FAIL,
+        GateDecision.FAIL,
+        GateDecision.REVIEW,
+    ]
+    assert all(gr.confidence == 1.0 for gr in result.gate_results)
+    assert "no text once headings" in llm.calls[2]["messages"][0].content
+    assert result.job.status == JobStatus.REVIEW_REQUIRED
+
+
+@pytest.mark.integration
+async def test_pipeline_verifier_summary_cannot_pass_failed_claims(sqlite_store):
+    """COR-06: a verifier reply whose summary says all supported, beside claim
+    verdicts of leakage and unsupported, no longer passes the gate at
+    confidence 1.0. The claims decide: the draft is rewritten."""
+    claims = [
+        {
+            "claim": f"Claim {i}",
+            "citation_ids": ["ev_001"],
+            "assessment": a,
+            "explanation": "",
+            "suggestion": "",
+        }
+        for i, a in enumerate(["leakage", "unsupported", "supported"])
+    ]
+    contradicted = json.loads(_verifier_json(supported=3, total=3, gaps=0))
+    contradicted["claims"] = claims
+    llm = _llm(
+        _writer_json(),
+        json.dumps(contradicted),
+        _writer_json(),
+        _verifier_json(supported=10, total=10, gaps=0),
+    )
+    pipeline = Pipeline(
+        config=make_engine_config(),
+        crawl_adapter=_make_adapter(),
+        evidence_store=sqlite_store,
+        llm=llm,
+    )
+
+    result = await pipeline.run(make_curation_request(), make_source_policy())
+
+    first = result.gate_results[0]
+    assert first.decision == GateDecision.FAIL
+    assert first.confidence < 0.5
+    assert "training data" in first.feedback
+    assert [gr.decision for gr in result.gate_results][1:] == [GateDecision.PASS]
+    assert len(llm.calls) == 4
+
+
+@pytest.mark.integration
 async def test_pipeline_no_evidence(sqlite_store):
     config = make_engine_config()
     # Empty search results → no evidence discovered

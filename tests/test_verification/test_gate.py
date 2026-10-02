@@ -194,10 +194,14 @@ def test_gate_feedback_no_coi_when_evidence_clean():
 # ---------------------------------------------------------------------------
 
 
+# The IDs the density tests cite: a marker counts only when it resolves.
+_DENSITY_EVIDENCE = [make_evidence(id="test_001"), make_evidence(id="test_002")]
+
+
 def test_check_citation_density_empty():
     gate = QualityGate(make_gate_config())
     unit = make_content_unit(content="")
-    ok, ratio = gate._check_citation_density(unit)
+    ok, ratio = gate._check_citation_density(unit, _DENSITY_EVIDENCE)
     # Empty content returns (False, 0.0) — not vacuously true
     assert ok is False
     assert ratio == 0.0
@@ -207,7 +211,7 @@ def test_check_citation_density_short_paragraphs_skipped():
     gate = QualityGate(make_gate_config())
     # Paragraph with <=15 words — not substantive, should be skipped
     unit = make_content_unit(content="Short paragraph here.")
-    ok, ratio = gate._check_citation_density(unit)
+    ok, ratio = gate._check_citation_density(unit, _DENSITY_EVIDENCE)
     # No substantive paragraphs → vacuously true
     assert ok is True
     assert ratio == 1.0
@@ -221,9 +225,24 @@ def test_check_citation_density_headings_skipped():
         "and it has a citation [ev:test_001] which should satisfy the gate."
     )
     unit = make_content_unit(content=content)
-    ok, ratio = gate._check_citation_density(unit)
+    ok, ratio = gate._check_citation_density(unit, _DENSITY_EVIDENCE)
     assert ok is True
     assert ratio == 1.0
+
+
+def test_check_citation_density_checks_text_under_a_heading():
+    """COR-05: only the heading line is skipped. The paragraph under it in
+    the same block (no blank line between) is checked."""
+    gate = QualityGate(make_gate_config())
+    body = (
+        "This is a substantive paragraph with more than fifteen words "
+        "and it sits directly under its heading with no blank line between"
+    )
+    uncited = make_content_unit(content=f"## Heading\n{body}.")
+    assert gate._check_citation_density(uncited, _DENSITY_EVIDENCE) == (False, 0.0)
+
+    cited = make_content_unit(content=f"## Heading\n{body} [ev:test_001].")
+    assert gate._check_citation_density(cited, _DENSITY_EVIDENCE) == (True, 1.0)
 
 
 def test_check_citation_density_ev_colon_format():
@@ -233,7 +252,7 @@ def test_check_citation_density_ev_colon_format():
         "and it references evidence using the colon format [ev:abc123] here."
     )
     unit = make_content_unit(content=content)
-    ok, _ = gate._check_citation_density(unit)
+    ok, _ = gate._check_citation_density(unit, [make_evidence(id="ev_abc123")])
     assert ok is True
 
 
@@ -244,7 +263,7 @@ def test_check_citation_density_ev_underscore_format():
         "and it references evidence using the underscore format [ev_abc123] here."
     )
     unit = make_content_unit(content=content)
-    ok, _ = gate._check_citation_density(unit)
+    ok, _ = gate._check_citation_density(unit, [make_evidence(id="ev_abc123")])
     assert ok is True
 
 
@@ -256,7 +275,7 @@ def test_check_citation_density_multiple_required():
         "and it has only one citation [ev:test_001] which is not enough."
     )
     unit = make_content_unit(content=content_one)
-    ok, ratio = gate._check_citation_density(unit)
+    ok, ratio = gate._check_citation_density(unit, _DENSITY_EVIDENCE)
     assert ok is False
     assert ratio == 0.0
 
@@ -266,7 +285,7 @@ def test_check_citation_density_multiple_required():
         "and it has two citations [ev:test_001] and also [ev:test_002] here."
     )
     unit = make_content_unit(content=content_two)
-    ok, ratio = gate._check_citation_density(unit)
+    ok, ratio = gate._check_citation_density(unit, _DENSITY_EVIDENCE)
     assert ok is True
     assert ratio == 1.0
 
@@ -476,3 +495,154 @@ def test_gate_multi_id_bracket_gets_its_own_feedback():
     assert "[ev_a, ev_b]" in result.feedback
     assert "one marker per source" in result.feedback
     assert "do not resolve" not in result.feedback
+
+
+# ---------------------------------------------------------------------------
+# No citation, no ship (COR-05)
+# ---------------------------------------------------------------------------
+
+# Substantive (more than 15 words) and uncited.
+_UNCITED_PARA = (
+    "Adults who sleep eight hours a night remember more of what they studied "
+    "the day before than adults who sleep five hours or fewer"
+)
+
+
+def _evaluate_high(content: str, *, iteration: int = 1) -> GateResult:
+    """Gate on the high profile's values (two citations per paragraph, four
+    iterations) with a clean verifier report: confidence 1.0, no issues."""
+    return _evaluate(
+        content=content,
+        confidence_score=1.0,
+        iteration=iteration,
+        pass_threshold=0.95,
+        max_writer_iterations=4,
+        min_citations_per_paragraph=2,
+        evidence=[make_evidence(id="ev_a"), make_evidence(id="ev_b")],
+    )
+
+
+@pytest.mark.parametrize(
+    ("content", "why"),
+    [
+        (
+            "# Sleep\n\n[INSUFFICIENT EVIDENCE: nothing in the sources]",
+            "no text once headings",
+        ),
+        ("# Sleep", "no text once headings"),
+        (
+            "# Sleep [ev:ev_a]\n\n[INSUFFICIENT EVIDENCE: nothing in the sources]",
+            "no text once headings",
+        ),
+        (
+            "Adults need eight hours.\n\nDeprivation raises heart risk.\n\nNaps help.",
+            "no citation marker that resolves",
+        ),
+        (
+            f"## Sleep need\n{_UNCITED_PARA}.\n\n## Risk\n{_UNCITED_PARA}.",
+            "no citation marker that resolves",
+        ),
+        (f"{_UNCITED_PARA} [ev:ev_a][ev:ev_a].", "Citation density"),
+        (f"{_UNCITED_PARA} [ev:ev_a][ev_a][ev:a].", "Citation density"),
+        (f"## Sleep need\n{_UNCITED_PARA} [ev:ev_a].", "Citation density"),
+    ],
+    ids=[
+        "gap-only",
+        "heading-only",
+        "cited-heading-gap-only-body",
+        "short-uncited-paragraphs",
+        "uncited-body-under-heading-same-block",
+        "same-marker-twice",
+        "one-id-in-three-forms",
+        "one-citation-under-heading-same-block",
+    ],
+)
+def test_gate_never_passes_an_undercited_draft(content, why):
+    """A clean verifier report (confidence 1.0) does not carry a draft with
+    no citation, no text, or too few distinct citations past the gate: it is
+    rewritten while iterations remain, then goes to review, and the feedback
+    says why."""
+    first = _evaluate_high(content)
+    assert first.decision == GateDecision.FAIL
+    assert why in first.feedback
+
+    last = _evaluate_high(content, iteration=4)
+    assert last.decision == GateDecision.REVIEW
+    assert why in last.feedback
+    assert "Max iterations" in last.feedback
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        f"{_UNCITED_PARA} [ev:ev_a].",
+        f"## Sleep need\n\n{_UNCITED_PARA}.\n\nSleep helps memory [ev:ev_a][ev:ev_b].",
+    ],
+    ids=["one-citation-two-required", "uncited-paragraph"],
+)
+def test_gate_density_failure_alone_triggers_a_rewrite(content):
+    """A citation-density miss is something the writer can fix: with nothing
+    else wrong it is a rewrite at iteration 1, not a trip to review."""
+    result = _evaluate_high(content)
+
+    assert result.decision == GateDecision.FAIL
+    assert "Citation density" in result.feedback
+
+
+def test_gate_passes_two_distinct_citations_under_a_heading():
+    """Control: the same shapes pass once the paragraph cites two distinct
+    sources, heading in the same block or not."""
+    result = _evaluate_high(
+        f"## Sleep need\n{_UNCITED_PARA} [ev:ev_a][ev:ev_b].\n\n"
+        f"{_UNCITED_PARA} [ev:ev_a] and [ev_b]."
+    )
+
+    assert result.decision == GateDecision.PASS
+    assert result.feedback == "No issues found."
+
+
+def test_gate_counts_a_cited_paragraph_under_its_heading():
+    """A cited paragraph directly under its heading now counts toward the
+    density ratio (the whole block used to be skipped), so nine of them carry
+    one uncited paragraph past the default 0.9 ratio."""
+    cited = [f"## Section {i}\n{_UNCITED_PARA} [ev:test_001]." for i in range(9)]
+    result = _evaluate(
+        content="\n\n".join([*cited, f"{_UNCITED_PARA}."]), confidence_score=1.0
+    )
+
+    assert result.decision == GateDecision.PASS
+
+
+def test_gate_gap_marker_grammar_matches_emit():
+    """The gate calls a draft empty by the markers emit strips from the page."""
+    from cce.output.mdx import _GAP_RE
+    from cce.verification.gate import _GAP_MARKER_RE
+
+    assert (_GAP_MARKER_RE.pattern, _GAP_MARKER_RE.flags) == (
+        _GAP_RE.pattern,
+        _GAP_RE.flags,
+    )
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        # The citation sits inside the gap marker; emit strips the marker up to
+        # the first "]", taking the citation with it.
+        "# Sleep\n\n[INSUFFICIENT EVIDENCE: no data on naps [ev:ev_a]]",
+        # Gap marker plus a bare citation: the page would be a footnote alone.
+        "# Sleep\n\n[INSUFFICIENT EVIDENCE: nothing on naps]\n\n[ev:ev_a]",
+    ],
+)
+def test_gate_reads_the_text_emit_publishes(content):
+    """Review of COR-05: a citation that emit removes with the gap marker,
+    or a page that is only a footnote marker, is no citation."""
+    result = _evaluate_high(content)
+    assert result.decision != GateDecision.PASS
+
+
+def test_a_line_starting_with_a_hash_number_is_prose_not_a_heading():
+    """'#1 cause' is not a heading (CommonMark needs whitespace after '#'),
+    so the paragraph is checked and, when cited, the draft passes."""
+    content = f"#1 cause of poor recall: {_UNCITED_PARA} [ev:ev_a] [ev:ev_b]."
+    assert _evaluate_high(content).decision == GateDecision.PASS
