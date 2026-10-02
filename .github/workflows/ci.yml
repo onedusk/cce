@@ -56,3 +56,17 @@ jobs:
           uv build --wheel -o dist-check
           unzip -l dist-check/*.whl | grep "cce/config/humanization_markers.yaml"
           unzip -l dist-check/*.whl | grep "cce/config/model_pricing.yaml"
+
+      # Install that wheel with no lockfile, as a consumer does, so it gets
+      # the newest dependencies the version bounds allow, and check it boots
+      # and that its LLM requests bind to that SDK (audit OPS-01). No network
+      # calls, no keys. This step goes red when an upstream release breaks
+      # cce: that is its job.
+      - name: Wheel works without the lockfile
+        env:
+          CCE_EMBEDDING_ENABLED: "false"
+        run: |
+          uv venv "$RUNNER_TEMP/wheel-venv"
+          VIRTUAL_ENV="$RUNNER_TEMP/wheel-venv" uv pip install dist-check/*.whl
+          cd "$(mktemp -d)"
+          "$RUNNER_TEMP/wheel-venv/bin/python" "$GITHUB_WORKSPACE/scripts/check_installed_wheel.py"

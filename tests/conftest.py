@@ -533,10 +533,18 @@ def route_stream_to_create(client: Any) -> None:
     calls) go through the test's ``messages.create`` mock, so tests keep
     scripting and inspecting ``messages.create``."""
     import contextlib
+    import inspect
     from unittest.mock import AsyncMock, MagicMock
+
+    from anthropic.resources.messages import AsyncMessages
+
+    real_signature = inspect.signature(AsyncMessages.stream)
 
     @contextlib.asynccontextmanager
     async def stream(**kwargs: Any):
+        # A keyword the installed SDK does not accept must fail here, as it
+        # would for real (audit OPS-01: SDK 1.x rejects `temperature`).
+        real_signature.bind(None, **kwargs)
         message = await client.messages.create(**kwargs)
         manager = MagicMock()
         manager.get_final_message = AsyncMock(return_value=message)

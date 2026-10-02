@@ -5,6 +5,29 @@ All notable changes to the Content Curation Engine (CCE).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] audit 2026-10-02: high-severity fixes
+
+Fixes from the 2026-10-02 audit (`docs/internal/`, local): the four
+high-severity findings and the two that break "no citation, no ship".
+
+### Fixed: every job failed on Anthropic SDK 1.x (OPS-01)
+- `anthropic>=0.40` had no upper bound, so installing cce without the
+  lockfile (any consumer of the wheel) resolved SDK 1.x, whose
+  `messages.stream` has no `temperature` keyword. Every writer and verifier
+  call on a model that takes sampling parameters (`claude-sonnet-4-6`, the
+  default, and `claude-haiku-4-5`) raised `TypeError` before any request.
+  The suite did not notice: its SDK stand-in accepted any keyword.
+- `temperature` now travels in `extra_body`, which both SDK lines merge
+  into the request, so cce runs on 0.96 and on 1.x. The floor moves to
+  `anthropic>=0.96`, the version the suite runs on.
+- The test stand-in now binds every request to the installed SDK's real
+  signature, and CI installs the built wheel with no lockfile and runs
+  `scripts/check_installed_wheel.py` (boots the engine from an empty
+  directory and binds the provider's requests; no network).
+- Live-checked 2026-10-02 on SDK 1.11.0 and 0.96.0, `claude-sonnet-4-6`
+  and `claude-haiku-4-5`: calls complete, and an out-of-range temperature
+  sent this way is rejected by the API, so the value is honoured.
+
 ## [Unreleased] packaged humanization markers (audit 3.1)
 
 ### Fixed: an installed wheel could not boot with humanization on
