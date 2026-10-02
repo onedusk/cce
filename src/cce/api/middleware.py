@@ -8,9 +8,11 @@ import time
 import uuid
 
 from fastapi import FastAPI
+from starlette.datastructures import Headers
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from cce.api.schemas import error_envelope
 
@@ -20,23 +22,68 @@ MAX_BODY_BYTES = 1_048_576  # 1 MiB — finding 5.1
 
 
 def install_body_size_limit(app: FastAPI, max_bytes: int = MAX_BODY_BYTES) -> None:
-    """Reject oversized requests before parsing (413). Content-Length
-    check only — chunked bodies are bounded downstream by uvicorn's
-    h11 max-incomplete-size; documented limitation, acceptable pre-1.0."""
+    """Reject request bodies over ``max_bytes`` with the 413 envelope,
+    before routing, auth or parsing (finding 5.1, SEC-02)."""
+    app.add_middleware(BodySizeLimitMiddleware, max_bytes=max_bytes)
 
-    @app.middleware("http")
-    async def _limit_body(request: Request, call_next):  # type: ignore[no-untyped-def]
-        declared = request.headers.get("content-length")
-        if declared is not None and int(declared) > max_bytes:
-            return JSONResponse(
-                status_code=413,
-                content=error_envelope(
-                    code="payload_too_large",
-                    message=f"Request body exceeds {max_bytes} bytes",
-                    request_id=get_request_id(),
-                ).model_dump(mode="json"),
-            )
-        return await call_next(request)
+
+class BodySizeLimitMiddleware:
+    """Pure ASGI body-size limit.
+
+    A declared Content-Length over the limit is rejected before any body is
+    read. Otherwise the ``http.request`` body bytes are counted as they
+    arrive, so a chunked body (no Content-Length) or one longer than its
+    declared Content-Length is answered 413 as soon as it passes the limit
+    (SEC-02: neither uvicorn nor h11 bounds a request body). The body is read
+    here, at most ``max_bytes`` plus one chunk, before the app runs, so no
+    response has started when the 413 goes out; the app then receives the
+    buffered messages unchanged.
+    """
+
+    def __init__(self, app: ASGIApp, max_bytes: int = MAX_BODY_BYTES) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        declared = Headers(scope=scope).get("content-length")
+        if declared is not None and int(declared) > self.max_bytes:
+            await self._reject(scope, receive, send)
+            return
+
+        buffered: list[Message] = []
+        received = 0
+        while True:
+            message = await receive()
+            buffered.append(message)
+            if message["type"] != "http.request":
+                break  # http.disconnect: let the app see it
+            received += len(message.get("body", b""))
+            if received > self.max_bytes:
+                await self._reject(scope, receive, send)
+                return
+            if not message.get("more_body", False):
+                break
+
+        async def replay() -> Message:
+            if buffered:
+                return buffered.pop(0)
+            return await receive()
+
+        await self.app(scope, replay, send)
+
+    async def _reject(self, scope: Scope, receive: Receive, send: Send) -> None:
+        response = JSONResponse(
+            status_code=413,
+            content=error_envelope(
+                code="payload_too_large",
+                message=f"Request body exceeds {self.max_bytes} bytes",
+                request_id=get_request_id(),
+            ).model_dump(mode="json"),
+        )
+        await response(scope, receive, send)
 
 
 # --- Request-ID correlation (audit U1, ADR-003) ---------------------------
