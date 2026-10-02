@@ -367,6 +367,11 @@ diffs); env vars exist only for the master switch and the marker path.
 |----------|---------|---------|
 | `CCE_LOG_FORMAT` | unset | `json` switches to structured JSON logs |
 
+Pipeline log records carry `job_id`: for a job run by the engine or the API
+it is the stored job's id, the one `cce status`, `cce jobs` and
+`GET /v1/curate/jobs/{id}` show. A direct `Pipeline.run(request, policy,
+job_id=...)` logs under the id it is given, or mints one.
+
 ## Ollama and embedding ranking
 
 Discovery ranks crawled evidence semantically: excerpts are embedded via a

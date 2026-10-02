@@ -134,9 +134,12 @@ class JobStore:
             return Job.model_validate_json(row[0])
 
     async def update_job(self, job: Job) -> None:
-        """Update an existing job (status, timestamps, error, stages)."""
+        """Update an existing job (status, timestamps, error, stages).
+
+        Sets ``job.updated_at`` to now, in the stored JSON and the column.
+        """
         assert self._db is not None
-        now = datetime.now(UTC).isoformat()
+        job.updated_at = datetime.now(UTC)
         await self._db.execute(
             """
             UPDATE jobs
@@ -146,7 +149,7 @@ class JobStore:
             (
                 job.status.value,
                 job.model_dump_json(),
-                now,
+                job.updated_at.isoformat(),
                 job.completed_at.isoformat() if job.completed_at else None,
                 job.id,
             ),

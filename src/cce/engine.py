@@ -79,7 +79,7 @@ async def run_pipeline_task(
             job.status = JobStatus.RUNNING
             await job_store.update_job(job)
 
-            result = await pipeline.run(request, policy)
+            result = await pipeline.run(request, policy, job_id=job_id)
             if on_error is not None and result.error is not None:
                 on_error(result.error)
 
