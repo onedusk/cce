@@ -381,7 +381,11 @@ async def test_pipeline_exception_handling(sqlite_store):
 
     assert result.failed is True
     assert result.job.error is not None
-    assert "Network error" in result.job.error.message
+    # A failed search is caught per query and reported by class name only;
+    # the exception's own text can carry provider detail (OPS-09).
+    assert result.job.error.code == "crawl_unavailable"
+    assert "RuntimeError" in result.job.error.message
+    assert "Network error" not in result.job.error.message
 
 
 # ---------------------------------------------------------------------------

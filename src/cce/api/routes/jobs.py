@@ -81,10 +81,25 @@ async def create_job(
                 ).model_dump(mode="json"),
             )
 
-    # Convert to CurationRequest
-    constraints = None
+    # Convert to CurationRequest. The top-level jurisdiction (older clients)
+    # fills an unset constraints.jurisdiction; all constraints travel (CR-03).
+    constraints = body.constraints
     if body.jurisdiction:
-        constraints = CurationConstraints(jurisdiction=body.jurisdiction)
+        if constraints is None:
+            constraints = CurationConstraints(jurisdiction=body.jurisdiction)
+        elif constraints.jurisdiction is None:
+            constraints = constraints.model_copy(
+                update={"jurisdiction": body.jurisdiction}
+            )
+        elif constraints.jurisdiction != body.jurisdiction:
+            return JSONResponse(
+                status_code=422,
+                content=error_envelope(
+                    code="invalid_request",
+                    message="jurisdiction and constraints.jurisdiction differ",
+                    request_id=get_request_id(),
+                ).model_dump(mode="json"),
+            )
 
     try:
         curation_request = CurationRequest(

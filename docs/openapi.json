@@ -714,7 +714,7 @@
               }
             ],
             "title": "Date From",
-            "description": "ISO date string, lower bound for source recency"
+            "description": "ISO 8601 date or datetime, lower bound on a source's published date (no offset means UTC)"
           },
           "date_to": {
             "anyOf": [
@@ -726,7 +726,7 @@
               }
             ],
             "title": "Date To",
-            "description": "ISO date string, upper bound for source recency"
+            "description": "ISO 8601 date or datetime, upper bound on a source's published date (no offset means UTC)"
           },
           "domains_allow": {
             "items": {
@@ -734,7 +734,7 @@
             },
             "type": "array",
             "title": "Domains Allow",
-            "description": "Only include sources from these domains"
+            "description": "Only include sources from these domains (narrows the policy's allow list)"
           },
           "domains_deny": {
             "items": {
@@ -742,7 +742,7 @@
             },
             "type": "array",
             "title": "Domains Deny",
-            "description": "Exclude sources from these domains"
+            "description": "Exclude sources from these domains (added to the policy's)"
           },
           "jurisdiction": {
             "anyOf": [
@@ -1116,7 +1116,19 @@
                 "type": "null"
               }
             ],
-            "title": "Jurisdiction"
+            "title": "Jurisdiction",
+            "description": "Kept for older clients: fills constraints.jurisdiction when that is unset (a different value there is a 422)"
+          },
+          "constraints": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CurationConstraints"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Discovery filters; see CurationRequest.constraints"
           },
           "context": {
             "items": {

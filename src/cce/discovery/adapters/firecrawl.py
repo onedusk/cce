@@ -158,7 +158,12 @@ class FirecrawlAdapter:
         return await asyncio.gather(*tasks)
 
     async def search(self, query: str, limit: int = 10) -> list[str]:
-        """Use Firecrawl's search endpoint to find relevant URLs."""
+        """Use Firecrawl's search endpoint to find relevant URLs.
+
+        A provider error (bad key, no credits, rate limit, outage) is logged
+        and raised, not returned as an empty result, so the discoverer can
+        tell it from a query with no results (OPS-09).
+        """
         try:
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
@@ -179,7 +184,7 @@ class FirecrawlAdapter:
             return urls
         except Exception as e:
             logger.warning("Firecrawl search failed for query '%s': %s", query, e)
-            return []
+            raise
 
     @staticmethod
     def _parse_response(url: str, response: Any) -> CrawlResult:
@@ -211,9 +216,16 @@ class FirecrawlAdapter:
                 return val if val is not None else default
             return default
 
+        # The v2 SDK carries the target page's status on metadata.status_code
+        # (COR-03); the top-level attribute is kept for other shapes.
+        if isinstance(metadata, dict):
+            meta_status = metadata.get("status_code")
+        else:
+            meta_status = getattr(metadata, "status_code", None)
+
         return CrawlResult(
             url=url,
-            status_code=_get(response, "status_code", 200) or 200,
+            status_code=meta_status or _get(response, "status_code", 200) or 200,
             title=_meta("title") or _meta("og:title") or _get(response, "title", ""),
             author=_meta("author") or _meta("og:author", ""),
             published_date=(

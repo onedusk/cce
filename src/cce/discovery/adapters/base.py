@@ -57,6 +57,8 @@ class CrawlAdapter(Protocol):
 
         Not all adapters support search -- those that don't should raise
         NotImplementedError, and the discoverer will fall back to seed URLs
-        from the curation request.
+        from the curation request. A failed search (provider down, bad key,
+        no credits) should raise any other exception rather than return [],
+        so the job can report it (OPS-09).
         """
         ...

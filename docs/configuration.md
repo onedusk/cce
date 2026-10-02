@@ -145,11 +145,21 @@ shaped*. Loaded by id at job time, not part of `EngineConfig`:
   `domains_deny` match the URL's host at label boundaries: an allow entry
   admits the host or its subdomains, a deny entry blocks any host containing
   its labels in sequence (`x.com` doesn't block `fox.com`; `amazon.com` does
-  block `amazon.com.au`). `reputation` also takes `marketing_phrases`
+  block `amazon.com.au`). A request's `constraints.domains_allow` /
+  `domains_deny` are matched the same way on top of the policy: a deny entry
+  from either drops the URL, and a request allow list narrows the policy's
+  (counted in `urls_dropped_policy`). Its `date_from` / `date_to` take an
+  ISO 8601 date or datetime (no offset means UTC; anything else is a
+  validation error) and apply to fresh and reused excerpts alike. The REST
+  API and remote mode pass all of them through. `reputation` also takes `marketing_phrases`
   (whole-word; `[]` flags nothing), `primary_source_suffixes` (default
   `.gov`, `.edu`) and `penalize_conflict_of_interest` (default true) — see
-  `policies/peer-reviewed.yaml`. `trusted_institutions` still matches by
-  substring.
+  `policies/peer-reviewed.yaml`. `trusted_institutions` matches the host
+  only, never the path, query or userinfo: a one-label entry such as
+  `pubmed` matches any label of the host (`pubmed.ncbi.nlm.nih.gov`), so
+  whoever owns a domain can earn it with a subdomain; prefer a full domain
+  (`nih.gov`, `.gov`), which matches the host or its subdomains. The
+  built-in peer-review tag is read from the host the same way.
 - `taxonomies/` — taxonomy definitions for evidence classification. The API
   currently selects `taxonomies/wellbeing-8d.yaml` when present.
 - `path_configs/` — output path definitions (tone, structure, depth per
@@ -268,6 +278,14 @@ stays in the store but no longer reaches a prompt.
 | `CCE_CRAWL_TIMEOUT` | `30` | Per-request timeout (seconds) |
 | `CCE_CRAWL_MAX_PER_SOURCE` | `5` | Max excerpts kept per source |
 | `CCE_CRAWL_MAX_EVIDENCE` | `100` | Max evidence objects per request |
+
+A failed search (bad key, no credits, rate limit, outage) is counted per
+query in the DISCOVER record's `search_failed`, with `search_error` holding
+the last failure's exception class name (never its message). A page that
+could not be fetched, or answered HTTP 400 or above, counts in
+`crawl_failed` and is never stored as evidence. A job that finds no
+evidence after any search or crawl failed fails with error code
+`crawl_unavailable` rather than `pipeline_error`.
 
 ### Embedding (Ollama)
 

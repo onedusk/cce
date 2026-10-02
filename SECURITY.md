@@ -19,7 +19,9 @@ the repository owner rather than in a public issue.
 - **Fetching:** CCE does not fetch source pages itself. The crawl adapter
   (Firecrawl, a hosted service with a fixed base URL) does, so there is no
   local SSRF surface. Which hosts may be used is set by the source policy's
-  `domains_allow` / `domains_deny`.
+  `domains_allow` / `domains_deny`; a request's `constraints` can narrow
+  that further (its deny list adds to the policy's, its allow list must
+  also match), never widen it.
 
 ## MDX output (`emit-mdx`)
 

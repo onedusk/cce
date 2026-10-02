@@ -96,15 +96,22 @@ class CompositeCrawlAdapter:
         URLs, and interleave the answers (first of each, second of each, ...)
         without duplicates. Interleaving keeps a later cap on sources from
         cutting out one adapter entirely. Raises ``NotImplementedError`` only
-        when no adapter supports search.
+        when no adapter supports search. An adapter whose search fails is
+        skipped while another finds URLs; when none does, its error is
+        raised so the discoverer counts the failure (OPS-09).
         """
         found: list[list[str]] = []
+        error: Exception | None = None
         for adapter in self._adapters:
             try:
                 found.append(await adapter.search(query, limit=limit))
             except NotImplementedError:
                 continue
+            except Exception as e:
+                error = e
+        merged = [url for row in zip_longest(*found) for url in row if url is not None]
+        if error is not None and not merged:
+            raise error
         if not found:
             raise NotImplementedError("no adapter in the composite supports search")
-        merged = [url for row in zip_longest(*found) for url in row if url is not None]
         return list(dict.fromkeys(merged))

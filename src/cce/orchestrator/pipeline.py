@@ -489,10 +489,28 @@ class Pipeline:
             evidence = discovery.evidence
 
             if not evidence and not context:
+                # A failed search or crawl is not an empty topic (OPS-09).
+                searches_failed = int(discovery.metrics.get("search_failed", 0))
+                crawls_failed = int(discovery.metrics.get("crawl_failed", 0))
+                error_msg, error_code = "No evidence discovered", "pipeline_error"
+                if searches_failed or crawls_failed:
+                    error_code = "crawl_unavailable"
+                    error_msg = (
+                        f"No evidence discovered: {searches_failed} searches "
+                        f"and {crawls_failed} crawls failed"
+                    )
+                    if "search_error" in discovery.metrics:
+                        error_msg += (
+                            f" (last search error: {discovery.metrics['search_error']})"
+                            "; check the crawl provider's key, credits and status"
+                        )
                 return PipelineResult(
                     package=None,
                     job=self._update_job(
-                        job, JobStatus.FAILED, error_msg="No evidence discovered"
+                        job,
+                        JobStatus.FAILED,
+                        error_msg=error_msg,
+                        error_code=error_code,
                     ),
                     gate_results=[],
                 )
