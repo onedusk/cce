@@ -62,6 +62,26 @@ class EmitResult:
     files_written: int
 
 
+def safe_child_dir(root: Path, parent: Path, name: str) -> Path:
+    """``parent / name`` for a directory emit is about to create, refused
+    unless ``name`` is one plain path component and the result stays inside
+    ``root`` (audit 2.1). ``unit.path`` and the topic slug come from the job
+    request: an absolute value would discard the target directory and ``..``
+    would climb out of it.
+    """
+    child = parent / name
+    if (
+        name in ("", ".", "..")
+        or Path(name).name != name
+        or not child.resolve().is_relative_to(root.resolve())
+    ):
+        raise ValueError(
+            f"refusing to write outside the target directory: {name[:80]!r} is "
+            "not a single directory name"
+        )
+    return child
+
+
 def slugify(text: str) -> str:
     """Convert a topic name to a URL-safe slug.
 
@@ -109,7 +129,7 @@ def emit_mdx(
     # Build evidence lookup
     evidence_by_id: dict[str, Evidence] = {ev.id: ev for ev in package.evidence}
 
-    topic_dir = target_dir / topic_slug
+    topic_dir = safe_child_dir(target_dir, target_dir, topic_slug)
     topic_dir.mkdir(parents=True, exist_ok=True)
 
     curated_at = datetime.now(UTC).isoformat()
@@ -119,7 +139,7 @@ def emit_mdx(
     # Write page.mdx per ContentUnit
     evidence_gaps_by_path: dict[str, list[str]] = {}
     for unit in package.units:
-        path_dir = topic_dir / unit.path
+        path_dir = safe_child_dir(target_dir, topic_dir, unit.path)
         path_dir.mkdir(parents=True, exist_ok=True)
 
         # Strip writer's gap-acknowledgment markers before rendering. The

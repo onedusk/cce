@@ -99,6 +99,8 @@ class TestEmitMdxCli:
 
         assert result.exit_code == 0, result.output
         assert "Emitted:" in result.output
+        # Audit 2.1: the --topic value is slugified before it names a directory.
+        assert [p.name for p in target.iterdir()] == ["cli-test-topic"]
 
     def test_missing_job_and_topic(self, tmp_path):
         target = tmp_path / "content"

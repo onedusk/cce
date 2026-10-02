@@ -27,7 +27,12 @@ from typing import Literal
 from cce.models.content import ContentUnit
 from cce.models.evidence import Evidence
 from cce.models.package import PublishPackage
-from cce.output.mdx import EmitResult, _strip_evidence_gaps, slugify
+from cce.output.mdx import (
+    EmitResult,
+    _strip_evidence_gaps,
+    safe_child_dir,
+    slugify,
+)
 from cce.output.mdx.citations import (
     CitationEntry,
     _canonical_url,
@@ -165,7 +170,7 @@ def emit_thnklabs(
         topic_slug = slugify(topic_name)
 
     evidence_by_id: dict[str, Evidence] = {ev.id: ev for ev in package.evidence}
-    topic_dir = target_dir / topic_slug
+    topic_dir = safe_child_dir(target_dir, target_dir, topic_slug)
     topic_dir.mkdir(parents=True, exist_ok=True)
 
     curated_at = datetime.now(UTC).isoformat()
@@ -174,7 +179,7 @@ def emit_thnklabs(
     evidence_gaps_by_path: dict[str, list[str]] = {}
 
     for unit in package.units:
-        path_dir = topic_dir / unit.path
+        path_dir = safe_child_dir(target_dir, topic_dir, unit.path)
         path_dir.mkdir(parents=True, exist_ok=True)
 
         cleaned_content, gaps = _strip_evidence_gaps(unit.content)

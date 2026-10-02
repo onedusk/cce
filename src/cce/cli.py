@@ -436,7 +436,9 @@ def emit_mdx_command(
                 if package is None:
                     typer.echo(f"Error: no package for job {jobs[0].id}", err=True)
                     raise typer.Exit(1)
-                return [(package, topic, jobs[0].request.topic)]
+                # The override becomes a directory name: slugify it like the
+                # derived slug (audit 2.1), falling back to the job's topic.
+                return [(package, slugify(topic or "") or None, jobs[0].request.topic)]
         finally:
             await store.close()
 

@@ -13,6 +13,10 @@ from pydantic import BaseModel, Field, field_validator
 
 from cce.models.evidence import Evidence
 
+# A path names a directory under the emit target and a URL segment, so it is
+# one plain component: no separators, no "..", no leading dot (audit 2.1).
+_PATH_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+
 # An ID has to fit inside a [ev:ID] marker (parsing.EV_MARKER_RE), and the
 # gate reads a "," inside one as several IDs.
 _CITABLE_ID_RE = re.compile(r"[^\s\[\],]+")
@@ -100,7 +104,13 @@ class CurationRequest(BaseModel):
 
     @field_validator("paths")
     @classmethod
-    def _paths_unique(cls, v: list[str]) -> list[str]:
+    def _paths_named_and_unique(cls, v: list[str]) -> list[str]:
+        for path in v:
+            if not _PATH_NAME_RE.fullmatch(path):
+                raise ValueError(
+                    f"path {path[:50]!r} must be 1-64 letters, digits, '_' or '-', "
+                    "starting with a letter or digit"
+                )
         # Everything downstream is keyed by path; a repeat would leave one
         # draft unrecorded (review of B7). Dropped, order kept.
         return list(dict.fromkeys(v))

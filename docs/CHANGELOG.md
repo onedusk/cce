@@ -5,6 +5,21 @@ All notable changes to the Content Curation Engine (CCE).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] emit path traversal (audit 2.1)
+
+### Security: emit can no longer write outside its target directory
+- A job's `paths` and the `emit-mdx --topic` value became directory names
+  unchecked, so `paths: ["../../.github/workflows"]` (or an absolute path)
+  made `emit-mdx` write `page.mdx` outside `--target`. Three layers now:
+  - `CurationRequest.paths` entries must be one plain name: 1-64 letters,
+    digits, `_` or `-`, starting with a letter or digit (a 422 from the
+    API, also when no path configs are loaded).
+  - Both emitters refuse a topic slug or unit path that is not a single
+    directory name inside the target (`safe_child_dir`: no separators, no
+    `..`, no absolute paths, no symlink out), which also covers packages
+    stored before the validation.
+  - `emit-mdx --topic` is slugified before it names a directory.
+
 ## [Unreleased] todo sweep
 
 ### Fixed: `thinking: disabled` on models that reject it

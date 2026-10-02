@@ -182,3 +182,14 @@ async def test_invalid_context_is_a_422_that_does_not_echo_it(
     assert err["code"] == "invalid_request"
     assert "excerpt_hash is not the SHA-256" in err["message"]
     assert "Confidential" not in resp.text
+
+
+@pytest.mark.parametrize("path", ["../../.github/workflows", "/etc/cron.d", ".."])
+async def test_traversal_path_is_rejected(client: httpx.AsyncClient, path):
+    """Audit 2.1: a path that could climb out of the emit target is a 422."""
+    resp = await client.post(
+        "/v1/curate/jobs",
+        json={"topic": "test topic", "paths": [path], "policy_id": "test-policy"},
+    )
+    assert resp.status_code in (400, 422)
+    assert resp.json()["error"]["code"] in ("invalid_request", "unknown_paths")
