@@ -5,6 +5,26 @@ All notable changes to the Content Curation Engine (CCE).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] packaged humanization markers (audit 3.1)
+
+### Fixed: an installed wheel could not boot with humanization on
+- The marker lists lived only at `config/humanization_markers.yaml` in the
+  repo, outside the package, so a wheel did not contain them. Humanization
+  is on by default and start-up fails without them: a consumer installing
+  cce as a dependency got `ConfigError: Humanization markers file not
+  found` unless it copied the file into its working directory.
+- The lists now ship in the package (`cce/config/humanization_markers.yaml`,
+  the single tracked copy; `load_markers()` with no path loads it).
+  `humanization.markers_path` defaults to unset, which means: a
+  `config/humanization_markers.yaml` in the working directory when present
+  (it replaces the packaged lists whole, so existing deployments are
+  unchanged), else the packaged lists. A `markers_path` that is set but
+  missing still fails fast.
+- CI builds the wheel and checks it carries the markers and the price table.
+- Checked by installing the wheel into a clean environment and starting the
+  embedded engine from an empty directory: scorer, editor and implied-claim
+  checker wired. The same script fails on the previous wheel.
+
 ## [Unreleased] bubble-readiness Phase 3
 
 ### Added: non-web sources through a composite crawl adapter (B14)

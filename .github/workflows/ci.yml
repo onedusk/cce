@@ -47,3 +47,12 @@ jobs:
           print(json.dumps(create_app(config).openapi(), indent=2))
           EOF
           git diff --exit-code docs/openapi.json
+
+      # The wheel must carry the data files the engine loads at start-up: a
+      # consumer installing cce as a dependency has no config/ directory
+      # (audit 3.1: the humanization markers were missing from the wheel).
+      - name: Wheel carries packaged data
+        run: |
+          uv build --wheel -o dist-check
+          unzip -l dist-check/*.whl | grep "cce/config/humanization_markers.yaml"
+          unzip -l dist-check/*.whl | grep "cce/config/model_pricing.yaml"

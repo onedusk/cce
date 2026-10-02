@@ -342,4 +342,4 @@ async def test_unreadable_topic_reply_gives_no_topic(reply):
 def _markers_stub():
     from cce.config.markers import load_markers
 
-    return load_markers("config/humanization_markers.yaml")
+    return load_markers()

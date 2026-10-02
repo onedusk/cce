@@ -159,9 +159,12 @@ shaped*. Loaded by id at job time, not part of `EngineConfig`:
 **Engine tuning** — describes *how the engine runs*:
 
 - `config/` — the optional engine config YAML you pass with `--config`
-  (e.g. `config/humanization_live.yaml`), plus
-  `config/humanization_markers.yaml`: operator-editable marker lists for the
-  humanization scorer, located via `CCE_HUMANIZATION_MARKERS_PATH`.
+  (e.g. `config/humanization_live.yaml`), plus two optional override files:
+  `config/humanization_markers.yaml` (marker lists for the humanization
+  scorer; replaces the lists packaged in
+  `src/cce/config/humanization_markers.yaml` whole) and
+  `config/model_pricing.yaml` (entries on top of the packaged price table).
+  Neither has to exist: an installed wheel runs on the packaged copies.
 
 ## Environment variables
 
@@ -305,7 +308,7 @@ modelled.
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `CCE_HUMANIZATION_ENABLED` | `true` | Master switch for scorer/editor/checker (on by default since 2026-06-24; set `false` to skip all three) |
-| `CCE_HUMANIZATION_MARKERS_PATH` | `config/humanization_markers.yaml` | Marker lists |
+| `CCE_HUMANIZATION_MARKERS_PATH` | unset | Marker-lists file to use (must exist). Unset = `config/humanization_markers.yaml` in the working directory if present, else the lists packaged with cce |
 
 Granular humanization thresholds are deliberately YAML-only (reviewable in
 diffs); env vars exist only for the master switch and the marker path.

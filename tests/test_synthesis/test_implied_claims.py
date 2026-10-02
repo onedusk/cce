@@ -22,7 +22,7 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture
 def markers() -> HumanizationMarkers:
-    return load_markers("config/humanization_markers.yaml")
+    return load_markers()
 
 
 def _counter(n: int) -> list[Evidence]:

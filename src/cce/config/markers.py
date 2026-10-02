@@ -9,11 +9,15 @@ list updates independently of engine releases.
 from __future__ import annotations
 
 import re
+from importlib import resources
 from pathlib import Path
 from typing import Literal
 
 import yaml
 from pydantic import BaseModel, Field
+
+# The marker lists shipped inside the package (the default).
+PACKAGED_MARKERS = "humanization_markers.yaml"
 
 ContrastiveSubtype = Literal["parasitic", "genuine_alternative"]
 
@@ -65,18 +69,24 @@ class HumanizationMarkers(BaseModel):
         return out
 
 
-def load_markers(path: str | Path) -> HumanizationMarkers:
+def load_markers(path: str | Path | None = None) -> HumanizationMarkers:
     """Load and validate the markers YAML.
 
-    Raises FileNotFoundError if the path is missing — humanization must not
-    silently fall back to an empty marker set when the operator expected one.
+    ``path=None`` loads the marker lists packaged with cce
+    (``cce/config/humanization_markers.yaml``), so an installed wheel works
+    with no file in the working directory. With a path, raises
+    FileNotFoundError if it is missing — humanization must not silently fall
+    back to another marker set when the operator named one.
     """
-    p = Path(path)
-    if not p.exists():
-        raise FileNotFoundError(f"Humanization markers file not found: {p}")
-
-    with p.open() as f:
-        data = yaml.safe_load(f) or {}
+    if path is None:
+        packaged = resources.files("cce.config").joinpath(PACKAGED_MARKERS)
+        data = yaml.safe_load(packaged.read_text(encoding="utf-8")) or {}
+    else:
+        p = Path(path)
+        if not p.exists():
+            raise FileNotFoundError(f"Humanization markers file not found: {p}")
+        with p.open() as f:
+            data = yaml.safe_load(f) or {}
 
     return HumanizationMarkers(
         suppressed_vocabulary=list(data.get("suppressed_vocabulary", [])),

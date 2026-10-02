@@ -491,7 +491,7 @@ def main() -> int:
     # Instantiate the scorer purely for word_count (matches the pipeline's
     # citation-stripping before counting, so densities align with live runs).
     thresholds = HumanizationThresholds()
-    markers = load_markers(ROOT / "config" / "humanization_markers.yaml")
+    markers = load_markers()  # the lists packaged with cce
     scorer = Scorer(thresholds=thresholds, markers=markers)
 
     # Skip _baseline/ and _metadata/ — these are archival copies, not the

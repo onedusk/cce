@@ -41,7 +41,7 @@ pytestmark = pytest.mark.integration
 def _scorer() -> Scorer:
     return Scorer(
         thresholds=HumanizationThresholds(),
-        markers=load_markers("config/humanization_markers.yaml"),
+        markers=load_markers(),
     )
 
 

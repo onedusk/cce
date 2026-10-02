@@ -198,8 +198,8 @@ def main() -> int:
     parser.add_argument(
         "--markers",
         type=Path,
-        default=ROOT / "config" / "humanization_markers.yaml",
-        help="Marker YAML (default: <repo>/config/humanization_markers.yaml)",
+        default=None,
+        help="Marker YAML (default: the lists packaged with cce)",
     )
     parser.add_argument(
         "--csv",

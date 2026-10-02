@@ -14,7 +14,7 @@ pytestmark = pytest.mark.unit
 @pytest.fixture
 def markers() -> HumanizationMarkers:
     """Real marker YAML from config/ — integration with the shipped lists."""
-    return load_markers("config/humanization_markers.yaml")
+    return load_markers()
 
 
 @pytest.fixture
