@@ -125,6 +125,15 @@ whose `raw_response` is the reply text, for the caller to persist where it
 sees fit. cce never logs or stores that text: the job store and the API only
 carry `job.error` (code, message and stage).
 
+**Retrying a job.** `JobHandle.retry()` and `POST /v1/curate/jobs/{id}/retry`
+re-run a finished job under the same id. Before the job is queued again the
+retry removes the previous run's package and stage records, so
+`JobHandle.package()` returns None (the API answers 404 `package_not_found`)
+until the new run stores one, and a retry that fails before any path
+completes leaves the job FAILED with no package. A retry whose policy is no
+longer loaded is refused (`ValueError` in embedded mode, 404
+`policy_not_found` from the API) and the job is left as it was.
+
 **New configuration surfaces must enter through the registry** — add a field
 to `ConfigRegistry`, load it in `load()`, and consume it from
 `build_components`. Do not add `load_*` calls to `engine.py` or

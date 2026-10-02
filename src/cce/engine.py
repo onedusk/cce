@@ -216,12 +216,18 @@ class JobHandle:
             job = await self.status()
             if job.status in (JobStatus.QUEUED, JobStatus.RUNNING):
                 raise ValueError("Job is already queued or running")
+            if job.request.policy_id not in self._engine._policies:
+                raise ValueError(f"Policy not found: {job.request.policy_id}")
             job.status = JobStatus.QUEUED
             job.error = None
             job.stage = None
+            job.progress = None
+            job.stages = []
             job.completed_at = None
             self._error = None
             assert self._job_store is not None
+            # The last run's package must not outlive it (COR-02).
+            await self._job_store.delete_package(self._job_id)
             await self._job_store.update_job(job)
             self._engine._launch_pipeline(job, self)
             return job

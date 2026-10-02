@@ -266,14 +266,7 @@ async def retry_job(
             ).model_dump(mode="json"),
         )
 
-    # Reset job state
-    job.status = JobStatus.QUEUED
-    job.error = None
-    job.stage = None
-    job.completed_at = None
-    await state.job_store.update_job(job)
-
-    # Resolve policy and re-launch
+    # Resolve policy before any write: a 404 leaves the job as it was
     policy = state.policies.get(job.request.policy_id)
     if policy is None:
         return JSONResponse(
@@ -285,6 +278,17 @@ async def retry_job(
             ).model_dump(mode="json"),
         )
 
+    # Reset job state; the last run's package must not outlive it (COR-02)
+    job.status = JobStatus.QUEUED
+    job.error = None
+    job.stage = None
+    job.progress = None
+    job.stages = []
+    job.completed_at = None
+    await state.job_store.delete_package(job.id)
+    await state.job_store.update_job(job)
+
+    # Re-launch
     task = asyncio.create_task(
         run_pipeline_task(
             job.id,

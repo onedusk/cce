@@ -240,6 +240,12 @@ class JobStore:
                 return None
             return PublishPackage.model_validate_json(row[0])
 
+    async def delete_package(self, job_id: str) -> None:
+        """Remove a job's package (a retry must not serve the last run's)."""
+        assert self._db is not None
+        await self._db.execute("DELETE FROM packages WHERE job_id = ?", (job_id,))
+        await self._db.commit()
+
     # -- API Key CRUD --
 
     async def store_api_key(self, key_hash: str, label: str | None = None) -> None:
