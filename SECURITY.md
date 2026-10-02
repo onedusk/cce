@@ -43,6 +43,10 @@ model-written text:
 
 Implementation: `src/cce/output/mdx/escape.py`.
 
+`emit-mdx` writes only inside its target directory: a topic slug or path
+that isn't a single plain directory name is refused, at the request and
+again at the write.
+
 **Still the consumer's job:**
 
 - Markdown links written by the model are kept as links, and with GFM

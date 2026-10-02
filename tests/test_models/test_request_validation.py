@@ -123,3 +123,28 @@ class TestPinnedContext:
         job = Job(id="job_1", request=CurationRequest(**_valid(context=[self._ctx()])))
         again = Job.model_validate_json(job.model_dump_json())
         assert again.request.context == job.request.context
+
+
+class TestPathNames:
+    """Audit 2.1: a path names a directory under the emit target."""
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "../../.github/workflows",
+            "/etc/cron.d",
+            "learn/../../x",
+            "..",
+            ".hidden",
+            "a b",
+            "",
+            "x" * 65,
+        ],
+    )
+    def test_rejects_anything_but_one_plain_name(self, bad):
+        with pytest.raises(ValidationError, match="must be 1-64 letters"):
+            CurationRequest(**_valid(paths=[bad]))
+
+    @pytest.mark.parametrize("ok", ["learn", "blog", "path_10", "Any-Path", "a"])
+    def test_accepts_plain_names(self, ok):
+        assert CurationRequest(**_valid(paths=[ok])).paths == [ok]

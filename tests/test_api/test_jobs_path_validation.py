@@ -124,3 +124,28 @@ async def test_no_path_configs_skips_validation(tmp_path):
     finally:
         await job_store.close()
         await evidence_store.close()
+
+
+async def test_no_path_configs_still_rejects_traversal(tmp_path):
+    """Audit 2.1: with no path configs loaded the known-path gate is skipped,
+    and the request itself must refuse a path that isn't one plain name."""
+    app, job_store, evidence_store = await _make_lifecycle_app(tmp_path)
+    app.state.path_configs = None
+    try:
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.post(
+                    "/v1/curate/jobs",
+                    json={
+                        "topic": "test",
+                        "paths": ["../../../../.github/workflows"],
+                        "policy_id": "test-policy",
+                    },
+                )
+        assert resp.status_code == 422
+        assert resp.json()["error"]["code"] == "invalid_request"
+    finally:
+        await job_store.close()
+        await evidence_store.close()
