@@ -691,6 +691,22 @@ def test_validate_typo_policy_exits_1_with_suggestion(tmp_path):
     assert "1 error in 4 files" in result.output
 
 
+def test_validate_reports_an_invalid_topic_pattern(tmp_path):
+    """CRIT-02: a topic_pattern re can't compile is a validate error, not OK."""
+    _write_validate_tree(tmp_path)
+    (tmp_path / "policies" / "regex.yaml").write_text(
+        "id: regex\nname: Regex\ntopic_overrides:\n"
+        '  - topic_pattern: "sleep (hygiene"\n'
+    )
+
+    result = runner.invoke(app, ["validate", "--root", str(tmp_path)])
+    assert result.exit_code == 1, result.output
+    line = next(line for line in result.output.splitlines() if "regex.yaml" in line)
+    assert "ERROR" in line
+    assert "topic_overrides.0.topic_pattern" in line
+    assert "sleep (hygiene" in line
+
+
 def test_validate_all_good_tree_exits_0(tmp_path):
     _write_validate_tree(tmp_path)
 
