@@ -158,7 +158,12 @@ class FirecrawlAdapter:
         return await asyncio.gather(*tasks)
 
     async def search(self, query: str, limit: int = 10) -> list[str]:
-        """Use Firecrawl's search endpoint to find relevant URLs."""
+        """Use Firecrawl's search endpoint to find relevant URLs.
+
+        A provider error (bad key, no credits, rate limit, outage) is logged
+        and raised, not returned as an empty result, so the discoverer can
+        tell it from a query with no results (OPS-09).
+        """
         try:
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
@@ -179,7 +184,7 @@ class FirecrawlAdapter:
             return urls
         except Exception as e:
             logger.warning("Firecrawl search failed for query '%s': %s", query, e)
-            return []
+            raise
 
     @staticmethod
     def _parse_response(url: str, response: Any) -> CrawlResult:

@@ -252,7 +252,7 @@ class Discoverer:
         side-channel).
         """
         # Steps 1-2: Build search queries and collect candidate URLs
-        candidate_urls = await self._search_candidates(request)
+        candidate_urls, search_metrics = await self._search_candidates(request)
 
         # Step 3: Filter against policy
         effective_policy = self._resolve_overrides(request.topic, policy)
@@ -312,7 +312,7 @@ class Discoverer:
             logger.warning("Discovery: no URLs survived policy filter")
             metrics = _discovery_metrics(**url_ledger)
             _log_drops(metrics)
-            return DiscoveryResult(evidence=[], metrics=metrics)
+            return DiscoveryResult(evidence=[], metrics={**metrics, **search_metrics})
 
         # Steps 4-5: Crawl fresh URLs, extract + filter evidence, merge reusable
         evidence, metrics = await self._crawl_and_extract(
@@ -376,10 +376,18 @@ class Discoverer:
             pages_crawled,
             before_cap,
         )
-        return DiscoveryResult(evidence=evidence, metrics=metrics)
+        return DiscoveryResult(evidence=evidence, metrics={**metrics, **search_metrics})
 
-    async def _search_candidates(self, request: CurationRequest) -> list[str]:
-        """Build search queries and collect deduplicated candidate URLs."""
+    async def _search_candidates(
+        self, request: CurationRequest
+    ) -> tuple[list[str], dict[str, int | str]]:
+        """Build search queries and collect deduplicated candidate URLs.
+
+        Also returns the search metrics (OPS-09): ``search_failed`` counts
+        queries whose search raised, and ``search_error`` (present only
+        then) is the last error's class name, never its message, which can
+        carry provider text.
+        """
         # Step 1: Build search queries
         queries = self._build_queries(request)
         logger.info(
@@ -388,6 +396,7 @@ class Discoverer:
 
         # Step 2: Search for candidate URLs
         candidate_urls: list[str] = []
+        search_metrics: dict[str, int | str] = {"search_failed": 0}
         for query in queries:
             try:
                 urls = await self._adapter.search(query, limit=SEARCH_RESULT_LIMIT)
@@ -396,6 +405,15 @@ class Discoverer:
                 logger.info(
                     "Adapter does not support search, skipping query: %s", query
                 )
+            except Exception as e:
+                error_name = type(e).__name__
+                logger.warning(
+                    "Search failed (%s), skipping query: %s", error_name, query
+                )
+                search_metrics = {
+                    "search_failed": int(search_metrics["search_failed"]) + 1,
+                    "search_error": error_name,
+                }
 
         # Add any seed domains from constraints as fallback
         if request.constraints and request.constraints.domains_allow:
@@ -407,7 +425,7 @@ class Discoverer:
         logger.info(
             "Discovery: %d candidate URLs before policy filter", len(candidate_urls)
         )
-        return candidate_urls
+        return candidate_urls, search_metrics
 
     def _apply_policy_filters(
         self, candidate_urls: list[str], policy: SourcePolicy

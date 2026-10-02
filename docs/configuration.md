@@ -269,6 +269,14 @@ stays in the store but no longer reaches a prompt.
 | `CCE_CRAWL_MAX_PER_SOURCE` | `5` | Max excerpts kept per source |
 | `CCE_CRAWL_MAX_EVIDENCE` | `100` | Max evidence objects per request |
 
+A failed search (bad key, no credits, rate limit, outage) is counted per
+query in the DISCOVER record's `search_failed`, with `search_error` holding
+the last failure's exception class name (never its message). A page that
+could not be fetched, or answered HTTP 400 or above, counts in
+`crawl_failed` and is never stored as evidence. A job that finds no
+evidence after any search or crawl failed fails with error code
+`crawl_unavailable` rather than `pipeline_error`.
+
 ### Embedding (Ollama)
 
 | Variable | Default | Purpose |

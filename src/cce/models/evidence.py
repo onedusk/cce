@@ -71,10 +71,12 @@ class DiscoveryResult(BaseModel):
     model_config = {"frozen": True}
 
     evidence: list[Evidence] = Field(default_factory=list)
-    metrics: dict[str, int | float] = Field(
+    metrics: dict[str, int | float | str] = Field(
         default_factory=dict,
         description=(
-            "Crawl keys (crawl_success, crawl_failed, crawl_failure_rate) "
+            "Search keys (search_failed, plus search_error, the last failed "
+            "search's exception class name, only when one failed; OPS-09), "
+            "crawl keys (crawl_success, crawl_failed, crawl_failure_rate) "
             "plus two drop ledgers that each sum exactly (B10). URLs: "
             "urls_gathered = urls_dropped_policy + urls_capped + urls_reused "
             "+ crawl_failed + crawl_success. Excerpts: excerpts_gathered = "

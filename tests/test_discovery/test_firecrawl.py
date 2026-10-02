@@ -140,15 +140,15 @@ async def test_search_success(mock_fc_cls: MagicMock) -> None:
 
 @patch("cce.discovery.adapters.firecrawl.FirecrawlApp")
 async def test_search_failure(mock_fc_cls: MagicMock) -> None:
-    """search raises Exception -> empty list returned."""
+    """search raises Exception -> it propagates, so the discoverer can count
+    it (OPS-09); it used to be swallowed as an empty result."""
     mock_app = MagicMock()
     mock_app.search = MagicMock(side_effect=Exception("Search API error"))
     mock_fc_cls.return_value = mock_app
 
     adapter = FirecrawlAdapter(_config())
-    urls = await adapter.search("broken query")
-
-    assert urls == []
+    with pytest.raises(Exception, match="Search API error"):
+        await adapter.search("broken query")
 
 
 @pytest.mark.parametrize("status", [200, 404, 500])
