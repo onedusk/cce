@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import weakref
 from threading import Lock
 from typing import Any
 
@@ -19,27 +20,39 @@ from cce.discovery.adapters.base import CrawlRequest, CrawlResult
 logger = logging.getLogger(__name__)
 
 
-# --- Process-global rate-limit registry (audit P4, ADR-002) ---------------
-# Per-instance semaphores silently doubled the combined RPS whenever two
-# jobs constructed their own FirecrawlAdapter. The registry here shares one
-# asyncio.Semaphore across all adapters targeting the same
-# (api_key, base_url) pair within a single process, so `rate_limit_rps` is
-# the real cap Firecrawl sees.
+# --- Per-event-loop concurrency-cap registry (audit P4, ADR-002; CR-02) ---
+# Per-instance semaphores silently doubled the combined in-flight requests
+# whenever two jobs constructed their own FirecrawlAdapter. The registry here
+# shares one asyncio.Semaphore across all adapters targeting the same
+# (api_key, base_url) pair on the same event loop, so int(`rate_limit_rps`)
+# caps the scrape requests in flight on that loop. It is a concurrency cap,
+# not a per-second rate.
+#
+# The cap holds per event loop, not per process: an asyncio.Semaphore binds
+# to the first loop that has to wait on it, so one semaphore shared across
+# loops raised "is bound to a different event loop" on every later contended
+# crawl (asyncio.run per job, or a loop per thread). A host running N loops
+# at once can therefore have N times the cap in flight for one key.
 
 _FIRECRAWL_DEFAULT_BASE_URL = "https://api.firecrawl.dev"
-_SEMAPHORES: dict[tuple[str, str], asyncio.Semaphore] = {}
-# Parallel dict of the first-registered `max_rps` per key. Used only to detect
-# and warn about mismatched capacities on subsequent calls (review F-4);
+# Weak keys drop a loop that is garbage collected. A semaphore that has had
+# to wait holds a strong reference to its loop, which would keep that entry
+# alive forever, so entries of closed loops are also dropped explicitly the
+# next time a new loop registers.
+_SEMAPHORES: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop, dict[tuple[str, str], asyncio.Semaphore]
+] = weakref.WeakKeyDictionary()
+# First-registered `max_rps` per key, process-wide (plain ints, so no loop
+# binding). Every loop's semaphore for the key is created with it, and a
+# later adapter asking for a different capacity is warned (review F-4);
 # asyncio.Semaphore's `_value` / `_initial_value` are private and unsafe to
 # read from application code.
 _SEMAPHORE_CAPACITIES: dict[tuple[str, str], int] = {}
 _REGISTRY_LOCK = Lock()  # guards first-time insert; the semaphore itself is async.
 
 
-def _get_shared_semaphore(
-    *, api_key: str, base_url: str, max_rps: int
-) -> asyncio.Semaphore:
-    """Return the shared asyncio.Semaphore for (api_key, base_url), creating it once.
+def _register_capacity(*, api_key: str, base_url: str, max_rps: int) -> int:
+    """Record the capacity for (api_key, base_url) once and return the one in force.
 
     If a subsequent call supplies a different `max_rps` for the same key, the
     first-registered capacity wins (there is no way to safely resize an
@@ -49,22 +62,38 @@ def _get_shared_semaphore(
     key = (api_key, base_url)
     cap = max(1, max_rps)
     with _REGISTRY_LOCK:
-        sem = _SEMAPHORES.get(key)
+        registered = _SEMAPHORE_CAPACITIES.setdefault(key, cap)
+        if registered != cap:
+            logger.warning(
+                "Firecrawl semaphore for %s already registered with "
+                "rate_limit_rps=%d; ignoring subsequent request for "
+                "rate_limit_rps=%d.",
+                base_url,
+                registered,
+                cap,
+            )
+    return registered
+
+
+def _get_shared_semaphore(
+    *, api_key: str, base_url: str, capacity: int
+) -> asyncio.Semaphore:
+    """Return the running loop's semaphore for (api_key, base_url), creating it once.
+
+    Must be called from a coroutine: the semaphore is looked up under the
+    running event loop, so each loop gets its own.
+    """
+    loop = asyncio.get_running_loop()
+    key = (api_key, base_url)
+    with _REGISTRY_LOCK:
+        per_loop = _SEMAPHORES.get(loop)
+        if per_loop is None:
+            for closed in [lp for lp in _SEMAPHORES if lp.is_closed()]:
+                del _SEMAPHORES[closed]
+            per_loop = _SEMAPHORES[loop] = {}
+        sem = per_loop.get(key)
         if sem is None:
-            sem = asyncio.Semaphore(cap)
-            _SEMAPHORES[key] = sem
-            _SEMAPHORE_CAPACITIES[key] = cap
-        else:
-            registered = _SEMAPHORE_CAPACITIES.get(key, cap)
-            if registered != cap:
-                logger.warning(
-                    "Firecrawl semaphore for %s already registered with "
-                    "rate_limit_rps=%d; ignoring subsequent request for "
-                    "rate_limit_rps=%d.",
-                    base_url,
-                    registered,
-                    cap,
-                )
+            sem = per_loop[key] = asyncio.Semaphore(capacity)
     return sem
 
 
@@ -81,11 +110,22 @@ class FirecrawlAdapter:
     def __init__(self, config: CrawlConfig) -> None:
         self._config = config
         self._client = FirecrawlApp(api_key=config.api_key or "")
-        base_url = getattr(config, "base_url", None) or _FIRECRAWL_DEFAULT_BASE_URL
-        self._semaphore = _get_shared_semaphore(
+        self._base_url = (
+            getattr(config, "base_url", None) or _FIRECRAWL_DEFAULT_BASE_URL
+        )
+        self._capacity = _register_capacity(
             api_key=config.api_key or "",
-            base_url=base_url,
+            base_url=self._base_url,
             max_rps=int(config.rate_limit_rps),
+        )
+
+    @property
+    def _semaphore(self) -> asyncio.Semaphore:
+        """The running loop's shared semaphore, resolved on each use (CR-02)."""
+        return _get_shared_semaphore(
+            api_key=self._config.api_key or "",
+            base_url=self._base_url,
+            capacity=self._capacity,
         )
 
     async def crawl(self, request: CrawlRequest) -> CrawlResult:
@@ -111,7 +151,7 @@ class FirecrawlAdapter:
                 )
 
     async def crawl_many(self, requests: list[CrawlRequest]) -> list[CrawlResult]:
-        """Fetch multiple URLs concurrently, respecting rate limit."""
+        """Fetch multiple URLs concurrently, respecting the concurrency cap."""
         tasks = [self.crawl(req) for req in requests]
         return await asyncio.gather(*tasks)
 
