@@ -31,11 +31,22 @@ _GAP_MARKER_RE = re.compile(r"\[INSUFFICIENT EVIDENCE:\s*([^\]]*)\]", re.DOTALL)
 logger = logging.getLogger(__name__)
 
 
+# A heading is 1-6 "#" followed by whitespace or the end of the line
+# (CommonMark): "#1 cause of insomnia" is prose.
+_HEADING_LINE_RE = re.compile(r"#{1,6}(\s|$)")
+
+
 def _strip_headings(text: str) -> str:
     """``text`` without its markdown heading lines."""
     return "\n".join(
-        line for line in text.split("\n") if not line.strip().startswith("#")
+        line for line in text.split("\n") if not _HEADING_LINE_RE.match(line.strip())
     )
+
+
+def _published_text(content: str) -> str:
+    """The body as emit publishes it: gap markers removed. A citation the
+    writer put inside a gap marker goes with it, so it can't count here."""
+    return _GAP_MARKER_RE.sub("", content)
 
 
 def _resolved_ids(text: str, by_id: dict[str, Evidence]) -> set[str]:
@@ -122,8 +133,10 @@ class QualityGate:
         # nothing left once headings and gap markers are removed, never
         # passes, whatever the verifier scored (a gap-only draft is all
         # gap_acknowledged, confidence 1.0).
-        uncited_draft = not _resolved_ids(unit.content, {ev.id: ev for ev in evidence})
-        empty_draft = not _GAP_MARKER_RE.sub("", _strip_headings(unit.content)).strip()
+        # Both read the text emit publishes, not the raw draft.
+        published = _published_text(unit.content)
+        uncited_draft = not _resolved_ids(published, {ev.id: ev for ev in evidence})
+        empty_draft = not EV_MARKER_RE.sub("", _strip_headings(published)).strip()
 
         # Check citation density per paragraph
         citation_ok, citation_ratio = self._check_citation_density(unit, evidence)
@@ -291,7 +304,8 @@ class QualityGate:
         paragraphs = [
             p
             for p in (
-                _strip_headings(block).strip() for block in unit.content.split("\n\n")
+                _strip_headings(block).strip()
+                for block in _published_text(unit.content).split("\n\n")
             )
             if p
         ]

@@ -80,7 +80,8 @@ class DiscoveryResult(BaseModel):
             "+ crawl_failed + crawl_success. Excerpts: excerpts_gathered = "
             "dropped_fragment + dropped_date + dropped_reputation + "
             "dropped_marketing + deduplicated + capped + kept "
-            "(excerpts_reused counts the stored rows within gathered). "
+            "(excerpts_reused counts the reused excerpts within gathered; a stored "
+            "row over the chunk limit counts as its pieces). "
             "See cce.models.job.DiscoverMetrics"
         ),
     )

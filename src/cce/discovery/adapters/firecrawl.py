@@ -38,7 +38,9 @@ _FIRECRAWL_DEFAULT_BASE_URL = "https://api.firecrawl.dev"
 # Weak keys drop a loop that is garbage collected. A semaphore that has had
 # to wait holds a strong reference to its loop, which would keep that entry
 # alive forever, so entries of closed loops are also dropped explicitly the
-# next time a new loop registers.
+# next time a new loop registers. A loop that is never closed (new_event_loop
+# without close) keeps its entry, and the loop with it, for the process's
+# life; asyncio.run closes its loop, so the usual hosts are unaffected.
 _SEMAPHORES: weakref.WeakKeyDictionary[
     asyncio.AbstractEventLoop, dict[tuple[str, str], asyncio.Semaphore]
 ] = weakref.WeakKeyDictionary()

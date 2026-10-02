@@ -622,3 +622,27 @@ def test_gate_gap_marker_grammar_matches_emit():
         _GAP_RE.pattern,
         _GAP_RE.flags,
     )
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        # The citation sits inside the gap marker; emit strips the marker up to
+        # the first "]", taking the citation with it.
+        "# Sleep\n\n[INSUFFICIENT EVIDENCE: no data on naps [ev:ev_a]]",
+        # Gap marker plus a bare citation: the page would be a footnote alone.
+        "# Sleep\n\n[INSUFFICIENT EVIDENCE: nothing on naps]\n\n[ev:ev_a]",
+    ],
+)
+def test_gate_reads_the_text_emit_publishes(content):
+    """Review of COR-05: a citation that emit removes with the gap marker,
+    or a page that is only a footnote marker, is no citation."""
+    result = _evaluate_high(content)
+    assert result.decision != GateDecision.PASS
+
+
+def test_a_line_starting_with_a_hash_number_is_prose_not_a_heading():
+    """'#1 cause' is not a heading (CommonMark needs whitespace after '#'),
+    so the paragraph is checked and, when cited, the draft passes."""
+    content = f"#1 cause of poor recall: {_UNCITED_PARA} [ev:ev_a] [ev:ev_b]."
+    assert _evaluate_high(content).decision == GateDecision.PASS
