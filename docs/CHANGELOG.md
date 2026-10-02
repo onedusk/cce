@@ -5,6 +5,24 @@ All notable changes to the Content Curation Engine (CCE).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] bubble-readiness Phase 3
+
+### Added: non-web sources through a composite crawl adapter (B14)
+- **`CompositeCrawlAdapter`** (`discovery/adapters/composite.py`) dispatches
+  each URL to the adapter registered for its scheme, with an optional
+  default for every other scheme, so a consumer's own adapter (`local://`,
+  `gdrive://`) and the web adapter serve one run. Inject it with
+  `ComponentOverrides(crawl_adapter=...)`; nothing changes without it.
+  - `crawl_many` gives each adapter its requests in one call, runs the
+    adapters concurrently and returns results in request order. A scheme
+    with no adapter, or a result an adapter never returned, is a failed
+    crawl; extra results are appended.
+  - `search` asks every adapter that supports it and interleaves the
+    answers without duplicates, so the source cap can't drop one adapter.
+- Documented the pseudo-URL shape (`docs/configuration.md`, "Non-web
+  sources"): `scheme://host/path`. The policy matches allow and deny lists
+  against the host and drops a URL without one (`file:///x.pdf`).
+
 ## [Unreleased] emit path traversal (audit 2.1)
 
 ### Security: emit can no longer write outside its target directory

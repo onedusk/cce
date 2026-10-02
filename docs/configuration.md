@@ -94,6 +94,28 @@ with only `llm` injected raises). An injected LLM or crawl adapter needs no
 usage keys (the token budget reads them). Configuration itself still loads
 only through the registry.
 
+**Non-web sources.** To mix documents that aren't web pages into a run,
+write a `CrawlAdapter` for them and combine it with the web adapter:
+`CompositeCrawlAdapter({"local": my_adapter}, default=FirecrawlAdapter(config.crawl))`
+(`src/cce/discovery/adapters/composite.py`), injected as
+`ComponentOverrides(crawl_adapter=...)`. The composite dispatches each URL on
+its scheme; a scheme with no adapter counts as a failed crawl.
+
+- **URL shape:** `scheme://host/path`, for example `local://acme/q3-report.pdf`
+  or `gdrive://<file-id>`. The host part is required: the source policy
+  matches `domains_allow` / `domains_deny` against it exactly as for a web
+  domain, and drops a URL without one, so `file:///x.pdf` is never crawled.
+  With a non-empty `domains_allow`, list the pseudo-host too (`acme`).
+- **Finding documents:** the adapter's `search(query, limit)` returns the
+  pseudo-URLs to consider. The composite asks every adapter (each for up to
+  `limit`) and interleaves the answers, so `max_sources_per_run` can't cut
+  one adapter out entirely.
+- **What the adapter returns:** a `CrawlResult` with the document as
+  markdown. Chunking, the 50-character minimum, the recency and reputation
+  filters, dedup, storage and URL reuse then apply as for a web page; the
+  URL is what citations and `_evidence.json` carry, so it should mean
+  something to your readers or your renderer.
+
 **Reading a failed run's error in memory.** In embedded mode,
 `JobHandle.error` holds the exception that failed the job's last run (None
 until then or when no exception failed it, as with no evidence; cleared by
