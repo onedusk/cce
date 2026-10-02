@@ -497,6 +497,109 @@ def test_curate_failed_exits_1(monkeypatch):
     assert "Status: failed" in result.output
 
 
+class _TimingOutHandle:
+    """A job handle whose wait() times out, as a job still running would."""
+
+    def __init__(self, job_id: str, waited: list[float]):
+        self.job_id = job_id
+        self._waited = waited
+
+    async def wait(self, timeout: float = 600):
+        self._waited.append(timeout)
+        raise TimeoutError(f"Job {self.job_id} did not complete within {timeout}s")
+
+
+def test_batch_wait_timeout_counts_as_failure_and_continues(tmp_path, monkeypatch):
+    """OPS-08: a job still running at --timeout no longer crashes the batch
+    (which cancelled it and skipped the rest): it is reported with its id,
+    counted as a failure, and the next entry still runs."""
+    from cce.engine import CurationEngine
+    from cce.models.job import JobStatus
+    from tests.conftest import make_job
+
+    submitted: list[str] = []
+    waited: list[float] = []
+    cancelled: list[str] = []
+
+    class _Handle:
+        def __init__(self, request):
+            self._request = request
+
+        async def wait(self, timeout: float = 600):
+            waited.append(timeout)
+            return make_job(request=self._request, status=JobStatus.COMPLETED)
+
+    class _Engine:
+        async def curate(self, request):
+            submitted.append(request.topic)
+            if request.topic == "slow topic":
+                handle = _TimingOutHandle("job_slow00000001", waited)
+                handle.cancel = lambda: cancelled.append("slow")  # type: ignore[attr-defined]
+                return handle
+            return _Handle(request)
+
+        async def close(self) -> None:
+            pass
+
+    async def _fake_embedded(*args, **kwargs):
+        return _Engine()
+
+    monkeypatch.setattr(CurationEngine, "embedded", _fake_embedded)
+    topics_file = tmp_path / "topics.yaml"
+    topics_file.write_text(
+        "- topic: slow topic\n  paths: [blog]\n- topic: next topic\n  paths: [blog]\n"
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "batch",
+            "--topics-file",
+            str(topics_file),
+            "--policy-id",
+            "p",
+            "--timeout",
+            "5",
+        ],
+    )
+
+    assert result.exit_code == 1, result.output
+    assert not isinstance(result.exception, TimeoutError)
+    assert submitted == ["slow topic", "next topic"]
+    assert waited == [5.0, 5.0]
+    assert cancelled == []
+    assert "still running after 5s: slow topic (job job_slow00000001" in result.output
+    assert "completed: next topic" in result.output
+
+
+def test_curate_wait_timeout_exits_1_with_the_job_id(monkeypatch):
+    """OPS-08: curate reports a job still running at --timeout and exits 1."""
+    from cce.engine import CurationEngine
+
+    waited: list[float] = []
+
+    class _Engine:
+        async def curate(self, request):
+            return _TimingOutHandle("job_slow00000002", waited)
+
+        async def close(self) -> None:
+            pass
+
+    async def _fake_embedded(*args, **kwargs):
+        return _Engine()
+
+    monkeypatch.setattr(CurationEngine, "embedded", _fake_embedded)
+    result = runner.invoke(
+        app, ["curate", "topic", "--policy-id", "p", "--timeout", "2.5"]
+    )
+
+    assert result.exit_code == 1, result.output
+    assert not isinstance(result.exception, TimeoutError)
+    assert waited == [2.5]
+    assert "Job: job_slow00000002" in result.output
+    assert "Status: still running after 2.5s" in result.output
+
+
 def test_curate_missing_api_key_exits_1(monkeypatch):
     """ConfigError from the embedded engine → one-line stderr error, exit 1."""
     for var in ("CCE_LLM_API_KEY", "CCE_CRAWL_API_KEY"):
