@@ -161,6 +161,15 @@ def _host_contains(host: str, entry: str) -> bool:
     )
 
 
+def _host_earns(host: str, entry: str) -> bool:
+    """Trust-tag match on the host only (CR-11): a bare one-label entry such
+    as ``pubmed`` matches any label of the host (pubmed.ncbi.nlm.nih.gov);
+    any other entry (``nih.gov``, ``.gov``) the host or a subdomain of it."""
+    if "." not in entry.strip():
+        return _host_contains(host, entry)
+    return _host_matches(host, entry)
+
+
 @lru_cache(maxsize=64)
 def _phrase_pattern(phrases: tuple[str, ...]) -> re.Pattern[str] | None:
     """Whole-word, case-insensitive matcher for any phrase (None if empty).
@@ -1047,16 +1056,20 @@ class Discoverer:
 
     @staticmethod
     def _looks_peer_reviewed(result: CrawlResult) -> bool:
-        """Basic heuristic: DOI in metadata or URL patterns."""
-        url_lower = result.url.lower()
+        """Basic heuristic: the URL's host is a known scholarly host.
+
+        Matched on the host, never the path, query or userinfo, which the
+        page's publisher chooses (CR-11).
+        """
+        host = _url_host(result.url)
         indicators = [
             "doi.org",
             "pubmed",
             "ncbi.nlm.nih.gov",
             "arxiv.org",
-            "scholar.google",
+            "scholar.google.com",
         ]
-        return any(ind in url_lower for ind in indicators)
+        return bool(host) and any(_host_earns(host, ind) for ind in indicators)
 
     @staticmethod
     def _looks_primary(
@@ -1072,14 +1085,18 @@ class Discoverer:
     def _assess_reputation(url: str, rules: ReputationRule) -> str:
         """Map a URL to a reputation tier based on policy rules.
 
-        Still substring-matched (not B9): policies rely on bare entries such
-        as ``pubmed`` matching inside a host.
+        Matched on the host at label boundaries, so userinfo, port, path and
+        query can't earn a tier (CR-11). A bare entry such as ``pubmed``
+        matches any label of the host; ``nih.gov`` or ``.gov`` the host or a
+        subdomain of it.
         """
-        domain = urlparse(url).netloc.lower()
+        host = _url_host(url)
+        if not host:
+            return "unknown"
         for trusted in rules.trusted_institutions:
-            if trusted.lower() in domain:
+            if _host_earns(host, trusted):
                 return "trusted"
-        if any(domain.endswith(suffix) for suffix in [".gov", ".edu"]):
+        if any(host.endswith(suffix) for suffix in [".gov", ".edu"]):
             return "institutional"
         return "unknown"
 

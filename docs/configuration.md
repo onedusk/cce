@@ -148,8 +148,12 @@ shaped*. Loaded by id at job time, not part of `EngineConfig`:
   block `amazon.com.au`). `reputation` also takes `marketing_phrases`
   (whole-word; `[]` flags nothing), `primary_source_suffixes` (default
   `.gov`, `.edu`) and `penalize_conflict_of_interest` (default true) — see
-  `policies/peer-reviewed.yaml`. `trusted_institutions` still matches by
-  substring.
+  `policies/peer-reviewed.yaml`. `trusted_institutions` matches the host
+  only, never the path, query or userinfo: a one-label entry such as
+  `pubmed` matches any label of the host (`pubmed.ncbi.nlm.nih.gov`), so
+  whoever owns a domain can earn it with a subdomain; prefer a full domain
+  (`nih.gov`, `.gov`), which matches the host or its subdomains. The
+  built-in peer-review tag is read from the host the same way.
 - `taxonomies/` — taxonomy definitions for evidence classification. The API
   currently selects `taxonomies/wellbeing-8d.yaml` when present.
 - `path_configs/` — output path definitions (tone, structure, depth per
