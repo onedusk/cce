@@ -132,6 +132,7 @@ class EditorOutput:
     word_count_after: int
     raw_response: str
     token_usage: dict[str, int]
+    model: str = ""  # the model that answered, for cost estimates
 
     @property
     def succeeded(self) -> bool:
@@ -182,12 +183,14 @@ class Editor:
                 temperature=self._config.temperature,
             )
             ensure_complete(response, role="editor")
-            return self._parse_response(
+            output = self._parse_response(
                 raw=response.content,
                 original_citations=original_citations,
                 word_count_before=word_count_before,
                 token_usage=response.usage or {},
             )
+            output.model = response.model
+            return output
 
         return await with_llm_retry(_attempt)
 

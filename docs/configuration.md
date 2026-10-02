@@ -94,6 +94,28 @@ with only `llm` injected raises). An injected LLM or crawl adapter needs no
 usage keys (the token budget reads them). Configuration itself still loads
 only through the registry.
 
+**Non-web sources.** To mix documents that aren't web pages into a run,
+write a `CrawlAdapter` for them and combine it with the web adapter:
+`CompositeCrawlAdapter({"local": my_adapter}, default=FirecrawlAdapter(config.crawl))`
+(`src/cce/discovery/adapters/composite.py`), injected as
+`ComponentOverrides(crawl_adapter=...)`. The composite dispatches each URL on
+its scheme; a scheme with no adapter counts as a failed crawl.
+
+- **URL shape:** `scheme://host/path`, for example `local://acme/q3-report.pdf`
+  or `gdrive://<file-id>`. The host part is required: the source policy
+  matches `domains_allow` / `domains_deny` against it exactly as for a web
+  domain, and drops a URL without one, so `file:///x.pdf` is never crawled.
+  With a non-empty `domains_allow`, list the pseudo-host too (`acme`).
+- **Finding documents:** the adapter's `search(query, limit)` returns the
+  pseudo-URLs to consider. The composite asks every adapter (each for up to
+  `limit`) and interleaves the answers, so `max_sources_per_run` can't cut
+  one adapter out entirely.
+- **What the adapter returns:** a `CrawlResult` with the document as
+  markdown. Chunking, the 50-character minimum, the recency and reputation
+  filters, dedup, storage and URL reuse then apply as for a web page; the
+  URL is what citations and `_evidence.json` carry, so it should mean
+  something to your readers or your renderer.
+
 **Reading a failed run's error in memory.** In embedded mode,
 `JobHandle.error` holds the exception that failed the job's last run (None
 until then or when no exception failed it, as with no evidence; cleared by
@@ -250,6 +272,27 @@ want a copy of the old shape).
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `CCE_MAX_TOKENS_PER_JOB` | unset | Hard ceiling on accumulated LLM tokens (input + output, all paths and iterations) per job. On breach the job stops iterating and routes to `REVIEW_REQUIRED`, keeping partial drafts (ADR-003, audit-2026-06-09). Unset = unlimited. |
+
+### Cost estimate
+
+Each job records an estimated LLM cost in USD: `cost_estimate_usd` on its
+PUBLISH stage record, and `est_cost=$...` on the "Pipeline complete" log
+line. It is priced per model from the token counts on the WRITE, VERIFY and
+EDIT stage records (each names the model that answered), so a job whose
+writer, verifier and editor run on different models is priced correctly.
+
+Prices come from a table in USD per million tokens (input, output, cache
+write, cache read): the packaged `src/cce/config/model_pricing.yaml`
+(Anthropic first-party list prices), with the entries of
+`config/model_pricing.yaml` in the working directory on top when that file
+exists. Use the override when prices change, for Bedrock or Vertex AI rates,
+or to price an injected provider's own model IDs. A model ID matches its own
+entry, or the entry without a trailing `-YYYYMMDD` snapshot date; there is no
+prefix matching, so a new model has no price until it is listed. The
+estimate is `null` when any model the job used has no price (never a partial
+sum), and when a provider reports no usage. It is an estimate at list
+prices: batch or negotiated discounts and 1-hour cache writes are not
+modelled.
 
 ### Publish policy
 

@@ -23,6 +23,7 @@ from pathlib import Path
 
 from cce.config.loader import ConfigError, load_config
 from cce.config.markers import HumanizationMarkers, load_markers
+from cce.config.pricing import ModelPricing, load_model_pricing
 from cce.config.types import EngineConfig
 from cce.models.paths import PathConfig
 from cce.policy.loader import load_policies
@@ -36,6 +37,9 @@ _TAXONOMY_FILENAME = "wellbeing-8d.yaml"
 
 # Operator file first (untracked), then the committed Tier B template.
 _PATH_CONFIG_CANDIDATES = ("thnklabs.yaml", "default.yaml")
+
+# Operator overrides for the packaged model price table (B15).
+_PRICING_OVERRIDE = Path("config") / "model_pricing.yaml"
 
 
 @dataclass
@@ -51,6 +55,7 @@ class ConfigRegistry:
     path_configs: dict[str, PathConfig] = field(default_factory=dict)
     taxonomy_path: Path | None = None
     markers: HumanizationMarkers | None = None
+    pricing: dict[str, ModelPricing] = field(default_factory=dict)
 
     @classmethod
     def load(
@@ -82,6 +87,10 @@ class ConfigRegistry:
            an operator who enabled humanization must not silently ship
            unscored drafts; ConfigError so every CLI/app entry point renders
            it as one actionable line, same as missing API keys).
+        6. Model pricing — the packaged table, with the entries of
+           ``root / "config" / "model_pricing.yaml"`` on top when that file
+           exists. Forgiving: an unreadable override is logged and the
+           packaged prices are used (a cost estimate never blocks a boot).
 
         Relative directory arguments resolve against ``root``; absolute
         arguments are used as-is (``Path.__truediv__`` semantics).
@@ -133,6 +142,7 @@ class ConfigRegistry:
             path_configs=path_configs,
             taxonomy_path=taxonomy_path,
             markers=markers,
+            pricing=_load_pricing_forgiving(root / _PRICING_OVERRIDE),
         )
 
     def get_policy(self, policy_id: str) -> SourcePolicy:
@@ -151,6 +161,21 @@ class ConfigRegistry:
         except KeyError:
             known = ", ".join(sorted(self.path_configs)) or "(none loaded)"
             raise KeyError(f"Unknown path {path_id!r}. Known paths: {known}") from None
+
+
+def _load_pricing_forgiving(override: Path) -> dict[str, ModelPricing]:
+    """Packaged prices plus the operator override; a bad override is skipped."""
+    if override.exists():
+        try:
+            return load_model_pricing(override)
+        except Exception as e:
+            logger.warning(
+                "Ignoring %s (%s: %s); using the packaged model prices",
+                override,
+                type(e).__name__,
+                e,
+            )
+    return load_model_pricing()
 
 
 def _load_policies_forgiving(directory: Path) -> dict[str, SourcePolicy]:

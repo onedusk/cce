@@ -15,6 +15,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from cce.config.pricing import ModelPricing, estimate_cost_usd
 from cce.config.types import EngineConfig, QualityGateConfig
 from cce.discovery.adapters.base import CrawlAdapter
 from cce.discovery.discoverer import Discoverer
@@ -25,6 +26,7 @@ from cce.llm.base import (
     IncompleteResponseError,
     LLMProvider,
     UnparseableResponseError,
+    sum_usage,
 )
 from cce.models.content import ContentLineage, ContentScores, ContentUnit
 from cce.models.evidence import DiscoveryResult, Evidence
@@ -67,6 +69,50 @@ def _merge_tokens(into: dict[str, int], frm: Mapping[str, int]) -> None:
         into[k] += int(frm.get(k, 0))
 
 
+def _stage_tokens(usage: Mapping[str, int], prefix: str = "tokens_") -> dict[str, int]:
+    """A usage dict as the flat ``<prefix>input`` etc. stage-metric keys."""
+    return {
+        f"{prefix}input": int(usage.get("input_tokens", 0)),
+        f"{prefix}output": int(usage.get("output_tokens", 0)),
+        f"{prefix}cache_read": int(usage.get("cache_read_input_tokens", 0)),
+        f"{prefix}cache_write": int(usage.get("cache_creation_input_tokens", 0)),
+    }
+
+
+# (model key, token-key prefix) pairs an LLM stage record can carry (B15).
+_STAGE_USAGE_KEYS = (
+    ("model", "tokens_"),
+    ("implied_claim_model", "implied_claim_tokens_"),
+)
+
+
+def _usage_by_model(stages: Sequence[StageRecord]) -> dict[str, dict[str, int]]:
+    """Token usage per model, summed from the WRITE / VERIFY / EDIT records:
+    the same calls the job's token totals count."""
+    by_model: dict[str, dict[str, int]] = {}
+    for rec in stages:
+        metrics = rec.metrics or {}
+        for model_key, prefix in _STAGE_USAGE_KEYS:
+            usage = {
+                "input_tokens": int(metrics.get(f"{prefix}input", 0) or 0),
+                "output_tokens": int(metrics.get(f"{prefix}output", 0) or 0),
+                "cache_read_input_tokens": int(
+                    metrics.get(f"{prefix}cache_read", 0) or 0
+                ),
+                "cache_creation_input_tokens": int(
+                    metrics.get(f"{prefix}cache_write", 0) or 0
+                ),
+            }
+            if any(usage.values()):
+                _merge_tokens(
+                    by_model.setdefault(
+                        str(metrics.get(model_key) or ""), _zero_tokens()
+                    ),
+                    usage,
+                )
+    return by_model
+
+
 def _format_completion_line(
     *,
     token_usage: Mapping[str, int],
@@ -80,8 +126,8 @@ def _format_completion_line(
         Pipeline complete: input=N, (cache_read=N, cache_write=N), output=N[, est_cost=$N], paths=N, iterations=[...]
 
     Numbers use thousands separators so a 50k-token run reads as 50,000.
-    ``cost_estimate_usd=None`` (the default in this sprint — no pricing
-    table is wired yet) drops the est_cost field entirely.
+    ``cost_estimate_usd=None`` (no pricing table, or a model without a
+    price) drops the est_cost field entirely.
     """
     parts = [
         f"input={token_usage.get('input_tokens', 0):,}",
@@ -370,8 +416,11 @@ class Pipeline:
         editor: Editor | None = None,
         implied_claim_checker: ImpliedClaimChecker | None = None,
         verifier_llm: LLMProvider | None = None,
+        pricing: Mapping[str, ModelPricing] | None = None,
     ) -> None:
         self._config = config
+        # Model prices for the per-job cost estimate (B15); None = no estimate.
+        self._pricing = pricing
         self._taxonomy_plugin = taxonomy_plugin
         self._path_configs = path_configs or {}
         self._evidence_store = evidence_store
@@ -505,6 +554,7 @@ class Pipeline:
                     token_usage=token_usage,
                     path_count=len(request.paths),
                     per_path_iterations=per_path_iterations,
+                    cost_estimate_usd=self._estimate_cost(job.stages),
                 )
             )
 
@@ -752,7 +802,10 @@ class Pipeline:
                 stage=JobStage.PUBLISH,
                 started_at=stage_start,
                 completed_at=datetime.now(UTC),
-                metrics={"token_usage": dict(token_usage)},
+                metrics={
+                    "token_usage": dict(token_usage),
+                    "cost_estimate_usd": self._estimate_cost(job.stages),
+                },
             )
         )
         return package
@@ -1105,6 +1158,14 @@ class Pipeline:
     # ADR-005; finding 1.2). Token accumulation threads the per-path dict
     # (audit P1 pattern) through `token_usage`. ------------------------------
 
+    def _estimate_cost(self, stages: Sequence[StageRecord]) -> float | None:
+        """The job's LLM cost in USD from its stage records, or None: no
+        pricing table, no usage recorded, or a model without a price."""
+        if not self._pricing:
+            return None
+        usage = _usage_by_model(stages)
+        return estimate_cost_usd(usage, self._pricing) if usage else None
+
     @staticmethod
     def _budget_exceeded(
         token_usage: Mapping[str, int], max_tokens_per_job: int | None
@@ -1142,6 +1203,7 @@ class Pipeline:
                     metrics={
                         "path": path,
                         "iterations": iteration,
+                        "model": writer_output.model,
                         "tokens_input": write_tokens.get("input_tokens", 0),
                         "tokens_output": write_tokens.get("output_tokens", 0),
                         "tokens_cache_read": write_tokens.get(
@@ -1220,11 +1282,18 @@ class Pipeline:
         # the editor so its rewrite hints feed into the editor prompt.
         # Skipped when the checker isn't wired — annotations stay [].
         annotations: list[ImpliedClaimAnnotation] = []
+        # The checker's LLM calls count toward the job's tokens, budget and
+        # cost like any other (audit 5.1).
+        implied_calls: list[tuple[str, Mapping[str, int]]] = []
         if self._implied_claim_checker is not None:
             annotations = await self._implied_claim_checker.check(
                 unit.content,
                 cited_evidence=path_evidence,
+                usage_log=implied_calls,
             )
+            if _tokens:
+                for _model, usage in implied_calls:
+                    _merge_tokens(_tokens, usage)
             log.info(
                 "ImpliedClaimChecker: %d annotation(s) for path '%s' iter %d",
                 len(annotations),
@@ -1266,17 +1335,15 @@ class Pipeline:
                         "citations_preserved": editor_output.citations_preserved,
                         "word_count_before": editor_output.word_count_before,
                         "word_count_after": editor_output.word_count_after,
-                        "tokens_input": editor_output.token_usage.get(
-                            "input_tokens", 0
+                        "model": editor_output.model,
+                        **_stage_tokens(editor_output.token_usage),
+                        "implied_claim_calls": len(implied_calls),
+                        "implied_claim_model": (
+                            implied_calls[-1][0] if implied_calls else ""
                         ),
-                        "tokens_output": editor_output.token_usage.get(
-                            "output_tokens", 0
-                        ),
-                        "tokens_cache_read": editor_output.token_usage.get(
-                            "cache_read_input_tokens", 0
-                        ),
-                        "tokens_cache_write": editor_output.token_usage.get(
-                            "cache_creation_input_tokens", 0
+                        **_stage_tokens(
+                            sum_usage(usage for _model, usage in implied_calls),
+                            "implied_claim_tokens_",
                         ),
                     },
                 )
@@ -1325,6 +1392,8 @@ class Pipeline:
                         "supported": report.supported,
                         "pass_rate": report.pass_rate,
                         "confidence_score": report.confidence_score,
+                        "model": report.model,
+                        **_stage_tokens(report.token_usage),
                     },
                 )
             )

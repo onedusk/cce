@@ -260,6 +260,7 @@ exists, and mark remaining gaps as [INSUFFICIENT EVIDENCE].
             )
             # A discarded (resent) attempt was paid for too: count it.
             output.token_usage = sum_usage(attempt_usage)
+            output.model = response.model
             return output
 
         # One resend on an unparseable reply, then the error propagates.
@@ -430,6 +431,8 @@ class WriterOutput:
         self.gaps = gaps
         self.raw_response = raw_response
         self.token_usage: dict = token_usage or {}
+        # The model that answered (LLMResponse.model), for cost estimates.
+        self.model: str = ""
 
     @property
     def has_content(self) -> bool:

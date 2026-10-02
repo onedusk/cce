@@ -253,6 +253,7 @@ class VerificationReport:
     confidence_score: float = 0.0
     raw_response: str = ""
     token_usage: dict = field(default_factory=dict)
+    model: str = ""  # the model that answered, for cost estimates
 
     @property
     def pass_rate(self) -> float:
@@ -439,6 +440,7 @@ traced to the evidence above should be flagged.
             report = self._parse_response(response)
             # A discarded (resent) attempt was paid for too: count it.
             report.token_usage = sum_usage(attempt_usage)
+            report.model = response.model
             return report
 
         # One resend on an unparseable reply, then the error propagates.

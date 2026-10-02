@@ -5,6 +5,49 @@ All notable changes to the Content Curation Engine (CCE).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] bubble-readiness Phase 3
+
+### Added: non-web sources through a composite crawl adapter (B14)
+- **`CompositeCrawlAdapter`** (`discovery/adapters/composite.py`) dispatches
+  each URL to the adapter registered for its scheme, with an optional
+  default for every other scheme, so a consumer's own adapter (`local://`,
+  `gdrive://`) and the web adapter serve one run. Inject it with
+  `ComponentOverrides(crawl_adapter=...)`; nothing changes without it.
+  - `crawl_many` gives each adapter its requests in one call, runs the
+    adapters concurrently and returns results in request order. A scheme
+    with no adapter, or a result an adapter never returned, is a failed
+    crawl; extra results are appended.
+  - `search` asks every adapter that supports it and interleaves the
+    answers without duplicates, so the source cap can't drop one adapter.
+- Documented the pseudo-URL shape (`docs/configuration.md`, "Non-web
+  sources"): `scheme://host/path`. The policy matches allow and deny lists
+  against the host and drops a URL without one (`file:///x.pdf`).
+
+### Added: per-job cost estimate; implied-claim calls counted (B15, audit 5.1)
+- **Each job records `cost_estimate_usd`** on its PUBLISH stage record, and
+  the "Pipeline complete" line carries `est_cost=$...`. Priced per model
+  from the WRITE, VERIFY and EDIT stage records, which now name the `model`
+  that answered (VERIFY also gains the four `tokens_*` counts), so
+  per-role models are priced separately.
+- **Price table as data:** packaged `cce/config/model_pricing.yaml` (USD per
+  million tokens: input, output, 5-minute cache write, cache read; list
+  prices checked 2026-10-02), overridden or extended by
+  `config/model_pricing.yaml` in the working directory, loaded through
+  `ConfigRegistry` (`registry.pricing`). A model ID matches its own entry
+  or the entry without a snapshot date, never a prefix. The estimate is
+  `null` rather than partial when a used model has no price.
+- **Audit 5.1:** the implied-claim checker's LLM calls were invisible to the
+  job's token totals, `CCE_MAX_TOKENS_PER_JOB` and the completion line.
+  `ImpliedClaimChecker.check(usage_log=...)` now reports each call, the
+  pipeline adds them to the totals and the budget, and the EDIT record
+  carries `implied_claim_calls`, `implied_claim_model` and
+  `implied_claim_tokens_*`.
+- Live-checked 2026-10-02: a `cce curate` run with the writer and editor on
+  `claude-sonnet-5` and the verifier on `claude-haiku-4-5` recorded
+  `cost_estimate_usd` 0.102826, equal to the hand sum of its stage records
+  at list prices; the API's dated ID `claude-haiku-4-5-20251001` matched
+  the table.
+
 ## [Unreleased] emit path traversal (audit 2.1)
 
 ### Security: emit can no longer write outside its target directory
