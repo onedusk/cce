@@ -17,7 +17,7 @@ its providers with :class:`ComponentOverrides` (B5) instead of building a
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from cce.config.registry import ConfigRegistry
 from cce.config.types import EngineConfig, LLMConfig, RoleLLMSettings
@@ -85,7 +85,9 @@ def build_components(
     The set holds no evidence store (B6): the implied-claim checker searches
     only the path evidence it is handed, so one set can back several
     Pipelines (one per tenant, each with its own store) without pooling
-    their evidence.
+    their evidence, as long as its crawl adapter is tenant-neutral too
+    (SEC-01): an adapter that serves a tenant's documents offers them to
+    every run that uses it. See :func:`build_pipeline`'s ``crawl_adapter``.
 
     ``overrides`` (B5) replaces the config-built LLM providers, crawl adapter
     or embedding provider with the caller's own. Raises ``ValueError`` when
@@ -254,6 +256,7 @@ def build_pipeline(
     components: ComponentSet | None = None,
     *,
     overrides: ComponentOverrides | None = None,
+    crawl_adapter: CrawlAdapter | None = None,
 ) -> Pipeline:
     """Assemble a ``Pipeline`` from a ``ComponentSet`` (built if not given).
 
@@ -265,15 +268,31 @@ def build_pipeline(
 
     Multi-tenant use (B6): build one Pipeline per tenant, each with its own
     ``evidence_store`` (and, through the engine, its own job store). They
-    may share one ``ComponentSet``; nothing in it holds tenant data.
+    may share one ``ComponentSet`` only while its crawl adapter is
+    tenant-neutral (SEC-01): ``CrawlAdapter.search`` takes no tenant, so a
+    document adapter in a shared set (a ``CompositeCrawlAdapter`` holding one
+    tenant's documents) feeds them into every tenant's run. Pass each
+    tenant's own adapter as ``crawl_adapter``: it replaces the set's adapter
+    for this Pipeline only, and the LLM providers and the rest of the set
+    stay shared. Raises ``ValueError`` when ``overrides`` also sets one.
     """
     if components is not None and overrides is not None:
         raise ValueError(
             "pass either prebuilt components or overrides, not both — the "
             "overrides would be ignored"
         )
+    if (
+        crawl_adapter is not None
+        and overrides is not None
+        and overrides.crawl_adapter is not None
+    ):
+        raise ValueError(
+            "pass the crawl adapter as crawl_adapter or in overrides, not both"
+        )
     if components is None:
         components = build_components(config, registry, overrides=overrides)
+    if crawl_adapter is not None:
+        components = replace(components, crawl_adapter=crawl_adapter)
     return Pipeline(
         config=config,
         crawl_adapter=components.crawl_adapter,
