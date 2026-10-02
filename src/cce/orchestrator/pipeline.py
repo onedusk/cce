@@ -444,17 +444,22 @@ class Pipeline:
         self,
         request: CurationRequest,
         policy: SourcePolicy,
+        *,
+        job_id: str | None = None,
     ) -> PipelineResult:
         """Execute the full pipeline for a curation request.
 
         Returns a PipelineResult containing the PublishPackage (if successful),
         the Job tracking object, and any gate results from the verification loop.
 
+        ``job_id`` is the caller's job id (the engine and API pass the stored
+        one) for the Job, its log records and the package; None mints one.
+
         Orchestration narrative only — stage bodies live in the phase helpers
         (M07, lifted verbatim per ADR-005; closes audit M1).
         """
         run_id = f"run_{uuid.uuid4().hex[:12]}"
-        job = Job(id=f"job_{uuid.uuid4().hex[:12]}", request=request)
+        job = Job(id=job_id or f"job_{uuid.uuid4().hex[:12]}", request=request)
 
         # Job-scoped logger — all pipeline logs include job_id
         job_logger = logging.LoggerAdapter(logger, extra={"job_id": job.id})

@@ -182,7 +182,7 @@ async def test_embedded_cancel_running_job(tmp_path: Path, monkeypatch):
     engine = await _make_engine(tmp_path, monkeypatch)
     try:
 
-        async def _slow(request, policy):
+        async def _slow(request, policy, **kwargs):
             await asyncio.sleep(60)
 
         monkeypatch.setattr(engine._pipeline, "run", _slow)
@@ -242,7 +242,7 @@ async def test_pipeline_crash_marks_job_failed(tmp_path: Path, monkeypatch):
     engine = await _make_engine(tmp_path, monkeypatch)
     try:
 
-        async def _boom(request, policy):
+        async def _boom(request, policy, **kwargs):
             raise RuntimeError("boom")
 
         monkeypatch.setattr(engine._pipeline, "run", _boom)

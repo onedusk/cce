@@ -125,6 +125,33 @@ whose `raw_response` is the reply text, for the caller to persist where it
 sees fit. cce never logs or stores that text: the job store and the API only
 carry `job.error` (code, message and stage).
 
+**Retrying a job.** `JobHandle.retry()` and `POST /v1/curate/jobs/{id}/retry`
+re-run a finished job under the same id. Before the job is queued again the
+retry removes the previous run's package and stage records, so
+`JobHandle.package()` returns None (the API answers 404 `package_not_found`)
+until the new run stores one, and a retry that fails before any path
+completes leaves the job FAILED with no package. A retry whose policy is no
+longer loaded is refused (`ValueError` in embedded mode, 404
+`policy_not_found` from the API) and the job is left as it was.
+
+**Recovering a job left by a crash.** A QUEUED or RUNNING job is refused by
+retry (409 `already_running`, `ValueError` in embedded mode). Only a graceful
+API shutdown marks its running jobs FAILED (`server_shutdown`); after a kill,
+OOM or host crash the row keeps its status with nothing running it, and cce
+does not fail such jobs at start-up. To recover one, call
+`POST /v1/curate/jobs/{id}/retry?force=true` (or `JobHandle.retry(force=True)`).
+When the serving process runs no task for the job, it records the job FAILED
+with error code `orphaned` and then re-queues it; when it does run one, the
+answer is still 409. The `orphaned` failure is recorded before the policy is
+checked: if the policy is no longer loaded the retry is still refused (404
+`policy_not_found`, `ValueError` in embedded mode), and the job stays FAILED,
+retryable without force once the policy is back. In embedded mode
+`JobHandle.cancel()` on such a job
+records the same `orphaned` failure without re-running it (the API's DELETE
+removes the job instead). Force only a job that no process runs: the CLI and
+the API can share one SQLite file, and a forced retry of a job another
+process is still running starts a second run of it.
+
 **New configuration surfaces must enter through the registry** — add a field
 to `ConfigRegistry`, load it in `load()`, and consume it from
 `build_components`. Do not add `load_*` calls to `engine.py` or
@@ -357,6 +384,11 @@ diffs); env vars exist only for the master switch and the marker path.
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `CCE_LOG_FORMAT` | unset | `json` switches to structured JSON logs |
+
+Pipeline log records carry `job_id`: for a job run by the engine or the API
+it is the stored job's id, the one `cce status`, `cce jobs` and
+`GET /v1/curate/jobs/{id}` show. A direct `Pipeline.run(request, policy,
+job_id=...)` logs under the id it is given, or mints one.
 
 ## Ollama and embedding ranking
 
