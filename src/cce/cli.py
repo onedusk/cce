@@ -347,7 +347,9 @@ def emit_mdx_command(
     topic: str | None = typer.Option(
         None, help="Topic name (emits latest completed job)"
     ),
-    all_jobs: bool = typer.Option(False, "--all", help="Emit all completed jobs"),
+    all_jobs: bool = typer.Option(
+        False, "--all", help="Emit the newest completed job of each topic"
+    ),
     target: str = typer.Option(..., help="Target content directory"),
     config: str | None = typer.Option(None, help="Path to config YAML"),
     dry_run: bool = typer.Option(
@@ -375,7 +377,11 @@ def emit_mdx_command(
         ),
     ),
 ) -> None:
-    """Emit MDX files from a completed curation job."""
+    """Emit MDX files from a completed curation job.
+
+    ``--all`` emits the newest completed job of each topic directory (topics
+    that slugify alike share one) and lists the older ones as skipped.
+    """
     if sum([bool(job), bool(topic), all_jobs]) > 1:
         typer.echo("Error: --job, --topic, and --all are mutually exclusive", err=True)
         raise typer.Exit(1)
@@ -417,9 +423,19 @@ def emit_mdx_command(
                     typer.echo("Error: no completed jobs found", err=True)
                     raise typer.Exit(1)
                 packages: list[tuple[PublishPackage, str | None, str | None]] = []
+                # Newest first (list_jobs order): keep one job per topic
+                # directory, so an older run can't overwrite a newer one (SEC-07).
+                emitted: dict[str, str] = {}  # slug -> job id
                 for j in jobs:
+                    slug = slugify(j.request.topic)
+                    if slug in emitted:
+                        typer.echo(
+                            f"Skipped: {j.id} (older than {emitted[slug]} for {slug}/)"
+                        )
+                        continue
                     package = await store.get_package(j.id)
                     if package is not None:
+                        emitted[slug] = j.id
                         packages.append((package, None, j.request.topic))
                 if not packages:
                     typer.echo(

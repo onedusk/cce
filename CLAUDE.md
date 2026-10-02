@@ -65,7 +65,7 @@ uv run cce api start
 # Generate an API key (written to ~/.cce/api-key, mode 0600)
 uv run cce api key generate
 
-# Emit MDX from completed jobs
+# Emit MDX from completed jobs (--all: the newest completed job of each topic)
 uv run cce emit-mdx --all --target <content-dir>
 ```
 

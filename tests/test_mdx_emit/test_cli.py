@@ -199,6 +199,87 @@ class TestEmitMdxCli:
         assert "KB" in result.output
 
 
+class TestEmitAllNewestPerTopic:
+    """SEC-07: --all emits the newest completed job of each topic directory.
+    It used to write every job newest-first, so the oldest run won."""
+
+    @staticmethod
+    async def _seed(db_path: Path) -> dict[str, str]:
+        from datetime import UTC, datetime, timedelta
+
+        day0 = datetime(2026, 9, 1, tzinfo=UTC)
+        store = JobStore(db_path=db_path)
+        await store.connect()
+        ids: dict[str, str] = {}
+        try:
+            for name, topic, day, with_package in [
+                ("same_slug_oldest", "Sleep Hygiene!", 0, True),
+                ("older", "sleep hygiene", 1, True),
+                ("newer", "sleep hygiene", 2, True),
+                ("other_with_package", "other topic", 1, True),
+                ("other_newest_no_package", "other topic", 3, False),
+            ]:
+                job = make_job(
+                    status=JobStatus.COMPLETED,
+                    created_at=day0 + timedelta(days=day),
+                    request=make_curation_request(topic=topic, paths=["learn"]),
+                )
+                await store.create_job(job)
+                if with_package:
+                    unit = make_content_unit(
+                        path="learn", content=f"## {name} run\n\nA claim [ev:ev_1]."
+                    )
+                    await store.store_package(
+                        job.id,
+                        make_publish_package(
+                            job_id=job.id,
+                            units=[unit],
+                            evidence=[make_evidence(id="ev_1")],
+                        ),
+                    )
+                ids[name] = job.id
+            return ids
+        finally:
+            await store.close()
+
+    def test_newest_completed_job_per_topic_wins(self, tmp_path):
+        import json
+
+        db_path = tmp_path / "test.db"
+        target = tmp_path / "content"
+        target.mkdir()
+        ids = asyncio.run(self._seed(db_path))
+
+        result = _run_emit("--all", db_path=db_path, target=target)
+
+        assert result.exit_code == 0, result.output
+        assert sorted(p.name for p in target.iterdir()) == [
+            "other-topic",
+            "sleep-hygiene",
+        ]
+        sleep = target / "sleep-hygiene"
+        assert "newer run" in (sleep / "learn" / "page.mdx").read_text()
+        assert json.loads((sleep / "meta.json").read_text())["jobId"] == ids["newer"]
+        # A newest job without a package doesn't hide the older one that has one.
+        other = target / "other-topic"
+        assert "other_with_package run" in (other / "learn" / "page.mdx").read_text()
+        assert f"Skipped: {ids['older']}" in result.output
+        assert f"Skipped: {ids['same_slug_oldest']}" in result.output
+        assert "2 topic(s)" in result.output
+
+    def test_dry_run_lists_each_topic_once(self, tmp_path):
+        db_path = tmp_path / "test.db"
+        target = tmp_path / "content"
+        target.mkdir()
+        asyncio.run(self._seed(db_path))
+
+        result = _run_emit("--all", "--dry-run", db_path=db_path, target=target)
+
+        assert result.exit_code == 0, result.output
+        assert result.output.count("Would emit: sleep-hygiene/") == 1
+        assert "2 topic(s), no files written" in result.output
+
+
 class TestEmitJobStatusGuard:
     """B8: emit-mdx --job refuses a job that isn't completed unless --force."""
 

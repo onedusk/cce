@@ -116,7 +116,7 @@ uv run cce validate
 uv run cce api key generate   # writes a bearer key to ~/.cce/api-key (mode 0600)
 uv run cce api start
 
-# Export completed jobs as MDX
+# Export completed jobs as MDX (--all: the newest completed job of each topic)
 uv run cce emit-mdx --all --target <content-dir>
 
 # Run tests
