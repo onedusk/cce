@@ -259,11 +259,11 @@ async def test_editor_does_not_extend_iteration_count(sqlite_store):
         _ai_flat_writer_json(),
         _editor_response("rewritten"),  # no [ev:] markers → drift, fallback
         _verifier_json(
-            supported=2, total=10, unsupported=8, leakage=0
+            supported=2, total=10, unsupported=8, leakage=0, gaps=0
         ),  # FAIL, fixable
         _ai_flat_writer_json(),
         _editor_response("rewritten again"),
-        _verifier_json(supported=2, total=10, unsupported=8, leakage=0),
+        _verifier_json(supported=2, total=10, unsupported=8, leakage=0, gaps=0),
     )
 
     pipeline = Pipeline(

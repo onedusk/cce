@@ -17,6 +17,30 @@ def writer_json(*, content: str = "Draft with citation [ev:ev_001].") -> str:
     )
 
 
+def claim_assessments(
+    *,
+    total: int,
+    supported: int,
+    unsupported: int,
+    uncited: int,
+    leakage: int,
+    conflicts: int,
+    gaps: int,
+) -> list[str]:
+    """One assessment per claim for these summary counts, padded to ``total``."""
+    assessments = (
+        ["supported"] * supported
+        + ["unsupported"] * unsupported
+        + ["uncited"] * uncited
+        + ["leakage"] * leakage
+        + ["conflict"] * conflicts
+        + ["gap_acknowledged"] * gaps
+    )
+    if len(assessments) > total:
+        raise ValueError(f"counts add up to {len(assessments)}, above total={total}")
+    return assessments + ["unassessed"] * (total - len(assessments))
+
+
 def verifier_json(
     *,
     supported: int = 8,
@@ -27,17 +51,31 @@ def verifier_json(
     uncited: int = 0,
     gaps: int = 2,
 ) -> str:
+    """A verifier reply whose claim list carries the same counts as its
+    summary: the verifier scores from the claims (COR-06). Claims up to
+    ``total`` that no count covers get an assessment outside the vocabulary,
+    which counts toward the total and in no bucket."""
     return json.dumps(
         {
             "claims": [
                 {
                     "claim": f"Claim {i}",
                     "citation_ids": ["ev_001"],
-                    "assessment": "supported",
+                    "assessment": assessment,
                     "explanation": "OK",
                     "suggestion": "",
                 }
-                for i in range(supported)
+                for i, assessment in enumerate(
+                    claim_assessments(
+                        total=total,
+                        supported=supported,
+                        unsupported=unsupported,
+                        uncited=uncited,
+                        leakage=leakage,
+                        conflicts=conflicts,
+                        gaps=gaps,
+                    )
+                )
             ],
             "summary": {
                 "total_claims": total,
