@@ -79,7 +79,7 @@ async def run_pipeline_task(
             job.status = JobStatus.RUNNING
             await job_store.update_job(job)
 
-            result = await pipeline.run(request, policy)
+            result = await pipeline.run(request, policy, job_id=job_id)
             if on_error is not None and result.error is not None:
                 on_error(result.error)
 
@@ -119,7 +119,26 @@ async def run_pipeline_task(
             job.completed_at = datetime.now(UTC)
             await job_store.update_job(job)
     finally:
-        running_tasks.pop(job_id, None)
+        # Only this run's own entry: a retry launched while this task was
+        # still finishing has put its own task there (review of OPS-04).
+        if running_tasks.get(job_id) is asyncio.current_task():
+            running_tasks.pop(job_id, None)
+
+
+async def mark_orphaned(job: Job, job_store: JobStore) -> None:
+    """Record a QUEUED or RUNNING job that no task runs as FAILED (OPS-04).
+
+    For a job a crash or kill left behind: called by a forced retry and by an
+    embedded cancel, only after checking this process runs no task for it.
+    """
+    job.status = JobStatus.FAILED
+    job.error = JobError(
+        code="orphaned",
+        message="No task was running this job (left by a crash or kill)",
+        stage=job.stage or JobStage.DISCOVER,
+    )
+    job.completed_at = datetime.now(UTC)
+    await job_store.update_job(job)
 
 
 class JobHandle:
@@ -197,7 +216,11 @@ class JobHandle:
         raise TimeoutError(f"Job {self._job_id} did not complete within {timeout}s")
 
     async def cancel(self) -> None:
-        """Cancel a running job."""
+        """Cancel a running job.
+
+        Embedded mode: a QUEUED or RUNNING job with no task in this process
+        (left by a crash or kill) is recorded FAILED with code ``orphaned``.
+        """
         if self._running_tasks is not None:
             task = self._running_tasks.pop(self._job_id, None)
             if task is not None:
@@ -206,27 +229,60 @@ class JobHandle:
                     await task
                 except (asyncio.CancelledError, Exception):
                     pass
+            elif self._job_store is not None:
+                job = await self._job_store.get_job(self._job_id)
+                if job is not None and job.status in (
+                    JobStatus.QUEUED,
+                    JobStatus.RUNNING,
+                ):
+                    await mark_orphaned(job, self._job_store)
             return
         assert self._http_client is not None
         await self._http_client.delete(f"/v1/curate/jobs/{self._job_id}")
 
-    async def retry(self) -> Job:
-        """Re-run the pipeline for this job."""
+    async def retry(self, *, force: bool = False) -> Job:
+        """Re-run the pipeline for this job.
+
+        A QUEUED or RUNNING job is refused unless ``force`` is set and this
+        process runs no task for it (a crash or kill left it behind): it is
+        then recorded FAILED with code ``orphaned`` and re-queued. Force only
+        when no other process is running the job (OPS-04).
+        """
         if self._engine is not None:
+            # A run whose status is already terminal may still be storing its
+            # package: let it finish so it can't land after this retry's
+            # delete_package (review of COR-02).
+            tail = (self._running_tasks or {}).get(self._job_id)
+            if tail is not None and not tail.done():
+                job = await self.status()
+                if job.status not in (JobStatus.QUEUED, JobStatus.RUNNING):
+                    await asyncio.wait({tail})
             job = await self.status()
             if job.status in (JobStatus.QUEUED, JobStatus.RUNNING):
-                raise ValueError("Job is already queued or running")
+                if not force or self._job_id in (self._running_tasks or {}):
+                    raise ValueError("Job is already queued or running")
+                assert self._job_store is not None
+                await mark_orphaned(job, self._job_store)
+            if job.request.policy_id not in self._engine._policies:
+                raise ValueError(f"Policy not found: {job.request.policy_id}")
             job.status = JobStatus.QUEUED
             job.error = None
             job.stage = None
+            job.progress = None
+            job.stages = []
             job.completed_at = None
             self._error = None
             assert self._job_store is not None
+            # The last run's package must not outlive it (COR-02).
+            await self._job_store.delete_package(self._job_id)
             await self._job_store.update_job(job)
             self._engine._launch_pipeline(job, self)
             return job
         assert self._http_client is not None
-        resp = await self._http_client.post(f"/v1/curate/jobs/{self._job_id}/retry")
+        resp = await self._http_client.post(
+            f"/v1/curate/jobs/{self._job_id}/retry",
+            params={"force": "true"} if force else None,
+        )
         resp.raise_for_status()
         return Job.model_validate(resp.json()["data"])
 
@@ -337,8 +393,9 @@ class CurationEngine:
         engine._semaphore = asyncio.Semaphore(engine._config.api.max_concurrent_jobs)
 
         logger.info(
-            "CurationEngine (embedded) ready — %d policies loaded",
+            "CurationEngine (embedded) ready: %d policies loaded, publish_policy=%s",
             len(engine._policies),
+            engine._config.publish_policy,
         )
         return engine
 
@@ -465,6 +522,7 @@ class CurationEngine:
             jurisdiction=(
                 request.constraints.jurisdiction if request.constraints else None
             ),
+            constraints=request.constraints,
             context=request.context,
         )
         resp = await self._http_client.post(

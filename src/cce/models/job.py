@@ -87,6 +87,10 @@ class StageRecord(BaseModel):
 
 
 class DiscoverMetrics(TypedDict):
+    # Queries whose search raised (OPS-09). When non-zero, the record also
+    # carries search_error: the last failure's exception class name (never
+    # its message).
+    search_failed: int
     # URL ledger (B10): urls_gathered == urls_dropped_policy + urls_capped
     # + urls_reused + crawl_failed + crawl_success
     urls_gathered: int

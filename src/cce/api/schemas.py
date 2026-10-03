@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from cce.models.evidence import Evidence
 from cce.models.job import Job
-from cce.models.request import CurationRequest
+from cce.models.request import CurationConstraints, CurationRequest
 
 T = TypeVar("T")
 
@@ -139,7 +139,16 @@ class JobCreateRequest(BaseModel):
     taxonomy_id: str | None = None
     path_config_id: str | None = None
     risk_profile: str = "medium"
-    jurisdiction: str | None = None
+    jurisdiction: str | None = Field(
+        default=None,
+        description=(
+            "Kept for older clients: fills constraints.jurisdiction when that "
+            "is unset (a different value there is a 422)"
+        ),
+    )
+    constraints: CurationConstraints | None = Field(
+        default=None, description="Discovery filters; see CurationRequest.constraints"
+    )
     context: list[Evidence] = Field(
         default_factory=list,
         description="Pinned evidence (B11); see CurationRequest.context",

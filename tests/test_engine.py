@@ -182,7 +182,7 @@ async def test_embedded_cancel_running_job(tmp_path: Path, monkeypatch):
     engine = await _make_engine(tmp_path, monkeypatch)
     try:
 
-        async def _slow(request, policy):
+        async def _slow(request, policy, **kwargs):
             await asyncio.sleep(60)
 
         monkeypatch.setattr(engine._pipeline, "run", _slow)
@@ -242,7 +242,7 @@ async def test_pipeline_crash_marks_job_failed(tmp_path: Path, monkeypatch):
     engine = await _make_engine(tmp_path, monkeypatch)
     try:
 
-        async def _boom(request, policy):
+        async def _boom(request, policy, **kwargs):
             raise RuntimeError("boom")
 
         monkeypatch.setattr(engine._pipeline, "run", _boom)
@@ -480,3 +480,63 @@ async def test_embedded_closes_the_stores_it_opened_when_setup_fails(
 
     assert len(opened) == 2
     assert all(store._db is None for store in opened)
+
+
+async def test_embedded_logs_the_effective_publish_policy(
+    tmp_path: Path, monkeypatch, caplog
+):
+    """CR-01: the start-up log names the publish policy actually in force."""
+    import logging
+
+    caplog.set_level(logging.INFO, logger="cce.engine")
+    engine = await _make_engine(
+        tmp_path, monkeypatch, extra_yaml="publish_policy: human\n"
+    )
+    await engine.close()
+    assert "publish_policy=human" in caplog.text
+
+
+async def test_embedded_missing_config_file_raises(tmp_path: Path):
+    """CR-01: a config_path that does not exist no longer boots on defaults."""
+    from cce.config.loader import ConfigError
+
+    with pytest.raises(ConfigError, match="Config file not found"):
+        await CurationEngine.embedded(config_path=str(tmp_path / "cce.yml"))
+
+
+async def test_a_finishing_run_leaves_a_newer_runs_task_entry(tmp_path: Path):
+    """Review of OPS-04: a retry launched while the previous run was still
+    storing its package had its task entry removed by that run's cleanup, so
+    a live retry looked orphaned to force-retry and cancel."""
+    import asyncio
+
+    from cce.engine import run_pipeline_task
+    from cce.jobs.store import JobStore
+    from tests.conftest import make_job, make_source_policy
+
+    class _Failing:
+        async def run(self, request, policy, **kwargs):
+            raise RuntimeError("boom")
+
+    store = JobStore(db_path=tmp_path / "jobs.db")
+    await store.connect()
+    try:
+        job = make_job()
+        await store.create_job(job)
+        newer = asyncio.get_running_loop().create_future()  # the retry's task
+        running_tasks: dict = {job.id: newer}
+
+        await run_pipeline_task(
+            job.id,
+            job.request,
+            make_source_policy(),
+            pipeline=_Failing(),
+            job_store=store,
+            semaphore=asyncio.Semaphore(1),
+            running_tasks=running_tasks,
+        )
+
+        assert running_tasks == {job.id: newer}
+        newer.cancel()
+    finally:
+        await store.close()

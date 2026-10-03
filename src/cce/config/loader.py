@@ -11,11 +11,13 @@ Usage:
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Any
 
 import yaml
+from pydantic import AliasChoices, BaseModel
 
 from cce.config.types import (
     APIConfig,
@@ -34,13 +36,17 @@ from cce.config.types import (
     default_quality_gate_profiles,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class ConfigError(ValueError):
     """Raised when required configuration is missing or invalid.
 
     Caught at CLI/app entry points and rendered as a one-line message
-    (ADR-006). Never raised by load_config() itself — keyless commands
-    (emit-mdx, api key generate) must keep working.
+    (ADR-006). load_config() raises it only for a named config file that
+    does not exist, is not a mapping, or has unknown keys (CR-01). Missing
+    API keys are checked separately by validate_required_keys, so keyless
+    commands (emit-mdx, api key generate) keep working.
     """
 
 
@@ -84,6 +90,70 @@ def _explicit(**candidates: Any) -> dict[str, Any]:
     return {k: v for k, v in candidates.items() if v is not None}
 
 
+# YAML sections and the model each one configures. The section loaders read
+# known keys by name, so an unknown key would otherwise be dropped silently
+# (CR-01): _unknown_keys checks every level before anything is built.
+_SECTION_MODELS: dict[str, type[BaseModel]] = {
+    "llm": LLMConfig,
+    "writer": WriterConfig,
+    "verifier": VerifierConfig,
+    "evidence_store": EvidenceStoreConfig,
+    "crawl": CrawlConfig,
+    "embedding": EmbeddingConfig,
+    "api": APIConfig,
+    "humanization": HumanizationConfig,
+}
+_HUMANIZATION_MODELS: dict[str, type[BaseModel]] = {
+    "thresholds": HumanizationThresholds,
+    "editor": EditorConfig,
+    "implied_claims": ImpliedClaimsConfig,
+}
+
+
+def _allowed_keys(model: type[BaseModel]) -> set[str]:
+    """Field names plus validation aliases (the legacy autopublish_threshold)."""
+    keys: set[str] = set()
+    for name, field in model.model_fields.items():
+        keys.add(name)
+        alias = field.validation_alias
+        if isinstance(alias, str):
+            keys.add(alias)
+        elif isinstance(alias, AliasChoices):
+            keys.update(c for c in alias.choices if isinstance(c, str))
+    return keys
+
+
+def _unknown_in(data: Any, model: type[BaseModel], prefix: str) -> list[str]:
+    if not isinstance(data, dict):
+        return []
+    return [prefix + str(k) for k in data if str(k) not in _allowed_keys(model)]
+
+
+def _unknown_keys(file_data: dict[str, Any]) -> list[str]:
+    """Dotted names of every key in the YAML that no config model defines."""
+    unknown = _unknown_in(file_data, EngineConfig, "")
+    for section, model in _SECTION_MODELS.items():
+        unknown += _unknown_in(file_data.get(section), model, f"{section}.")
+    humanization = file_data.get("humanization")
+    if isinstance(humanization, dict):
+        for sub, model in _HUMANIZATION_MODELS.items():
+            unknown += _unknown_in(humanization.get(sub), model, f"humanization.{sub}.")
+    gate = file_data.get("quality_gate")
+    if isinstance(gate, dict):
+        for profile, data in gate.items():
+            if profile not in default_quality_gate_profiles():
+                # Loaded (custom profiles are supported) but no request can
+                # select it: risk_profile accepts only the built-in names. A
+                # typo such as "hihg" leaves the real profile on its defaults.
+                logger.warning(
+                    "quality_gate.%s is not one of %s: no request can select it",
+                    profile,
+                    ", ".join(default_quality_gate_profiles()),
+                )
+            unknown += _unknown_in(data, QualityGateConfig, f"quality_gate.{profile}.")
+    return unknown
+
+
 def load_config(config_path: str | Path | None = None) -> EngineConfig:
     """Load engine configuration from YAML file + environment variables.
 
@@ -111,9 +181,20 @@ def load_config(config_path: str | Path | None = None) -> EngineConfig:
     file_data: dict[str, Any] = {}
     if config_path:
         path = Path(config_path)
-        if path.exists():
-            with open(path) as f:
-                file_data = yaml.safe_load(f) or {}
+        if not path.exists():
+            raise ConfigError(f"Config file not found: {path.resolve()}")
+        with open(path) as f:
+            file_data = yaml.safe_load(f) or {}
+        if not isinstance(file_data, dict):
+            raise ConfigError(
+                f"Config file {path} must contain a YAML mapping, "
+                f"got {type(file_data).__name__}"
+            )
+        unknown = _unknown_keys(file_data)
+        if unknown:
+            raise ConfigError(
+                f"Unknown key(s) in config file {path}: {', '.join(unknown)}"
+            )
 
     kwargs = _explicit(
         engine_version=file_data.get("engine_version"),
@@ -234,6 +315,7 @@ def _load_embedding_config(file: dict) -> EmbeddingConfig:
             batch_size=_opt(
                 int, os.getenv("CCE_EMBEDDING_BATCH_SIZE", file.get("batch_size"))
             ),
+            concurrency=_opt(int, file.get("concurrency")),
         )
     )
 

@@ -113,3 +113,24 @@ async def test_provider_config_error_exits_with_one_log_line(tmp_path, caplog):
             pass
     assert "Configuration error" in caplog.text
     assert "claude-fable-5" in caplog.text
+
+
+async def test_lifespan_logs_the_effective_publish_policy(
+    test_config, job_store, evidence_store, mock_pipeline, test_policies, caplog
+):
+    """CR-01: the API start-up log names the publish policy in force."""
+    import logging
+
+    from cce.api.app import create_app
+
+    caplog.set_level(logging.INFO, logger="cce.api.app")
+    app = create_app(
+        config=test_config.model_copy(update={"publish_policy": "human"}),
+        job_store=job_store,
+        evidence_store=evidence_store,
+        pipeline=mock_pipeline,
+        policies=test_policies,
+    )
+    async with app.router.lifespan_context(app):
+        pass
+    assert "publish_policy=human" in caplog.text

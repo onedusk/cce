@@ -161,6 +161,15 @@ def _host_contains(host: str, entry: str) -> bool:
     )
 
 
+def _host_earns(host: str, entry: str) -> bool:
+    """Trust-tag match on the host only (CR-11): a bare one-label entry such
+    as ``pubmed`` matches any label of the host (pubmed.ncbi.nlm.nih.gov);
+    any other entry (``nih.gov``, ``.gov``) the host or a subdomain of it."""
+    if "." not in entry.strip():
+        return _host_contains(host, entry)
+    return _host_matches(host, entry)
+
+
 @lru_cache(maxsize=64)
 def _phrase_pattern(phrases: tuple[str, ...]) -> re.Pattern[str] | None:
     """Whole-word, case-insensitive matcher for any phrase (None if empty).
@@ -252,11 +261,13 @@ class Discoverer:
         side-channel).
         """
         # Steps 1-2: Build search queries and collect candidate URLs
-        candidate_urls = await self._search_candidates(request)
+        candidate_urls, search_metrics = await self._search_candidates(request)
 
         # Step 3: Filter against policy
         effective_policy = self._resolve_overrides(request.topic, policy)
-        filtered_urls = self._apply_policy_filters(candidate_urls, effective_policy)
+        filtered_urls = self._apply_policy_filters(
+            candidate_urls, effective_policy, request.constraints
+        )
         urls_dropped_policy = len(candidate_urls) - len(filtered_urls)
 
         # Step 3b: Split into fresh URLs (need crawling) and reusable stored evidence
@@ -312,7 +323,7 @@ class Discoverer:
             logger.warning("Discovery: no URLs survived policy filter")
             metrics = _discovery_metrics(**url_ledger)
             _log_drops(metrics)
-            return DiscoveryResult(evidence=[], metrics=metrics)
+            return DiscoveryResult(evidence=[], metrics={**metrics, **search_metrics})
 
         # Steps 4-5: Crawl fresh URLs, extract + filter evidence, merge reusable
         evidence, metrics = await self._crawl_and_extract(
@@ -376,10 +387,18 @@ class Discoverer:
             pages_crawled,
             before_cap,
         )
-        return DiscoveryResult(evidence=evidence, metrics=metrics)
+        return DiscoveryResult(evidence=evidence, metrics={**metrics, **search_metrics})
 
-    async def _search_candidates(self, request: CurationRequest) -> list[str]:
-        """Build search queries and collect deduplicated candidate URLs."""
+    async def _search_candidates(
+        self, request: CurationRequest
+    ) -> tuple[list[str], dict[str, int | str]]:
+        """Build search queries and collect deduplicated candidate URLs.
+
+        Also returns the search metrics (OPS-09): ``search_failed`` counts
+        queries whose search raised, and ``search_error`` (present only
+        then) is the last error's class name, never its message, which can
+        carry provider text.
+        """
         # Step 1: Build search queries
         queries = self._build_queries(request)
         logger.info(
@@ -388,6 +407,7 @@ class Discoverer:
 
         # Step 2: Search for candidate URLs
         candidate_urls: list[str] = []
+        search_metrics: dict[str, int | str] = {"search_failed": 0}
         for query in queries:
             try:
                 urls = await self._adapter.search(query, limit=SEARCH_RESULT_LIMIT)
@@ -396,24 +416,44 @@ class Discoverer:
                 logger.info(
                     "Adapter does not support search, skipping query: %s", query
                 )
+            except Exception as e:
+                error_name = type(e).__name__
+                logger.warning(
+                    "Search failed (%s), skipping query: %s", error_name, query
+                )
+                search_metrics = {
+                    "search_failed": int(search_metrics["search_failed"]) + 1,
+                    "search_error": error_name,
+                }
 
         # Add any seed domains from constraints as fallback
+        # (only plain host entries: ".gov" or "*.nih.gov" names no page)
         if request.constraints and request.constraints.domains_allow:
             for domain in request.constraints.domains_allow:
-                candidate_urls.append(f"https://{domain}")
+                if not domain.startswith((".", "*")):
+                    candidate_urls.append(f"https://{domain}")
 
         # Deduplicate
         candidate_urls = list(dict.fromkeys(candidate_urls))
         logger.info(
             "Discovery: %d candidate URLs before policy filter", len(candidate_urls)
         )
-        return candidate_urls
+        return candidate_urls, search_metrics
 
     def _apply_policy_filters(
-        self, candidate_urls: list[str], policy: SourcePolicy
+        self,
+        candidate_urls: list[str],
+        policy: SourcePolicy,
+        constraints: CurationConstraints | None = None,
     ) -> list[str]:
-        """Drop candidate URLs the (override-resolved) source policy rejects."""
-        return [url for url in candidate_urls if self._passes_policy(url, policy)]
+        """Drop candidate URLs the (override-resolved) source policy or the
+        request's domain constraints reject."""
+        return [
+            url
+            for url in candidate_urls
+            if self._passes_policy(url, policy)
+            and self._passes_constraints(url, constraints)
+        ]
 
     async def _crawl_and_extract(
         self,
@@ -462,7 +502,13 @@ class Discoverer:
         )
         good_results = 0
         for result in crawl_results:
-            if result.status_code == 0 or not result.markdown.strip():
+            # An HTTP error page (4xx/5xx) is a failed crawl, not evidence:
+            # stored, it would be reused by every later job (COR-03).
+            if (
+                result.status_code == 0
+                or result.status_code >= 400
+                or not result.markdown.strip()
+            ):
                 logger.debug("Skipping empty or failed crawl: %s", result.url)
                 continue
 
@@ -586,6 +632,23 @@ class Discoverer:
 
         return True
 
+    @staticmethod
+    def _passes_constraints(url: str, constraints: CurationConstraints | None) -> bool:
+        """Check a URL against the request's domain lists (CR-03).
+
+        Applied on top of the policy, with the same host matching: a deny
+        entry from either side drops the URL, and a request allow list
+        narrows the policy's (the URL must pass both).
+        """
+        if constraints is None:
+            return True
+        host = _url_host(url)
+        if any(_host_contains(host, denied) for denied in constraints.domains_deny):
+            return False
+        return not constraints.domains_allow or any(
+            _host_matches(host, allowed) for allowed in constraints.domains_allow
+        )
+
     # -- Post-extraction filters --
 
     @staticmethod
@@ -616,27 +679,17 @@ class Discoverer:
             if age_days > policy.recency.max_age_days:
                 return False
 
-        # Request-level: absolute date bounds
+        # Request-level: absolute date bounds, aware (a date-only or
+        # offset-less bound is UTC) and validated on the model (CR-03)
         if constraints:
-            if constraints.date_from:
-                try:
-                    lower = datetime.fromisoformat(
-                        constraints.date_from.replace("Z", "+00:00")
-                    )
-                    if ev.published_at < lower:
-                        return False
-                except (ValueError, TypeError):
-                    pass  # fail-open on bad/naive date
-
-            if constraints.date_to:
-                try:
-                    upper = datetime.fromisoformat(
-                        constraints.date_to.replace("Z", "+00:00")
-                    )
-                    if ev.published_at > upper:
-                        return False
-                except (ValueError, TypeError):
-                    pass  # fail-open on bad/naive date
+            lower, upper = constraints.date_bounds()
+            try:
+                if lower is not None and ev.published_at < lower:
+                    return False
+                if upper is not None and ev.published_at > upper:
+                    return False
+            except TypeError:
+                pass  # fail-open on a naive published_at
 
         return True
 
@@ -1023,16 +1076,20 @@ class Discoverer:
 
     @staticmethod
     def _looks_peer_reviewed(result: CrawlResult) -> bool:
-        """Basic heuristic: DOI in metadata or URL patterns."""
-        url_lower = result.url.lower()
+        """Basic heuristic: the URL's host is a known scholarly host.
+
+        Matched on the host, never the path, query or userinfo, which the
+        page's publisher chooses (CR-11).
+        """
+        host = _url_host(result.url)
         indicators = [
             "doi.org",
             "pubmed",
             "ncbi.nlm.nih.gov",
             "arxiv.org",
-            "scholar.google",
+            "scholar.google.com",
         ]
-        return any(ind in url_lower for ind in indicators)
+        return bool(host) and any(_host_earns(host, ind) for ind in indicators)
 
     @staticmethod
     def _looks_primary(
@@ -1048,14 +1105,18 @@ class Discoverer:
     def _assess_reputation(url: str, rules: ReputationRule) -> str:
         """Map a URL to a reputation tier based on policy rules.
 
-        Still substring-matched (not B9): policies rely on bare entries such
-        as ``pubmed`` matching inside a host.
+        Matched on the host at label boundaries, so userinfo, port, path and
+        query can't earn a tier (CR-11). A bare entry such as ``pubmed``
+        matches any label of the host; ``nih.gov`` or ``.gov`` the host or a
+        subdomain of it.
         """
-        domain = urlparse(url).netloc.lower()
+        host = _url_host(url)
+        if not host:
+            return "unknown"
         for trusted in rules.trusted_institutions:
-            if trusted.lower() in domain:
+            if _host_earns(host, trusted):
                 return "trusted"
-        if any(domain.endswith(suffix) for suffix in [".gov", ".edu"]):
+        if any(host.endswith(suffix) for suffix in [".gov", ".edu"]):
             return "institutional"
         return "unknown"
 

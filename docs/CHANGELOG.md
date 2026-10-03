@@ -5,6 +5,83 @@ All notable changes to the Content Curation Engine (CCE).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] audit 2026-10-02: medium-severity fixes
+
+The 18 remaining medium findings of the 2026-10-02 audit (`docs/internal/`, local). Several change behaviour on purpose; each entry says how.
+
+### Fixed: a shared component set could leak one tenant's documents (SEC-01)
+- build_pipeline takes a per-tenant crawl_adapter that replaces the shared ComponentSet's adapter for that Pipeline only, while the LLM providers stay shared. CrawlAdapter.search takes no tenant, so a CompositeCrawlAdapter holding one tenant's documents in a shared ComponentSet fed those documents into every tenant's prompts, package and evidence store. docs/configuration.md and the build_pipeline docstring said the opposite. The docs now say a ComponentSet is tenant-neutral only while its crawl adapter is. They also say a tenant document adapter should run under a source policy whose domains_allow is non-empty and names that tenant's pseudo-host, because an empty domains_allow admits every host.
+
+### Fixed: the API body limit was bypassed by chunked requests (SEC-02)
+- ### Fixed: the 1 MiB API body limit covers chunked bodies (SEC-02)
+- The limit checked only the `Content-Length` header. A chunked body (or one longer than its declared length) of any size was buffered and JSON-parsed, before authentication, so a client without a key could exhaust the server's memory. The stated bound (uvicorn's h11 max-incomplete-size) limits request headers, not body data.
+- The limit is now a pure ASGI middleware that counts the body bytes as they arrive and answers 413 `payload_too_large` once they pass 1 MiB, before routing or auth. A declared `Content-Length` over the limit is still rejected without reading the body. Bodies within the limit reach the app unchanged.
+
+### Fixed: a missing config file or unknown key was silently ignored (CR-01)
+- ### Fixed: a missing config file or an unknown config key is an error (CR-01, also SEC-06)
+- `load_config` skipped a named config file that did not exist, and the section loaders read known keys by name. A wrong path (a typo, or a path relative to another working directory) or a misspelled key (`publish_polcy`, `humanization.editor.enabld`) therefore left the built-in defaults in force with no warning, so `publish_policy: human` ran as `auto` and PASS jobs ended `completed`.
+- A named config file that does not exist is now a `ConfigError` with its resolved path. So is a file that is not a YAML mapping, and so is any key no config model defines, at any level. The error names every unknown key. `autopublish_threshold` is still accepted. This applies to `--config` on every command, to `CurationEngine.embedded(config_path=...)` and to `load_config`. `cce api start`, `emit-mdx` and the key commands print it as one line.
+- The config models now forbid unknown fields, so a typo in code that builds `EngineConfig` directly raises a `ValidationError`.
+- `embedding.concurrency` is now read from YAML (it was a model field the loader never read).
+- The engine and API start-up log lines now include the effective `publish_policy`.
+- A gate profile other than low, medium or high still loads (custom profiles are supported) but logs a warning, since no request can select it.
+
+### Fixed: a failed retry kept serving the previous run's package (COR-02)
+- a retry (JobHandle.retry() or POST /v1/curate/jobs/{id}/retry) now removes the previous run's package and stage records before the job is queued again. GET /package (JobHandle.package()) answers 404 (None) until the new run stores one, and a retry that fails before any path completes leaves the job FAILED with no package, where it used to serve the earlier run's package. A retry whose policy is no longer loaded is refused without touching the job (404 policy_not_found, or ValueError in embedded mode) instead of leaving it stuck QUEUED. (COR-02, CR-05, OPS-07)
+
+### Fixed: jobs stranded by a crash could not be retried (OPS-04)
+- Added: recovery for a job a crash, kill or OOM left QUEUED or RUNNING with no task behind it. POST /v1/curate/jobs/{id}/retry?force=true (JobHandle.retry(force=True)) records such a job FAILED with error code 'orphaned' and re-queues it. It still answers 409 already_running when the serving process is running the job, and without force nothing changes. In embedded mode JobHandle.cancel() on such a job records the same 'orphaned' failure. Jobs are not failed automatically at start-up. Force only a job that no process is running, since the CLI and the API can share one database. (OPS-04, COR-09, CR-08)
+- A run whose status is already terminal but that is still storing its package is awaited before a retry clears it, and a finishing run no longer removes a newer run's task entry.
+
+### Fixed: CCE_MAX_TOKENS_PER_JOB was not a ceiling (OPS-03)
+- CCE_MAX_TOKENS_PER_JOB now counts input + output + cache-creation tokens. Cache reads are still not counted. With prompt caching the evidence block is reported as cache-creation tokens, so before this change the largest part of every prompt was outside the budget. The budget is now also re-checked before the edit step: when it is spent, the implied-claim calls and the editor are skipped, the verifier checks the writer's draft, and an EDIT stage record with skipped_over_budget=True notes the skip. The implied-claim topic-extraction call now carries max_tokens=4096 instead of the model maximum. The budget is still not a hard ceiling: past a passing check a job can spend one writer call, or one edit step (one implied-claim call per contrastive frame that names a topic, plus the editor call), and then one verifier call. The docs now say exactly that.
+
+### Fixed: request-level constraints were not applied (CR-03)
+- Request-level CurationConstraints now filter discovery, and the REST API and remote mode pass them through. domains_deny drops matching hosts in addition to the policy's deny list. domains_allow restricts sources to those hosts and narrows a policy allow list (a deny from either side wins); both use the policy's label-boundary host matching, are counted in urls_dropped_policy and apply to reused URLs too. date_from / date_to accept an ISO 8601 date or datetime, read as UTC when no offset is given. A date-only bound used to fail open. An unparseable bound is now a validation error rather than silently ignored. JobCreateRequest gains a constraints object (the top-level jurisdiction still works and fills an unset constraints.jurisdiction; a conflicting one is a 422), and CurationEngine remote mode sends it. Before, only jurisdiction travelled. docs/openapi.json regenerated.
+- A date-only bound covers the whole day (`date_to: 2023-06-01` includes that afternoon), and `2024` or `2024-06` bounds cover the year or month. Suffix or wildcard allow entries (`.gov`, `*.nih.gov`) are no longer turned into crawl seeds.
+
+### Fixed: HTTP error pages were stored as evidence (COR-03)
+- An HTTP error page is no longer stored as evidence. A crawl result with status 400 or above counts as a failed crawl (crawl_failed) and is never extracted, so a transient 403/404/500 no longer poisons URL reuse for later jobs. FirecrawlAdapter now reads the page status from Document.metadata.status_code, where the v2 SDK puts it. Before, every scraped page was reported as 200. Error pages stored before this fix are not purged.
+
+### Fixed: crawl-provider outages read as "No evidence discovered" (OPS-09)
+- A crawl-provider outage, bad key or exhausted quota is no longer recorded as 'No evidence discovered'. FirecrawlAdapter.search now raises instead of returning an empty list. Discovery counts failed searches per query as search_failed on the DISCOVER record, and search_error holds the last failure's exception class name, never its message. A job that finds no evidence after any search or crawl failed fails with error code crawl_unavailable, and the message gives the counts. Adapters without search (NotImplementedError) behave as before. An injected adapter whose search raises is now reported the same way (class name only) rather than failing the job with its own exception text. CompositeCrawlAdapter skips a failing adapter while another one returns URLs, and raises the error when none does.
+
+### Fixed: peer-review and trusted tags matched anywhere in the URL (CR-11)
+- The peer-review tag and the trusted-institution tier are now earned only from a URL's host, matched at label boundaries, never from its path, query or userinfo. Before, a page such as attacker.example/blog/pubmed-roundup could earn [peer-reviewed]. A one-label entry such as pubmed still matches any label of the host (pubmed.ncbi.nlm.nih.gov). Any other entry (nih.gov, .gov) matches the host or its subdomains, so .gov no longer matches gov.uk-style hosts (list gov.uk explicitly). The scholar indicator is now scholar.google.com. Rows already stored keep the flags computed when they were crawled.
+
+### Fixed: the verifier prompt defeated the prompt cache (OPS-02)
+- The verifier prompt now puts the evidence block before the draft. The Anthropic provider caches each prompt up to "=== END EVIDENCE ===". With the draft first, that cached block included the draft, so every verifier call wrote a new cache entry at the cache-write rate and no rewrite iteration ever read one. Now the cached block is the path's evidence alone, so a rewrite iteration on the same path reads it at the cache-read rate. The prompt text is otherwise unchanged.
+
+### Fixed: a null cache-token count failed the job (COR-07)
+- A null cache-token count on an editor or implied-claim reply no longer fails the job. The SDK types both cache counts as Optional. sum_usage already read None as 0 for the writer and verifier, but editor and implied-claim usage went through _merge_tokens and _stage_tokens. Their int() raised TypeError, and the job ended FAILED at stage write after the writer and editor calls had been paid for. Those helpers, the writer token accumulation and AnthropicProvider's usage dict now treat None as 0.
+
+### Fixed: logged job IDs matched no stored job; updated_at never moved (OPS-06)
+- pipeline log records now carry the stored job id (the one cce status and the API show) instead of an id that was stored nowhere. Pipeline.run accepts an optional job_id keyword, which the engine and API pass and which defaults to a minted id. The job store now moves Job.updated_at on every update, so the API's updated_at no longer always equals created_at. (OPS-06, CR-12)
+
+### Fixed: batch and curate crashed at the wait timeout (OPS-08)
+- ### Fixed: `cce batch` and `cce curate` survive the wait timeout (OPS-08)
+- Both commands waited 30 minutes per job and did not catch the timeout. A job still running then crashed the command with a traceback, the job was cancelled on exit (its spend discarded), and `batch` never started the remaining topics.
+- The wait is now a `--timeout` option (seconds, default 1800). A job still running at the timeout is reported with its id and counts as a failure (exit 1), and `batch` moves on to the next topic. The job is not cancelled at the timeout: in `batch` it keeps running while later topics run, and only a job still unfinished when the command exits is cancelled, since the embedded engine runs jobs inside the `cce` process.
+- `--timeout` must be at least 1 second.
+
+### Fixed: cce api start ignored the configured host and port (CR-06)
+- ### Fixed: `cce api start` honours CCE_API_HOST / CCE_API_PORT and YAML api.host / api.port (CR-06)
+- The `--host` / `--port` options had literal defaults (`0.0.0.0`, `8000`) that always overwrote the loaded config, so `CCE_API_HOST=127.0.0.1` still listened on all interfaces. The flags now apply only when given, and the server binds the loaded config, so precedence is flag > env > YAML > default as `docs/configuration.md` describes. A deployment that set the env vars or YAML keys now binds where it asked to.
+
+### Fixed: an invalid topic_pattern passed validation (CRIT-02)
+- ### Fixed: an invalid topic_pattern regex is rejected when the policy loads (CRIT-02)
+- A `topic_overrides[].topic_pattern` that `re` cannot compile (for example `sleep (hygiene`) passed `cce validate` and boot. Every job on that policy then failed at discover with the raw regex error, even for topics the override could never match.
+- The pattern is now compiled when the policy is built. `cce validate` reports it as an ERROR (file, `topic_overrides.N.topic_pattern` and the pattern), and at boot the file is skipped with a warning naming the same. Jobs that name the policy are now refused at submit as an unknown policy (API 404 `policy_not_found`) instead of failing one by one.
+
+### Fixed: emit-mdx --all kept the oldest job per topic (SEC-07)
+- ### Fixed: `emit-mdx --all` emits the newest completed job of each topic (SEC-07)
+- `--all` wrote every completed job newest-first into its topic directory. When a topic had been curated more than once, or two topic strings shared a slug (`Sleep Hygiene` and `sleep hygiene!`), the oldest job was the last to write: the corrected re-run was replaced and `meta.json` named the old job, while `--topic` picked the newest.
+- `--all` now emits only the newest completed job (with a package) per topic directory, lists the older job ids as skipped, and reports the real topic count. `--dry-run` shows the same set.
+
+### Fixed: client-format emit replaced any "resources" section (COR-10)
+- thnkLabs MDX emit rebuilds only the "Curated Resources" section the client format defines, matched as a whole heading, case-insensitively. It used to replace any h2/h3 section whose heading contained "resources" (for example "## Job demands and resources" or "## Resources for families") with the generated bullet list, which deleted cited, verified prose from the published page without warning. The generic emitter was never affected.
+- A heading that starts with "Curated Resources" (the writer adds suffixes such as "for Further Exploration") is still rebuilt; "Resources for families" and similar headings are left alone.
+
 ## [Unreleased] audit 2026-10-02: high-severity fixes
 
 Fixes from the 2026-10-02 audit (`docs/internal/`, local): the four

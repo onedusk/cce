@@ -42,6 +42,15 @@ sampling parameters (Opus 4.7 and later, Sonnet 5, Fable 5).
 `config/humanization_live.yaml` is a working example (the humanization live
 harness uses it). Environment variables override whatever the file says.
 
+The file is checked strictly when it loads. A path that does not exist is a
+`ConfigError` (relative paths resolve against the working directory), not a
+silent fall-back to the defaults, and so is a key that no config model
+defines, at any level (`publish_polcy`, `api.hosst`,
+`humanization.editor.enabld`); the error names every such key. Code that
+builds `EngineConfig` directly gets a pydantic `ValidationError` for an
+unknown field. `embedding.concurrency` is read from YAML only (no env var).
+The engine and the API log the effective `publish_policy` once at start-up.
+
 ## How loading works
 
 `ConfigRegistry.load(root, config_path)` (`src/cce/config/registry.py`) is
@@ -91,7 +100,8 @@ with only `llm` injected raises). An injected LLM or crawl adapter needs no
 `ANTHROPIC_API_KEY` / `FIRECRAWL_API_KEY`. Injected LLM providers must accept
 `output_schema`, set `stop_reason`, and report the `input_tokens`,
 `output_tokens`, `cache_creation_input_tokens` and `cache_read_input_tokens`
-usage keys (the token budget reads them). Configuration itself still loads
+usage keys (the token budget counts input, output and cache-creation
+tokens; cache reads are not counted). Configuration itself still loads
 only through the registry.
 
 **Non-web sources.** To mix documents that aren't web pages into a run,
@@ -99,7 +109,9 @@ write a `CrawlAdapter` for them and combine it with the web adapter:
 `CompositeCrawlAdapter({"local": my_adapter}, default=FirecrawlAdapter(config.crawl))`
 (`src/cce/discovery/adapters/composite.py`), injected as
 `ComponentOverrides(crawl_adapter=...)`. The composite dispatches each URL on
-its scheme; a scheme with no adapter counts as a failed crawl.
+its scheme; a scheme with no adapter counts as a failed crawl. An adapter
+that serves one tenant's documents must not sit in a `ComponentSet` other
+tenants share (see the per-tenant note under Evidence store).
 
 - **URL shape:** `scheme://host/path`, for example `local://acme/q3-report.pdf`
   or `gdrive://<file-id>`. The host part is required: the source policy
@@ -125,6 +137,34 @@ whose `raw_response` is the reply text, for the caller to persist where it
 sees fit. cce never logs or stores that text: the job store and the API only
 carry `job.error` (code, message and stage).
 
+**Retrying a job.** `JobHandle.retry()` and `POST /v1/curate/jobs/{id}/retry`
+re-run a finished job under the same id. Before the job is queued again the
+retry removes the previous run's package and stage records, so
+`JobHandle.package()` returns None (the API answers 404 `package_not_found`)
+until the new run stores one, and a retry that fails before any path
+completes leaves the job FAILED with no package. A retry whose policy is no
+longer loaded is refused (`ValueError` in embedded mode, 404
+`policy_not_found` from the API) and the job is left as it was.
+
+**Recovering a job left by a crash.** A QUEUED or RUNNING job is refused by
+retry (409 `already_running`, `ValueError` in embedded mode). A graceful API
+shutdown marks every RUNNING job in its store FAILED (`server_shutdown`),
+including one a CLI process sharing the same file is running; after a kill,
+OOM or host crash the row keeps its status with nothing running it, and cce
+does not fail such jobs at start-up. To recover one, call
+`POST /v1/curate/jobs/{id}/retry?force=true` (or `JobHandle.retry(force=True)`).
+When the serving process runs no task for the job, it records the job FAILED
+with error code `orphaned` and then re-queues it; when it does run one, the
+answer is still 409. The `orphaned` failure is recorded before the policy is
+checked: if the policy is no longer loaded the retry is still refused (404
+`policy_not_found`, `ValueError` in embedded mode), and the job stays FAILED,
+retryable without force once the policy is back. In embedded mode
+`JobHandle.cancel()` on such a job
+records the same `orphaned` failure without re-running it (the API's DELETE
+removes the job instead). Force only a job that no process runs: the CLI and
+the API can share one SQLite file, and a forced retry of a job another
+process is still running starts a second run of it.
+
 **New configuration surfaces must enter through the registry** — add a field
 to `ConfigRegistry`, load it in `load()`, and consume it from
 `build_components`. Do not add `load_*` calls to `engine.py` or
@@ -145,11 +185,21 @@ shaped*. Loaded by id at job time, not part of `EngineConfig`:
   `domains_deny` match the URL's host at label boundaries: an allow entry
   admits the host or its subdomains, a deny entry blocks any host containing
   its labels in sequence (`x.com` doesn't block `fox.com`; `amazon.com` does
-  block `amazon.com.au`). `reputation` also takes `marketing_phrases`
+  block `amazon.com.au`). A request's `constraints.domains_allow` /
+  `domains_deny` are matched the same way on top of the policy: a deny entry
+  from either drops the URL, and a request allow list narrows the policy's
+  (counted in `urls_dropped_policy`). Its `date_from` / `date_to` take an
+  ISO 8601 date or datetime (no offset means UTC; anything else is a
+  validation error) and apply to fresh and reused excerpts alike. The REST
+  API and remote mode pass all of them through. `reputation` also takes `marketing_phrases`
   (whole-word; `[]` flags nothing), `primary_source_suffixes` (default
   `.gov`, `.edu`) and `penalize_conflict_of_interest` (default true) — see
-  `policies/peer-reviewed.yaml`. `trusted_institutions` still matches by
-  substring.
+  `policies/peer-reviewed.yaml`. `trusted_institutions` matches the host
+  only, never the path, query or userinfo: a one-label entry such as
+  `pubmed` matches any label of the host (`pubmed.ncbi.nlm.nih.gov`), so
+  whoever owns a domain can earn it with a subdomain; prefer a full domain
+  (`nih.gov`, `.gov`), which matches the host or its subdomains. The
+  built-in peer-review tag is read from the host the same way.
 - `taxonomies/` — taxonomy definitions for evidence classification. The API
   currently selects `taxonomies/wellbeing-8d.yaml` when present.
 - `path_configs/` — output path definitions (tone, structure, depth per
@@ -209,8 +259,10 @@ and `effort` (YAML `writer.*`, `verifier.*`, `humanization.editor.*`; env
 `CCE_WRITER_*`, `CCE_VERIFIER_*`, `CCE_EDITOR_*` with the suffixes
 `_MODEL`, `_MAX_TOKENS`, `_THINKING`, `_EFFORT`). Unset values inherit the
 `CCE_LLM_*` ones, and credentials are always shared. A role with any setting
-gets its own provider; the implied-claim checker uses the writer's. The
-values must suit that role's model (e.g. effort `xhigh` fails on a 4.6
+gets its own provider; the implied-claim checker uses the writer's, except
+that its topic-extraction call is capped at 4096 output tokens (thinking
+included) whatever `max_tokens` says, and a reply that hits that cap fails the
+job. The values must suit that role's model (e.g. effort `xhigh` fails on a 4.6
 model). With an injected `llm` (`ComponentOverrides`), setting any of these
 raises `ValueError`: configure the injected provider instead.
 
@@ -230,7 +282,21 @@ shares one evidence pool and one job store. For per-tenant separation, give
 each tenant its own stores — `CurationEngine.embedded(evidence_store=...,
 job_store=...)` (injected stores are the caller's to connect and close), or
 one `build_pipeline(config, registry, tenant_store, components)` per tenant.
-Tenants may share one `ComponentSet`; it holds no tenant data.
+Tenants may share one `ComponentSet` only while its crawl adapter is
+tenant-neutral (a web adapter). `CrawlAdapter.search(query, limit)` takes no
+tenant, so a document adapter in a shared set offers one tenant's documents
+to every tenant's run: into its prompts, its package and its evidence store.
+Give each tenant its own adapter instead:
+`build_pipeline(config, registry, tenant_store, components, crawl_adapter=tenant_composite)`
+replaces the set's adapter for that Pipeline only, and the LLM providers and
+the rest of the set stay shared (with `CurationEngine.embedded()`, build one
+engine per tenant with `overrides=ComponentOverrides(llm=shared_llm,
+crawl_adapter=tenant_composite)`). Also run each such tenant under a source
+policy whose `domains_allow` is non-empty and names that tenant's pseudo-host
+(`acme` for `local://acme/...`), so another tenant's documents are refused even
+if an adapter is shared by mistake: an empty `domains_allow` admits every
+host. A non-empty list also limits web sources to the domains it names, so
+list those too.
 
 Schema v4 (B6) makes evidence unique on `(url, excerpt_hash)` rather than
 `excerpt_hash` alone. An existing database is rebuilt losslessly the first
@@ -269,6 +335,14 @@ stays in the store but no longer reaches a prompt.
 | `CCE_CRAWL_MAX_PER_SOURCE` | `5` | Max excerpts kept per source |
 | `CCE_CRAWL_MAX_EVIDENCE` | `100` | Max evidence objects per request |
 
+A failed search (bad key, no credits, rate limit, outage) is counted per
+query in the DISCOVER record's `search_failed`, with `search_error` holding
+the last failure's exception class name (never its message). A page that
+could not be fetched, or answered HTTP 400 or above, counts in
+`crawl_failed` and is never stored as evidence. A job that finds no
+evidence after any search or crawl failed fails with error code
+`crawl_unavailable` rather than `pipeline_error`.
+
 ### Embedding (Ollama)
 
 | Variable | Default | Purpose |
@@ -285,8 +359,8 @@ stays in the store but no longer reaches a prompt.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `CCE_API_HOST` | `0.0.0.0` | Bind address for `cce api start` |
-| `CCE_API_PORT` | `8000` | Bind port |
+| `CCE_API_HOST` | `0.0.0.0` | Bind address for `cce api start` (YAML `api.host`; the `--host` flag overrides both) |
+| `CCE_API_PORT` | `8000` | Bind port (YAML `api.port`; the `--port` flag overrides both) |
 | `CCE_API_REQUIRE_AUTH` | `true` | `false` disables bearer auth (dev only) |
 | `CCE_API_CORS_ORIGINS` | `*` | Comma-separated allowed origins |
 | `CCE_API_MAX_CONCURRENT_JOBS` | `2` | Parallel pipeline jobs |
@@ -295,7 +369,7 @@ stays in the store but no longer reaches a prompt.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `CCE_MAX_TOKENS_PER_JOB` | unset | Hard ceiling on accumulated LLM tokens (input + output, all paths and iterations) per job. On breach the job stops iterating and routes to `REVIEW_REQUIRED`, keeping partial drafts (ADR-003, audit-2026-06-09). Unset = unlimited. |
+| `CCE_MAX_TOKENS_PER_JOB` | unset | Token budget per job: input + output + cache-creation tokens of every LLM call, all paths and iterations (cache reads are not counted). Checked before each writer iteration, where a breach stops iterating and routes the job to `REVIEW_REQUIRED`, keeping partial drafts (ADR-003, audit-2026-06-09), and before each edit step, where a breach skips the edit so the verifier checks the writer's draft. Not a hard ceiling: past a passing check a job can still spend one writer call, or one edit step (one implied-claim call per contrastive frame that names a topic, plus the editor call), and then one verifier call. Unset = unlimited. |
 
 ### Cost estimate
 
@@ -339,6 +413,11 @@ diffs); env vars exist only for the master switch and the marker path.
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `CCE_LOG_FORMAT` | unset | `json` switches to structured JSON logs |
+
+Pipeline log records carry `job_id`: for a job run by the engine or the API
+it is the stored job's id, the one `cce status`, `cce jobs` and
+`GET /v1/curate/jobs/{id}` show. A direct `Pipeline.run(request, policy,
+job_id=...)` logs under the id it is given, or mints one.
 
 ## Ollama and embedding ranking
 

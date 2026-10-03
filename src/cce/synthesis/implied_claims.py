@@ -85,6 +85,12 @@ Return JSON: {"dismissed_topic": "<topic>", "rationale": "<why>"}\
 """
 
 
+# Output cap for one topic-extraction reply (OPS-03): the reply is a short
+# JSON object, so this bounds what one call can spend. Thinking counts
+# against the cap on current models, hence well above the reply itself.
+_TOPIC_MAX_TOKENS = 4096
+
+
 # Words the contrastive patterns themselves supply ("unlike", "rather than",
 # "by contrast", "it's not about", ...). A matched fragment made only of these
 # names no dismissed topic, so the extractor has nothing to return: "rather
@@ -217,6 +223,7 @@ class ImpliedClaimChecker:
                 ],
                 system=_DISMISSED_TOPIC_PROMPT,
                 temperature=0.0,
+                max_tokens=_TOPIC_MAX_TOKENS,
             )
             if usage_log is not None:
                 usage_log.append((response.model, response.usage))

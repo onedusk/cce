@@ -156,6 +156,22 @@ async def test_curate_maps_request_fields_onto_wire(engine: CurationEngine):
     assert received.context == request.context  # B11
 
 
+async def test_curate_forwards_every_constraint(engine: CurationEngine):
+    """CR-03: remote mode used to forward jurisdiction and drop the rest."""
+    constraints = CurationConstraints(
+        date_from="2020-01-01",
+        date_to="2024-12-31T00:00:00Z",
+        domains_allow=["good.example"],
+        domains_deny=["competitor.example"],
+        jurisdiction="EU",
+    )
+    handle = await engine.curate(make_curation_request(constraints=constraints))
+
+    job = await handle.status()
+
+    assert job.request.constraints == constraints
+
+
 async def test_status_returns_job_state(engine: CurationEngine):
     handle = await engine.curate(make_curation_request())
     job = await handle.status()

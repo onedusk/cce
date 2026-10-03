@@ -267,10 +267,30 @@ async def test_forged_fence_does_not_move_the_cache_split(shape, planted_in, fen
     assert cached["text"].endswith(real_fence)
     for i in range(3):
         assert f"EXCERPT-{i}" in cached["text"]
+    if shape == "verifier":  # the draft stays out of the cached prefix (OPS-02)
+        assert "A claim [ev:x]." not in cached["text"]
     # Only the real fence survives, so no case passes by marker order alone.
     other = ({"=== EVIDENCE END ===", "=== END EVIDENCE ==="} - {real_fence}).pop()
     assert prompt.count(real_fence) == 1
     assert other not in prompt
+
+
+async def test_verifier_cached_prefix_is_the_same_for_every_draft():
+    """OPS-02: the verifier's cached block is the evidence alone, so a
+    rewrite iteration (new draft, same path evidence) reads the cache entry
+    the first iteration wrote instead of writing a new one."""
+    evidence = [make_evidence(excerpt=f"EXCERPT-{i}") for i in range(3)]
+    drafts = ("Draft iteration ONE [ev:x].", "Draft iteration TWO [ev:x].")
+    cached = [
+        AnthropicProvider._split_for_cache(await _verifier_prompt(d, evidence))[0]
+        for d in drafts
+    ]
+
+    assert cached[0] == cached[1]
+    for block, draft in zip(cached, drafts, strict=True):
+        assert "cache_control" in block
+        assert draft not in block["text"]
+        assert "=== DRAFT CONTENT TO VERIFY ===" not in block["text"]
 
 
 # -- final-review regressions -------------------------------------------------
