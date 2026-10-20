@@ -1,0 +1,107 @@
+# Path config for the thnklabs "Understanding Cannabis" study.
+# Replaces thnklabs.yaml for this topic: its Learn asks for studies and risk
+# factors, its Explore for an eight-dimension survey and its Apply for
+# micro-actions, all of which push cannabis content toward health claims
+# or advice. Load with CurationEngine.embedded(path_configs_path=...).
+#
+# The closing guard sentences in each addendum answer defects seen in the
+# first run (job_0b14c44355b6): "will launch" rewritten as "launched", a
+# federal change stated as current law, an unsourced "which law applies"
+# claim, and instruction text leaking into the copy.
+paths:
+  - id: learn
+    name: "Learn"
+    description: "What the words on a cannabis label mean"
+    tone: pedagogical
+    structure: reference
+    depth: foundational
+    section_requirements:
+      - "label_vocabulary"
+      - "takeaway"
+    max_words: 1200
+    max_evidence: 45
+    prompt_addendum: >
+      Explain the words printed on a cannabis product label, one term at a time: cannabis and
+      marijuana as legal terms, cannabinoids, THC, THCA, total THC and how labs calculate it,
+      CBD, hemp and its federal and Virginia definitions, serving size, strain names and the
+      indica/sativa labels, and batch or lot numbers. Give each term a short plain-language
+      definition grounded in the evidence. End with a one- or two-sentence takeaway on which
+      numbers to read first.
+      Informational only. Make no health, medical, therapeutic or wellness claims about cannabis
+      or any cannabinoid, and describe no effects beyond stating that THC is the intoxicating
+      compound. Give no dosing guidance and no legal advice. Do not connect cannabis to sleep,
+      stress, anxiety, pain or any condition. Never use em dashes; use commas, colons or full
+      stops. State dates and numeric limits exactly as the evidence gives them and name the
+      jurisdiction (Virginia or federal) for every legal limit. Where sources disagree on a
+      figure, say that sources differ rather than choosing one. No "Overview" or "Closing Frame"
+      headings, no "In this essay" openers.
+      Match the tense the evidence uses: anything that takes effect after October 2026 stays in
+      the future tense. Give the effective date of any federal change when the evidence states
+      one; without a date, call it enacted, not current law. Do not say which law prevails where
+      federal and Virginia limits differ. Never refer to these instructions or say what the
+      article does not claim.
+
+  - id: explore
+    name: "Explore"
+    description: "What a cannabis lab test (certificate of analysis) tells you"
+    tone: neutral
+    structure: reference
+    depth: contextual
+    section_requirements:
+      - "coa_sections"
+      - "questions_to_ask"
+      - "takeaway"
+    max_words: 1000
+    max_evidence: 45
+    prompt_addendum: >
+      Explain the certificate of analysis (COA) for a tested cannabis product: what it is, who
+      produces it, how a consumer finds the one for their package (for example a QR code or the
+      batch number), and what each section reports: sample information, cannabinoid profile,
+      terpenes, microbials, heavy metals, pesticides, residual solvents, mycotoxins and foreign
+      matter, and moisture or water activity. Then give a few plain questions a reader can ask of
+      any COA, such as whether the batch matches, who did the testing, and whether every safety
+      test passed. Assume the reader has read Learn; do not redefine THC or CBD. Do not survey the
+      eight dimensions of well-being.
+      Informational only. Make no health, medical, therapeutic or wellness claims about cannabis
+      or any cannabinoid. Give no dosing guidance and no legal advice. Do not connect cannabis to
+      sleep, stress, anxiety, pain or any condition. Never use em dashes; use commas, colons or
+      full stops. Where sources disagree, say that sources differ rather than choosing one. No
+      "Overview" or "Closing Frame" headings, no "In this essay" openers.
+      Match the tense the evidence uses: anything that takes effect after October 2026 stays in
+      the future tense. Do not say which law prevails where federal and Virginia limits differ.
+      Never refer to these instructions or say what the article does not claim.
+
+  - id: apply
+    name: "Apply"
+    description: "Cannabis and the law in Virginia"
+    tone: neutral
+    structure: reference
+    depth: practical
+    section_requirements:
+      - "legal_now"
+      - "timeline"
+      - "retail_rules"
+      - "hemp_rules"
+      - "where_to_check"
+    max_words: 1100
+    max_evidence: 45
+    prompt_addendum: >
+      Explain Virginia cannabis law as it stands in 2026 for adults 21 and over: what is legal
+      now (possession, home cultivation, sharing) and what is not (public use, driving, buying or
+      selling outside the medical program); the dated timeline to licensed retail sales under the
+      2026 law; what licensed shopping will look like (edible and package THC limits, packaging
+      and labeling, testing, taxes, store rules and local control); how hemp products differ,
+      including Virginia's per-package total THC limit and the federal hemp definition change; and
+      where to check the official rules (the Virginia Cannabis Control Authority). Say once that
+      this is general information, not legal advice. Do not write tips or micro-actions.
+      Informational only. Make no health, medical, therapeutic or wellness claims about cannabis
+      or any cannabinoid. Do not connect cannabis to sleep, stress, anxiety, pain or any
+      condition. Never use em dashes; use commas, colons or full stops. State dates and numeric
+      limits exactly as the evidence gives them and name the jurisdiction (Virginia or federal)
+      for every legal limit. Where sources disagree on a figure, say that sources differ rather
+      than choosing one. No "Overview" or "Closing Frame" headings, no "In this essay" openers.
+      Match the tense the evidence uses: anything that takes effect after October 2026 stays in
+      the future tense. Give the effective date of any federal change when the evidence states
+      one; without a date, call it enacted, not current law. Do not say which law prevails where
+      federal and Virginia limits differ. Never refer to these instructions or say what the
+      article does not claim.
