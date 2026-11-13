@@ -28,7 +28,7 @@ from cce.output.mdx.meta import merge_topic_meta
 # The description is optional (COR-12) and ends at a line break or an
 # opening bracket (SEC-13): an unclosed marker matches nothing, so it can't
 # take the next paragraph or citation with it.
-_GAP_RE = re.compile(r"\[INSUFFICIENT EVIDENCE(?::[ \t]*([^\]\[\n]*))?\]")
+_GAP_RE = re.compile(r"\[INSUFFICIENT EVIDENCE(?::[ \t]*([^\]\[\r\n]*))?\]")
 
 
 def _strip_evidence_gaps(content: str) -> tuple[str, list[str]]:

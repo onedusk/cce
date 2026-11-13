@@ -26,7 +26,7 @@ MIN_SUBSTANTIVE_WORDS = 15  # min words for a paragraph to be checked for citati
 # The writer's gap marker, in the grammar emit strips from the page
 # (output/mdx _GAP_RE), so a draft the gate calls empty is one emit would
 # write as an empty page.
-_GAP_MARKER_RE = re.compile(r"\[INSUFFICIENT EVIDENCE(?::[ \t]*([^\]\[\n]*))?\]")
+_GAP_MARKER_RE = re.compile(r"\[INSUFFICIENT EVIDENCE(?::[ \t]*([^\]\[\r\n]*))?\]")
 
 logger = logging.getLogger(__name__)
 

@@ -270,8 +270,10 @@ def test_gap_marker_is_stripped_with_or_without_a_description(marker, gaps):
         "Dosage [INSUFFICIENT EVIDENCE: no data.\n\nA verified claim [ev:ev_a].",
         "Dosage [INSUFFICIENT EVIDENCE: no data. A verified claim [ev:ev_a].",
         "Dosage [INSUFFICIENT EVIDENCE\n\nA verified claim [ev:ev_a].",
+        # A lone CR ends a line for MDX (escape.py), so it ends the marker too.
+        "Dosage [INSUFFICIENT EVIDENCE: no data.\r\rThe next paragraph.] Tail.",
     ],
-    ids=["next-paragraph", "same-line", "no-colon"],
+    ids=["next-paragraph", "same-line", "no-colon", "lone-cr"],
 )
 def test_unclosed_gap_marker_matches_nothing(content):
     """SEC-13: the match used to run to the next "]", the end of the
