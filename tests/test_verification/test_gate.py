@@ -651,6 +651,27 @@ def test_unclosed_gap_marker_does_not_hide_the_next_paragraph_from_the_gate():
     assert "no citation marker that resolves" not in result.feedback
 
 
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "[INSUFFICIENT EVIDENCE: no data on dosage.",  # unclosed
+        "[INSUFFICIENT EVIDENCE",  # unclosed, no description
+        "[INSUFFICIENT EVIDENCE: no data on naps [ev:ev_a]]",  # citation inside
+        "[INSUFFICIENT EVIDENCE: no data\non naps]",  # line break inside
+    ],
+)
+def test_a_malformed_gap_marker_never_passes(marker):
+    """SEC-13: emit leaves a marker it can't strip in the page, so the gate
+    asks for a rewrite instead of passing literal placeholder text."""
+    content = f"{_UNCITED_PARA} [ev:ev_a] [ev:ev_b].\n\n{marker}"
+    assert _evaluate_high(content.replace(marker, "")).decision == GateDecision.PASS
+
+    result = _evaluate_high(content)
+
+    assert result.decision == GateDecision.FAIL
+    assert "gap marker is malformed" in result.feedback
+
+
 def test_a_line_starting_with_a_hash_number_is_prose_not_a_heading():
     """'#1 cause' is not a heading (CommonMark needs whitespace after '#'),
     so the paragraph is checked and, when cited, the draft passes."""

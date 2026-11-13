@@ -110,11 +110,13 @@ class QualityGate:
         Decision logic:
         1. If every inline citation marker resolves to ``evidence`` AND at
            least one does AND the draft has no literal footnote syntax
-           (``[^``) AND it has text besides headings and gap markers AND
-           confidence >= pass_threshold AND citation density is met -> PASS
+           (``[^``) and no malformed gap marker AND it has text besides
+           headings and gap markers AND confidence >= pass_threshold AND
+           citation density is met -> PASS
         2. If we haven't hit max iterations AND there are fixable issues
-           (including unresolved markers, footnote syntax, a draft with no
-           citation or no text, and a citation density miss) -> FAIL (rewrite)
+           (including unresolved markers, footnote syntax, a malformed gap
+           marker, a draft with no citation or no text, and a citation
+           density miss) -> FAIL (rewrite)
         3. Otherwise -> REVIEW (needs human)
 
         ``evidence`` is the set the draft was written and verified against
@@ -140,6 +142,9 @@ class QualityGate:
         # gap_acknowledged, confidence 1.0).
         # Both read the text emit publishes, not the raw draft.
         published = _published_text(unit.content)
+        # A gap marker emit can't strip (unclosed, or with a citation or a
+        # line break inside) would be published as literal text (SEC-13).
+        malformed_gap = "[INSUFFICIENT EVIDENCE" in published
         uncited_draft = not _resolved_ids(published, {ev.id: ev for ev in evidence})
         empty_draft = not EV_MARKER_RE.sub("", _strip_headings(published)).strip()
 
@@ -170,6 +175,13 @@ class QualityGate:
                 f"{footnotes} literal footnote marker(s) ('[^') resolve to no "
                 f"evidence. Remove them and any footnote definitions: cite "
                 f"only with [ev:ID] markers."
+            )
+        if malformed_gap:
+            feedback_parts.append(
+                "A gap marker is malformed and would be published as literal "
+                "text. Write it on one line as [INSUFFICIENT EVIDENCE: "
+                "<description of what's missing>], closed, with no citation "
+                "marker inside."
             )
 
         if empty_draft:
@@ -236,6 +248,7 @@ class QualityGate:
         if (
             not unresolved
             and not footnotes
+            and not malformed_gap
             and not uncited_draft
             and not empty_draft
             and confidence >= self._config.pass_threshold
@@ -252,6 +265,7 @@ class QualityGate:
         elif iteration < self._config.max_writer_iterations and (
             bool(unresolved)
             or bool(footnotes)
+            or malformed_gap
             or uncited_draft
             or empty_draft
             or not citation_ok
