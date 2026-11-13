@@ -630,7 +630,8 @@ class Pipeline:
                     job,
                     JobStatus.FAILED,
                     stage=failed_stage,
-                    error_msg=str(e),
+                    # A bare TimeoutError() has an empty str() (COR-16).
+                    error_msg=str(e) or type(e).__name__,
                     error_code=code,
                     error_stage=error_stage,
                 ),
@@ -1538,7 +1539,7 @@ class Pipeline:
         ):
             job.completed_at = datetime.now(UTC)
 
-        if error_msg:
+        if error_msg is not None:
             job.error = JobError(
                 code=error_code,
                 message=error_msg,

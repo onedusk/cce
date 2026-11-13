@@ -671,6 +671,43 @@ def test_update_job_status_transitions():
     assert job2.error.message == "oops"
 
 
+@pytest.mark.integration
+async def test_failure_with_an_empty_exception_message_still_records_an_error(
+    sqlite_store,
+):
+    """COR-16: a bare TimeoutError() has an empty str(); the FAILED job used
+    to carry no error at all. It now names the exception type."""
+
+    class _TimesOut(MockLLMProvider):
+        async def complete(self, *args, **kwargs):
+            raise TimeoutError()
+
+    pipeline = Pipeline(
+        config=make_engine_config(),
+        crawl_adapter=_make_adapter(),
+        evidence_store=sqlite_store,
+        llm=_TimesOut(),
+    )
+
+    result = await pipeline.run(make_curation_request(), make_source_policy())
+
+    assert result.job.status == JobStatus.FAILED
+    assert result.job.error is not None
+    assert result.job.error.message == "TimeoutError"
+    assert result.job.error.code == "pipeline_error"
+    assert result.job.error.stage == JobStage.WRITE
+    assert isinstance(result.error, TimeoutError)
+
+
+@pytest.mark.unit
+def test_update_job_records_an_empty_error_message():
+    """COR-16: only a missing message (None) means "no error to record"."""
+    job = Job(id="job_test", request=make_curation_request())
+    job = Pipeline._update_job(job, JobStatus.FAILED, error_msg="")
+    assert job.error is not None
+    assert job.error.message == ""
+
+
 @pytest.mark.unit
 @pytest.mark.parametrize(
     ("role", "stage"),
