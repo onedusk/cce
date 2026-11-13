@@ -135,11 +135,17 @@ class CurationRequest(BaseModel):
     )
     taxonomy_id: str | None = Field(
         default=None,
-        description="Which TaxonomyConfig to use (Phase 2, optional for Phase 1)",
+        description=(
+            "Lineage label, not a selector: copied to the output's lineage and "
+            "MDX metadata. Evidence is tagged with the taxonomy the engine loaded"
+        ),
     )
     path_config_id: str | None = Field(
         default=None,
-        description="Which PathConfig to use (Phase 2, optional for Phase 1)",
+        description=(
+            "Lineage label, not a selector: copied to the output's lineage and "
+            "MDX metadata. `paths` picks the path configs"
+        ),
     )
     risk_profile: str = Field(
         default="medium",

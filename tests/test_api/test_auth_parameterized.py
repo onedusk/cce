@@ -14,6 +14,8 @@ Structure:
     matches the set of routes known to be public today (health, meta
     only). A new public endpoint addition has to pass through this
     list or the test fails — forces an explicit decision.
+  - A second test requests every route in app.routes without a token and
+    asserts the ones that answer are exactly that inventory (SEC-09).
 
 The exists/valid-resource concern is sidestepped: for the "valid key"
 branch we accept any non-401 status because the routes we're exercising
@@ -27,8 +29,12 @@ from pathlib import Path
 
 import httpx
 import pytest
+from fastapi.routing import iter_route_contexts
 
+from cce.api.app import create_app
 from cce.api.auth import generate_api_key, hash_api_key
+from cce.config.types import APIConfig
+from tests.conftest import make_engine_config
 from tests.test_api.test_jobs_lifecycle import _make_lifecycle_app
 
 pytestmark = pytest.mark.integration
@@ -54,8 +60,8 @@ PROTECTED_ROUTES: list[tuple[str, str, dict | None]] = [
 
 # Routes intentionally public. A new entry here is an explicit decision.
 UNPROTECTED_ROUTES_EXPECTED: set[tuple[str, str]] = {
-    ("GET", "/v1/health"),
-    ("GET", "/v1/meta"),
+    ("GET", "/v1/curate/health"),
+    ("GET", "/v1/curate/meta"),
 }
 
 
@@ -178,6 +184,10 @@ async def test_unauthenticated_error_body_carries_request_id(tmp_path: Path):
         assert resp.status_code == 401
         header_id = resp.headers.get("X-Request-ID")
         assert header_id is not None and header_id.startswith("req_")
+        err = resp.json()["error"]
+        assert err["code"] == "unauthorized"
+        assert err["message"] == "Missing authentication token"
+        assert err["request_id"] == header_id
     finally:
         await job_store.close()
         await evidence_store.close()
@@ -213,3 +223,43 @@ async def test_unprotected_routes_are_explicit(tmp_path: Path):
     finally:
         await job_store.close()
         await evidence_store.close()
+
+
+async def test_only_the_expected_routes_answer_without_a_token(tmp_path: Path):
+    """SEC-09: every route the app serves, the included routers' and the
+    framework's own (/docs, /redoc, /openapi.json), is requested without a
+    token. The ones that do not answer 401 are exactly the inventory."""
+    app, job_store, evidence_store, _key = await _auth_app(tmp_path)
+    routes = {
+        (method, route.path)
+        for route in iter_route_contexts(app.routes)
+        for method in route.methods or ()
+    }
+    public = set()
+    try:
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                for method, path in routes:
+                    resp = await client.request(method, path)
+                    if resp.status_code != 401:
+                        public.add((method, path))
+    finally:
+        await job_store.close()
+        await evidence_store.close()
+    assert public == UNPROTECTED_ROUTES_EXPECTED
+
+
+@pytest.mark.parametrize(("require_auth", "status"), [(True, 404), (False, 200)])
+async def test_docs_and_schema_urls_are_served_only_with_auth_off(
+    require_auth: bool, status: int
+):
+    app = create_app(make_engine_config(api=APIConfig(require_auth=require_auth)))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        for path in ("/docs", "/redoc", "/openapi.json"):
+            assert (await client.get(path)).status_code == status
+    # The schema can still be generated (CI's OpenAPI freshness step).
+    assert "/v1/curate/jobs" in app.openapi()["paths"]

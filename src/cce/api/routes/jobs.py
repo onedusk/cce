@@ -28,6 +28,7 @@ from cce.api.schemas import (
     JobResponse,
     envelope,
     error_envelope,
+    error_responses,
     job_to_response,
 )
 from cce.engine import mark_orphaned, run_pipeline_task
@@ -44,7 +45,12 @@ router = APIRouter(prefix="/v1/curate/jobs", tags=["jobs"])
 # ---------------------------------------------------------------------------
 
 
-@router.post("", status_code=202, response_model=APIEnvelope[JobResponse])
+@router.post(
+    "",
+    status_code=202,
+    response_model=APIEnvelope[JobResponse],
+    responses=error_responses(400, 404, 413),
+)
 async def create_job(
     body: JobCreateRequest,
     request: Request,
@@ -158,7 +164,11 @@ async def create_job(
     )
 
 
-@router.get("/{job_id}", response_model=APIEnvelope[JobResponse])
+@router.get(
+    "/{job_id}",
+    response_model=APIEnvelope[JobResponse],
+    responses=error_responses(404),
+)
 async def get_job(job_id: str, request: Request) -> JSONResponse:
     """Get job status."""
     job = await request.app.state.job_store.get_job(job_id)
@@ -176,7 +186,9 @@ async def get_job(job_id: str, request: Request) -> JSONResponse:
     )
 
 
-@router.get("", response_model=APIEnvelope[JobListResponse])
+@router.get(
+    "", response_model=APIEnvelope[JobListResponse], responses=error_responses(400)
+)
 async def list_jobs(
     request: Request,
     status: str | None = Query(default=None),
@@ -219,7 +231,11 @@ async def list_jobs(
     )
 
 
-@router.delete("/{job_id}", response_model=APIEnvelope[dict])
+@router.delete(
+    "/{job_id}",
+    response_model=APIEnvelope[dict],
+    responses=error_responses(404),
+)
 async def delete_job(
     job_id: str,
     request: Request,
@@ -253,7 +269,10 @@ async def delete_job(
 
 
 @router.post(
-    "/{job_id}/retry", status_code=202, response_model=APIEnvelope[JobResponse]
+    "/{job_id}/retry",
+    status_code=202,
+    response_model=APIEnvelope[JobResponse],
+    responses=error_responses(404, 409),
 )
 async def retry_job(
     job_id: str,
@@ -346,7 +365,11 @@ async def retry_job(
     )
 
 
-@router.get("/{job_id}/package", response_model=APIEnvelope[dict])
+@router.get(
+    "/{job_id}/package",
+    response_model=APIEnvelope[dict],
+    responses=error_responses(404),
+)
 async def get_package(job_id: str, request: Request) -> JSONResponse:
     """Get the completed pipeline output for a job."""
     package = await request.app.state.job_store.get_package(job_id)

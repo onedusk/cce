@@ -41,14 +41,20 @@ async def meta(request: Request) -> JSONResponse:
     """Service metadata — loaded config, policies, queue depth."""
     state = request.app.state
     config = state.config
+    # The taxonomy the pipeline tags with. Its parsed config has no public
+    # accessor (the registry records only the file path), so it is read
+    # through the pipeline's plugin; None when no taxonomy is loaded.
+    taxonomy = getattr(
+        getattr(state.pipeline, "_taxonomy_plugin", None), "_config", None
+    )
 
     return JSONResponse(
         content=envelope(
             data=MetaResponse(
                 engine_version=config.engine_version,
                 policies=sorted(state.policies.keys()),
-                taxonomies=[],  # populated when taxonomy registry exists
-                path_configs=[],  # populated when path config registry exists
+                taxonomies=[taxonomy.id] if taxonomy is not None else [],
+                path_configs=sorted(state.path_configs or {}),
                 queue_depth=len(state.running_tasks),
                 adapters={
                     "crawl": config.crawl.adapter,

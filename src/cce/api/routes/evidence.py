@@ -10,12 +10,16 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from cce.api.middleware import get_request_id
-from cce.api.schemas import APIEnvelope, envelope, error_envelope
+from cce.api.schemas import APIEnvelope, envelope, error_envelope, error_responses
 
 router = APIRouter(prefix="/v1/curate/evidence", tags=["evidence"])
 
 
-@router.get("/{evidence_id}", response_model=APIEnvelope[dict])
+@router.get(
+    "/{evidence_id}",
+    response_model=APIEnvelope[dict],
+    responses=error_responses(404),
+)
 async def get_evidence(
     evidence_id: str,
     request: Request,
