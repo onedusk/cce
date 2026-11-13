@@ -109,12 +109,12 @@ class QualityGate:
 
         Decision logic:
         1. If every inline citation marker resolves to ``evidence`` AND at
-           least one does AND the draft has text besides headings and gap
-           markers AND confidence >= pass_threshold AND citation density is
-           met -> PASS
+           least one does AND the draft has no literal footnote syntax
+           (``[^``) AND it has text besides headings and gap markers AND
+           confidence >= pass_threshold AND citation density is met -> PASS
         2. If we haven't hit max iterations AND there are fixable issues
-           (including unresolved markers, a draft with no citation or no
-           text, and a citation density miss) -> FAIL (rewrite)
+           (including unresolved markers, footnote syntax, a draft with no
+           citation or no text, and a citation density miss) -> FAIL (rewrite)
         3. Otherwise -> REVIEW (needs human)
 
         ``evidence`` is the set the draft was written and verified against
@@ -129,6 +129,10 @@ class QualityGate:
         # density check below counts markers, so phantom IDs could otherwise
         # meet the threshold while citing nothing real.
         unresolved = self._unresolved_markers(unit, evidence)
+
+        # Footnote syntax is emit's output, never the writer's (SEC-05): on
+        # the page a literal [^1] would read as a verified citation.
+        footnotes = unit.content.count("[^")
 
         # No citation, no ship: a draft with no marker that resolves, or with
         # nothing left once headings and gap markers are removed, never
@@ -160,6 +164,12 @@ class QualityGate:
                 f"{len(multi_id)} citation marker(s) put several IDs in one "
                 f"bracket: {' '.join(f'[{m}]' for m in multi_id)}. Use one marker "
                 f"per source, e.g. [ev:ID1][ev:ID2]."
+            )
+        if footnotes:
+            feedback_parts.append(
+                f"{footnotes} literal footnote marker(s) ('[^') resolve to no "
+                f"evidence. Remove them and any footnote definitions: cite "
+                f"only with [ev:ID] markers."
             )
 
         if empty_draft:
@@ -225,6 +235,7 @@ class QualityGate:
         # Decision logic
         if (
             not unresolved
+            and not footnotes
             and not uncited_draft
             and not empty_draft
             and confidence >= self._config.pass_threshold
@@ -240,6 +251,7 @@ class QualityGate:
             )
         elif iteration < self._config.max_writer_iterations and (
             bool(unresolved)
+            or bool(footnotes)
             or uncited_draft
             or empty_draft
             or not citation_ok

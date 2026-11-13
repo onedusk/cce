@@ -70,6 +70,8 @@ def _derive_excerpt(body: str, limit: int = 200) -> str:
         text = block.strip()
         if not text or text.startswith("#"):
             continue
+        # Metadata is raw text: undo the body's footnote escape (SEC-05).
+        text = text.replace("&#91;^", "[^")
         text = re.sub(r"\s+", " ", _FOOTNOTE_RE.sub("", text)).strip()
         if not text:
             continue
