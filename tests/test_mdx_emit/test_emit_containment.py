@@ -106,3 +106,21 @@ def test_symlinked_meta_json_is_replaced_without_being_read(fmt, tmp_path):
     assert not meta_path.is_symlink()
     assert "keep" not in json.loads(meta_path.read_text())
     assert outside.read_text() == '{"keep": 1}'
+
+
+@pytest.mark.parametrize("fmt", sorted(EMITTERS))
+def test_planted_meta_tmp_symlink_is_not_written_through(fmt, tmp_path):
+    """SEC-12: meta.json is written through meta.json.tmp; a link planted
+    under that name pointed the write at a file outside the target."""
+    target = tmp_path / "content"
+    (target / "topic").mkdir(parents=True)
+    outside = tmp_path / "outside.json"
+    outside.write_text("ORIGINAL")
+    (target / "topic" / "meta.json.tmp").symlink_to(outside.resolve())
+
+    EMITTERS[fmt](_package("learn"), target, topic_slug="topic")
+
+    meta_path = target / "topic" / "meta.json"
+    assert not meta_path.is_symlink()
+    assert "jobId" in json.loads(meta_path.read_text())
+    assert outside.read_text() == "ORIGINAL"

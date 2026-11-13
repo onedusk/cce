@@ -80,6 +80,9 @@ def merge_topic_meta(
     # Atomic write: write to temp file then rename to avoid corrupting
     # editorial content if the process crashes mid-write.
     tmp_path = meta_path.with_suffix(".json.tmp")
+    # A planted meta.json.tmp link would be written through (SEC-12).
+    if tmp_path.is_symlink():
+        tmp_path.unlink()
     tmp_path.write_text(
         json.dumps(existing, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
