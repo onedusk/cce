@@ -449,7 +449,7 @@ class ImpliedClaimsConfig(BaseModel):
     counter_evidence_search_limit: int = Field(
         default=10,
         ge=1,
-        description="Max evidence items fetched when checking the dismissed side.",
+        description="Max counter-evidence IDs kept on an implied-claim annotation.",
     )
 
 

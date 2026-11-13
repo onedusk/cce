@@ -301,8 +301,9 @@ async def retry_job(
             ).model_dump(mode="json"),
         )
 
-    # A run whose status is already terminal may still be storing its
-    # package: let it finish so it can't land after this retry's delete.
+    # A run whose status is already terminal may not have returned yet: let
+    # it finish before this retry's delete (since COR-14 its package is
+    # stored before the status).
     tail = state.running_tasks.get(job_id)
     if (
         tail is not None
