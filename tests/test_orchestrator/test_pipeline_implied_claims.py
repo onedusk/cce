@@ -193,6 +193,13 @@ async def test_checker_invoked_before_editor_when_score_fails(sqlite_store):
     editor_user_msg = editor_call["messages"][0].content
     assert "Implied-claim annotations" in editor_user_msg
     assert "sleeping pills" in editor_user_msg
+    # COR-08: the hint names no evidence ID, and a rewrite that acknowledges
+    # the dismissed side without a new marker is kept.
+    [hint] = [
+        line for line in editor_user_msg.splitlines() if line.startswith("- This")
+    ]
+    assert "ev_" not in hint
+    assert edit_records[0].metrics["citations_preserved"] is True
 
 
 async def test_checker_hints_never_name_evidence_outside_the_path(sqlite_store):

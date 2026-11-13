@@ -69,6 +69,13 @@ def test_editor_system_prompt_has_parasitic_directive():
     assert "clinical" in EDITOR_SYSTEM_PROMPT.lower()
 
 
+def test_editor_system_prompt_never_asks_for_a_new_citation():
+    """COR-08: the prompt told the editor to cite an annotation's
+    counter-evidence, and the drift check then discarded that rewrite."""
+    assert "cite the counter-evidence" not in EDITOR_SYSTEM_PROMPT
+    assert "without adding a citation marker" in EDITOR_SYSTEM_PROMPT
+
+
 async def test_editor_preserves_all_citations():
     editor, _llm = _editor(
         _edit_response(
