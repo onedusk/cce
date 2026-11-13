@@ -381,6 +381,8 @@ def emit_mdx_command(
 
     ``--all`` emits the newest completed job of each topic directory (topics
     that slugify alike share one) and lists the older ones as skipped.
+    A job whose topic has no usable slug (``???``) is skipped by name; the
+    rest are emitted and the exit code is 1.
     """
     if sum([bool(job), bool(topic), all_jobs]) > 1:
         typer.echo("Error: --job, --topic, and --all are mutually exclusive", err=True)
@@ -489,7 +491,16 @@ def emit_mdx_command(
         finally:
             await store.close()
 
-    packages = asyncio.run(_fetch())
+    # A topic like '???' slugifies to '': there is no directory to write, and
+    # safe_child_dir would refuse it part-way through the run (SEC-08).
+    packages: list[tuple[PublishPackage, str | None, str | None]] = []
+    skipped = 0
+    for pkg, slug_override, topic_name in asyncio.run(_fetch()):
+        if slug_override or slugify(topic_name or ""):
+            packages.append((pkg, slug_override, topic_name))
+        else:
+            typer.echo(f"skipped job {pkg.job_id}: topic has no usable slug", err=True)
+            skipped += 1
 
     if dry_run:
         for pkg, slug_override, topic_name in packages:
@@ -502,6 +513,8 @@ def emit_mdx_command(
             file_count = len(pkg.units) + 2  # N page files + _evidence.json + meta.json
             typer.echo(f"  ({file_count} files, {len(pkg.evidence)} evidence)")
         typer.echo(f"Dry run — {len(packages)} topic(s), no files written")
+        if skipped:
+            raise typer.Exit(1)
         return
 
     results: list[EmitResult] = []
@@ -558,6 +571,8 @@ def emit_mdx_command(
 
     total_files = sum(r.files_written for r in results)
     typer.echo(f"Total: {total_files} files, {len(results)} topic(s) → {target_path}")
+    if skipped:
+        raise typer.Exit(1)
 
 
 # ---------------------------------------------------------------------------

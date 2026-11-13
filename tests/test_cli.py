@@ -409,6 +409,57 @@ def test_emit_mdx_topic_with_no_completed_jobs(tmp_path):
     assert "no completed jobs for topic 'ghost-topic'" in result.output
 
 
+@pytest.mark.parametrize("fmt", ["generic", "thnklabs"])
+def test_emit_mdx_all_skips_a_topic_with_no_usable_slug(tmp_path, fmt):
+    """SEC-08: a topic like '???' slugifies to ''. It aborted --all with a
+    traceback after the newer topics were written; it is now skipped by name,
+    the other topics are emitted, and the exit code is 1."""
+    import asyncio as _asyncio
+    from datetime import UTC, datetime
+
+    from cce.jobs.store import JobStore
+    from cce.models.job import JobStatus
+    from tests.conftest import make_curation_request, make_job, make_publish_package
+
+    seeded = [
+        make_job(
+            id=f"job_slug0000000{i}",
+            request=make_curation_request(topic=topic),
+            status=JobStatus.COMPLETED,
+            created_at=datetime(2026, 6, i + 1, tzinfo=UTC),
+        )
+        for i, topic in enumerate(["alpha topic", "???", "omega topic"])
+    ]
+
+    async def _seed() -> None:
+        store = JobStore(db_path=tmp_path / "cli_test.db")
+        await store.connect()
+        try:
+            for job in seeded:
+                await store.create_job(job)
+                await store.store_package(job.id, make_publish_package(job_id=job.id))
+        finally:
+            await store.close()
+
+    _asyncio.run(_seed())
+    target = tmp_path / "content"
+    target.mkdir()
+    args = ["emit-mdx", "--all", "--target", str(target), "--format", fmt]
+
+    dry = runner.invoke(app, [*args, "--dry-run"])
+    assert dry.exit_code == 1, dry.output
+    assert "Would emit: /" not in dry.output
+    assert "skipped job job_slug00000001: topic has no usable slug" in dry.output
+    assert "Would emit: alpha-topic/" in dry.output
+    assert list(target.iterdir()) == []
+
+    result = runner.invoke(app, args)
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SystemExit)
+    assert "skipped job job_slug00000001: topic has no usable slug" in result.output
+    assert sorted(p.name for p in target.iterdir()) == ["alpha-topic", "omega-topic"]
+
+
 # ---------------------------------------------------------------------------
 # curate / status / jobs (M08, T-08.03)
 # ---------------------------------------------------------------------------
