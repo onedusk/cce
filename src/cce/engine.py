@@ -261,6 +261,10 @@ class JobHandle:
 
         Embedded mode: a QUEUED or RUNNING job with no task in this process
         (left by a crash or kill) is recorded FAILED with code ``orphaned``.
+
+        Remote mode: a QUEUED or RUNNING job is cancelled and deleted on the
+        server, its record included (embedded mode keeps a CANCELLED
+        record). A job that already finished is left alone, in both modes.
         """
         if self._running_tasks is not None:
             task = self._running_tasks.pop(self._job_id, None)
@@ -279,6 +283,10 @@ class JobHandle:
                     await mark_orphaned(job, self._job_store)
             return
         assert self._http_client is not None
+        # DELETE removes the job and its package: not for a finished job (CR-04).
+        resp = await self._http_client.get(f"/v1/curate/jobs/{self._job_id}")
+        if resp.is_success and resp.json()["data"]["status"] in _TERMINAL_STATUSES:
+            return
         await self._http_client.delete(f"/v1/curate/jobs/{self._job_id}")
 
     async def retry(self, *, force: bool = False) -> Job:
