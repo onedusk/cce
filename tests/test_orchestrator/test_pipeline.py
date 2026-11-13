@@ -19,11 +19,13 @@ from cce.orchestrator.pipeline import (
     _per_path_iteration_counts,
 )
 from cce.output.mdx.citations import build_citation_index
+from cce.output.mdx.evidence import export_evidence
 from cce.verification.gate import GateDecision
 from tests.conftest import (
     MockCrawlAdapter,
     MockLLMProvider,
     cite_prompt_evidence,
+    make_crawl_result,
     make_curation_request,
     make_engine_config,
     make_source_policy,
@@ -58,9 +60,65 @@ async def test_pipeline_happy_path(sqlite_store):
     result = await pipeline.run(make_curation_request(), make_source_policy())
 
     assert result.succeeded is True
+    assert result.ready_for_approval is False
     assert result.package is not None
     assert len(result.package.units) == 1
     assert result.job.status == JobStatus.COMPLETED
+
+
+@pytest.mark.integration
+async def test_unit_citations_follow_the_markers_not_citations_used(sqlite_store):
+    """COR-13: the draft cites two sources inline but citations_used lists
+    one. The page footnotes both (from the markers); unit.citations, and so
+    _evidence.json and source_diversity, used to cover only the listed one."""
+    urls = ["https://one.example/a", "https://two.example/a"]
+    adapter = MockCrawlAdapter(
+        search_map={"test topic": urls},
+        url_map={
+            url: make_crawl_result(
+                url=url,
+                markdown=(
+                    f"Source {i} says adults who sleep eight hours remember "
+                    "more of what they studied the day before."
+                ),
+            )
+            for i, url in enumerate(urls)
+        },
+    )
+    writer = json.dumps(
+        {
+            "content": (
+                "Sleep helps memory in adults [ev:ev_001]. A second source "
+                "agrees with that finding [ev:ev_002]."
+            ),
+            "citations_used": ["ev_001"],
+            "evidence_map": [{"claim": "c", "evidence_ids": ["ev_001"]}],
+            "gaps": [],
+        }
+    )
+    pipeline = Pipeline(
+        config=make_engine_config(),
+        crawl_adapter=adapter,
+        evidence_store=sqlite_store,
+        llm=_llm(writer, _verifier_json(supported=10, total=10, gaps=0)),
+    )
+
+    result = await pipeline.run(make_curation_request(), make_source_policy())
+
+    assert result.job.status == JobStatus.COMPLETED
+    [unit] = result.package.units
+    by_id = {ev.id: ev for ev in result.package.evidence}
+    footnoted = [
+        c.id
+        for c in build_citation_index(
+            unit.content, by_id, citation_key="evidence"
+        ).citations
+    ]
+    assert len(footnoted) == 2
+    assert [c.evidence_id for c in unit.citations] == footnoted
+    assert unit.scores.source_diversity == 1.0
+    sidecar = json.loads(export_evidence([unit], by_id, path_order=("blog",)))
+    assert [entry["id"] for entry in sidecar] == footnoted
 
 
 @pytest.mark.integration
@@ -613,9 +671,9 @@ async def test_trio_empty_content_path_routes_to_review(sqlite_store):
     # Empty path produced nothing publishable; the other two passed.
     assert {u.path for u in result.package.units} == {"learn", "apply"}
     assert result.job.status == JobStatus.REVIEW_REQUIRED
-    # Per-path counts attribute the empty path to zero iterations (no WRITE
-    # record is appended when the writer returns no content).
-    assert _per_path_iteration_counts(result.job, _TRIO) == [1, 0, 1]
+    # The empty path's writer call counts as its one iteration: the WRITE
+    # record is appended even when the writer returns no content (OPS-12).
+    assert _per_path_iteration_counts(result.job, _TRIO) == [1, 1, 1]
     # The empty path never reached the verifier.
     assert ("verifier", "explore") not in llm.calls
 
@@ -669,6 +727,43 @@ def test_update_job_status_transitions():
     assert job2.status == JobStatus.FAILED
     assert job2.error is not None
     assert job2.error.message == "oops"
+
+
+@pytest.mark.integration
+async def test_failure_with_an_empty_exception_message_still_records_an_error(
+    sqlite_store,
+):
+    """COR-16: a bare TimeoutError() has an empty str(); the FAILED job used
+    to carry no error at all. It now names the exception type."""
+
+    class _TimesOut(MockLLMProvider):
+        async def complete(self, *args, **kwargs):
+            raise TimeoutError()
+
+    pipeline = Pipeline(
+        config=make_engine_config(),
+        crawl_adapter=_make_adapter(),
+        evidence_store=sqlite_store,
+        llm=_TimesOut(),
+    )
+
+    result = await pipeline.run(make_curation_request(), make_source_policy())
+
+    assert result.job.status == JobStatus.FAILED
+    assert result.job.error is not None
+    assert result.job.error.message == "TimeoutError"
+    assert result.job.error.code == "pipeline_error"
+    assert result.job.error.stage == JobStage.WRITE
+    assert isinstance(result.error, TimeoutError)
+
+
+@pytest.mark.unit
+def test_update_job_records_an_empty_error_message():
+    """COR-16: only a missing message (None) means "no error to record"."""
+    job = Job(id="job_test", request=make_curation_request())
+    job = Pipeline._update_job(job, JobStatus.FAILED, error_msg="")
+    assert job.error is not None
+    assert job.error.message == ""
 
 
 @pytest.mark.unit
@@ -779,6 +874,9 @@ async def test_human_publish_policy_passed_run_awaits_approval(sqlite_store):
     assert result.package is not None
     assert result.package.verification[0].decision == "pass"
     assert result.succeeded is False
+    # CR-16: the run has a true state of its own, not three False ones.
+    assert result.ready_for_approval is True
+    assert (result.needs_review, result.failed) == (False, False)
 
 
 @pytest.mark.integration

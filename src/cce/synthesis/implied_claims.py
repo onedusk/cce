@@ -138,9 +138,8 @@ class ImpliedClaimChecker:
             cited_evidence: Evidence the path can cite (the writer's pool).
                 Counter-evidence is searched in this list only, not the
                 store: a store-wide search returned other jobs' evidence,
-                and a hint naming an ID the path cannot cite makes the
-                editor's rewrite citation drift, discarded after paying for
-                the call. It also keeps tenants apart without a store (B6).
+                which the path cannot cite. It also keeps tenants apart
+                without a store (B6).
                 So counter-evidence is a subset of this pool, and the
                 release-valve ratio reads as the share of the path's own
                 evidence that supports the dismissed side: at or below
@@ -183,7 +182,12 @@ class ImpliedClaimChecker:
                 ImpliedClaimAnnotation(
                     frame=frame,
                     dismissed_topic=dismissed,
-                    counter_evidence_ids=[ev.id for ev in counter],
+                    # The limit caps the IDs kept, after the ratio was
+                    # taken on every match (COR-08).
+                    counter_evidence_ids=[
+                        ev.id
+                        for ev in counter[: self._config.counter_evidence_search_limit]
+                    ],
                     rewrite_hint=self._build_hint(dismissed, counter),
                 )
             )
@@ -231,7 +235,9 @@ class ImpliedClaimChecker:
             parsed = extract_json(response.content)
             if not isinstance(parsed, dict):  # unreadable: no topic, no hint
                 parsed = {}
-            return str(parsed.get("dismissed_topic", "")).strip()
+            # A null or non-string topic is no topic, not the text "None".
+            topic = parsed.get("dismissed_topic")
+            return topic.strip() if isinstance(topic, str) else ""
 
         return await with_llm_retry(_attempt)
 
@@ -250,7 +256,7 @@ class ImpliedClaimChecker:
                 if needle in (ev.title or "").casefold()
                 or needle in ev.excerpt.casefold()
             ]
-            return matches[: self._config.counter_evidence_search_limit]
+            return matches
         # search_strategy == "embedding" — deferred (Stage 1 ImpliedClaimsConfig)
         raise NotImplementedError("Embedding-based counter-search deferred to post-H4")
 
@@ -272,9 +278,11 @@ class ImpliedClaimChecker:
         return ratio <= self._config.dismissal_release_valve_ratio
 
     def _build_hint(self, dismissed: str, counter: list[Evidence]) -> str:
-        ids = ", ".join(ev.id for ev in counter[:5])
+        # No evidence IDs: the editor's drift check discards a rewrite that
+        # adds a marker, so a hint must not invite one (COR-08).
         return (
-            f"This contrast dismisses '{dismissed}', but evidence [{ids}] "
-            f"shows '{dismissed}' is valid in context. Rewrite to acknowledge "
-            f"the spectrum rather than collapse to a binary."
+            f"This contrast dismisses '{dismissed}', but {len(counter)} "
+            f"excerpt(s) in this path's evidence show '{dismissed}' is valid "
+            f"in context. Rewrite to acknowledge the spectrum rather than "
+            f"collapse to a binary. Do not add a citation marker for it."
         )

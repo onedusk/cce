@@ -22,7 +22,9 @@ from tests.conftest import (
     make_engine_config,
     make_source_policy,
 )
+from tests.test_orchestrator.conftest import make_adapter as _make_adapter
 from tests.test_orchestrator.conftest import verifier_json as _verifier_json
+from tests.test_orchestrator.conftest import writer_json as _writer_json
 from tests.test_orchestrator.test_pipeline_implied_claims import (
     _ai_flat_with_contrast,
     _checker,
@@ -269,3 +271,57 @@ async def test_a_model_without_a_price_means_no_estimate(sqlite_store):
     )
 
     assert _publish_metrics(result)["cost_estimate_usd"] is None
+
+
+WRITER_USD = (1000 * 2 + 2000 * 10 + 3000 * 2.5) / 1_000_000
+VERIFIER_USD = (200 * 5 + 800 * 25 + 3000 * 0.5) / 1_000_000
+
+
+@pytest.mark.parametrize(
+    ("script", "expected_usd"),
+    [
+        # The job's only LLM call returns no draft.
+        ([(_writer_json(content=""), *WRITER)], WRITER_USD),
+        # Iteration 1 fails the gate; the iteration-2 writer returns no draft.
+        (
+            [
+                (_writer_json(), *WRITER),
+                (
+                    _verifier_json(supported=3, total=10, unsupported=5, gaps=2),
+                    *VERIFIER,
+                ),
+                (_writer_json(content=""), *WRITER),
+            ],
+            2 * WRITER_USD + VERIFIER_USD,
+        ),
+    ],
+    ids=["only-call", "second-iteration"],
+)
+async def test_an_empty_writer_reply_is_priced(sqlite_store, script, expected_usd):
+    """OPS-12: an empty draft's tokens were in the job totals but, with no
+    WRITE record, not in the estimate (null, or a partial sum)."""
+    llm = MockLLMProvider(
+        [
+            LLMResponse(content=c, model=m, usage=u, stop_reason="end_turn")
+            for c, m, u in script
+        ],
+        cite_placeholders=True,
+    )
+    pipeline = Pipeline(
+        config=make_engine_config(),
+        crawl_adapter=_make_adapter(),
+        evidence_store=sqlite_store,
+        llm=llm,
+        pricing=load_model_pricing(),
+    )
+    result = await pipeline.run(make_curation_request(), make_source_policy())
+
+    assert len(llm.calls) == len(script)
+    metrics = _publish_metrics(result)
+    assert metrics["cost_estimate_usd"] == pytest.approx(expected_usd)
+    staged = sum(
+        s.metrics.get("tokens_input", 0)
+        for s in result.job.stages
+        if s.stage in (JobStage.WRITE, JobStage.VERIFY)
+    )
+    assert staged == metrics["token_usage"]["input_tokens"]
