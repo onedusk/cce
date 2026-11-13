@@ -52,7 +52,9 @@ def merge_topic_meta(
             scaffolding in published copy. ``None`` clears the field entirely.
     """
     existing: dict = {}
-    if meta_path.exists():
+    # A symlinked meta.json is not read (SEC-12: its target can be a file
+    # outside the target directory); os.replace below swaps the link itself.
+    if meta_path.exists() and not meta_path.is_symlink():
         existing = json.loads(meta_path.read_text(encoding="utf-8"))
 
     cce_data: dict = {

@@ -88,6 +88,19 @@ def safe_child_dir(root: Path, parent: Path, name: str) -> Path:
     return child
 
 
+def safe_write_text(path: Path, text: str) -> None:
+    """Write a file emit owns, refused when ``path`` is a symlink (SEC-12):
+    ``safe_child_dir`` checks the directory, but ``write_text`` follows a
+    link at the file itself, which can point outside the target directory.
+    """
+    if path.is_symlink():
+        raise ValueError(
+            f"refusing to write outside the target directory: {path.name!r} is "
+            "a symlink"
+        )
+    path.write_text(text, encoding="utf-8")
+
+
 def slugify(text: str) -> str:
     """Convert a topic name to a URL-safe slug.
 
@@ -165,13 +178,13 @@ def emit_mdx(
             curated_at=curated_at,
             citation_key=citation_key,
         )
-        (path_dir / "page.mdx").write_text(mdx_content, encoding="utf-8")
+        safe_write_text(path_dir / "page.mdx", mdx_content)
         files_written += 1
         paths_written.append(unit.path)
 
     # Write _evidence.json
     evidence_json = export_evidence(package.units, evidence_by_id)
-    (topic_dir / "_evidence.json").write_text(evidence_json, encoding="utf-8")
+    safe_write_text(topic_dir / "_evidence.json", evidence_json)
     files_written += 1
 
     # Merge meta.json

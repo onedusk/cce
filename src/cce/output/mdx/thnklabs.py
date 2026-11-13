@@ -31,6 +31,7 @@ from cce.output.mdx import (
     EmitResult,
     _strip_evidence_gaps,
     safe_child_dir,
+    safe_write_text,
     slugify,
 )
 from cce.output.mdx.citations import (
@@ -200,12 +201,12 @@ def emit_thnklabs(
             curated_at=curated_at,
             citation_key=citation_key,
         )
-        (path_dir / "page.mdx").write_text(mdx_content, encoding="utf-8")
+        safe_write_text(path_dir / "page.mdx", mdx_content)
         files_written += 1
         paths_written.append(unit.path)
 
-    (topic_dir / "_evidence.json").write_text(
-        export_evidence(package.units, evidence_by_id), encoding="utf-8"
+    safe_write_text(
+        topic_dir / "_evidence.json", export_evidence(package.units, evidence_by_id)
     )
     files_written += 1
 
