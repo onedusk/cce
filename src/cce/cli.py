@@ -96,8 +96,8 @@ def batch_command(
     the later entries run, and is cancelled if still running when cce exits.
     """
     import yaml
+    from pydantic import ValidationError
 
-    from cce.config.loader import ConfigError
     from cce.engine import CurationEngine
     from cce.models.job import JobStatus
     from cce.models.request import CurationRequest
@@ -131,16 +131,24 @@ def batch_command(
                     )
                     continue
 
-                request = CurationRequest(
-                    topic=topic,
-                    subtopics=entry.get("subtopics", []),
-                    paths=paths,
-                    audience=entry.get("audience", audience),
-                    policy_id=policy_id,
-                    taxonomy_id=taxonomy_id,
-                    path_config_id=path_config_id,
-                    risk_profile=entry.get("risk_profile", risk_profile),
-                )
+                try:
+                    request = CurationRequest(
+                        topic=topic,
+                        subtopics=entry.get("subtopics", []),
+                        paths=paths,
+                        audience=entry.get("audience", audience),
+                        policy_id=policy_id,
+                        taxonomy_id=taxonomy_id,
+                        path_config_id=path_config_id,
+                        risk_profile=entry.get("risk_profile", risk_profile),
+                    )
+                except ValidationError as e:
+                    typer.echo(
+                        f"[{i}/{len(entries)}] SKIP (invalid: "
+                        f"{_format_validation_error(e, set())}): {entry!r}",
+                        err=True,
+                    )
+                    continue
 
                 typer.echo(f"[{i}/{len(entries)}] Starting: {topic}")
                 handle = await engine.curate(request)
@@ -164,7 +172,10 @@ def batch_command(
 
     try:
         asyncio.run(_run())
-    except ConfigError as e:
+    except ValidationError as e:
+        typer.echo(f"Error: {_format_validation_error(e, set())}", err=True)
+        raise typer.Exit(1) from None
+    except ValueError as e:  # ConfigError, or an unknown policy id (CR-14)
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1) from None
 
@@ -605,12 +616,11 @@ def curate(
     Also 1 when the job is still running after ``--timeout`` seconds
     (OPS-08). The job runs in this process, so it is cancelled on exit.
     """
-    from cce.config.loader import ConfigError
+    from pydantic import ValidationError
+
     from cce.engine import CurationEngine
     from cce.models.job import JobStatus
     from cce.models.request import CurationRequest
-
-    request = CurationRequest(topic=topic, paths=list(paths), policy_id=policy_id)
 
     async def _run() -> JobStatus:
         # CurationEngine.embedded() calls validate_required_keys before any
@@ -651,8 +661,12 @@ def curate(
             await engine.close()
 
     try:
+        request = CurationRequest(topic=topic, paths=list(paths), policy_id=policy_id)
         final_status = asyncio.run(_run())
-    except ConfigError as e:
+    except ValidationError as e:  # an invalid --path
+        typer.echo(f"Error: {_format_validation_error(e, set())}", err=True)
+        raise typer.Exit(1) from None
+    except ValueError as e:  # ConfigError, or an unknown policy id (CR-14)
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1) from None
 
@@ -665,11 +679,12 @@ def curate(
 @app.command()
 def status(
     job_id: str = typer.Argument(..., help="Job id, e.g. job_1a2b3c4d5e6f"),
+    config: str | None = typer.Option(None, help="Path to config YAML"),
 ) -> None:
     """Print one job's status, stage records, and gate decisions."""
 
     async def _run() -> None:
-        store = await _get_job_store(None)
+        store = await _get_job_store(config)
         try:
             job = await store.get_job(job_id)
             if job is None:
@@ -705,6 +720,7 @@ def jobs(
     status_filter: str | None = typer.Option(
         None, "--status", help="Filter by status (e.g. completed, review_required)."
     ),
+    config: str | None = typer.Option(None, help="Path to config YAML"),
 ) -> None:
     """List recent jobs (id, status, topic, created_at), newest first."""
     from cce.models.job import JobStatus
@@ -721,7 +737,7 @@ def jobs(
             raise typer.Exit(1) from None
 
     async def _run() -> None:
-        store = await _get_job_store(None)
+        store = await _get_job_store(config)
         try:
             listed = await store.list_jobs(status=parsed_status, limit=limit)
             if not listed:
