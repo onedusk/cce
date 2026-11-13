@@ -10,6 +10,11 @@ reaches a prompt only inside an element the prompt builder writes itself
 forge one of the prompts' ``=== ... ===`` fences (which the Anthropic
 provider also splits the prompt cache on). Deterministic, no nonce, so the
 cached prefix stays byte-stable.
+
+The trust fields the engine derives (reputation, peer-reviewed, primary
+source, conflict of interest) are written on a header line of their own,
+before the line that carries the crawled URL, title and author, and that
+line cannot spell the headers' separators (SEC-10).
 """
 
 from __future__ import annotations
@@ -34,15 +39,19 @@ _FENCE_WORDS = "EVIDENCE|END|DRAFT|EDITED|ALREADY|VERIFIER|CONTEXT|SOURCES"
 _FENCE_SPAN_RE = re.compile(rf"={{3,}}([ \t]*(?:{_FENCE_WORDS})\b[^=\n]*?)={{3,}}")
 _FENCE_OPEN_RE = re.compile(rf"={{3,}}(?=[ \t]*(?:{_FENCE_WORDS})\b)")
 # Any other fence has to be a whole line ("=== NEW RULES ==="), so code such
-# as ``x === Infinity || y === NaN`` is left alone.
+# as ``x === Infinity || y === NaN`` is left alone. A no-break space around
+# it reads as blank too (SEC-10).
 _FENCE_LINE_RE = re.compile(
-    r"^([ \t]*)={3,}([^=\n]*[A-Za-z][^=\n]*?)={3,}([ \t]*)$", re.MULTILINE
+    r"^([ \t\xa0]*)={3,}([^=\n]*[A-Za-z][^=\n]*?)={3,}([ \t\xa0]*)$", re.MULTILINE
 )
+_CR_RE = re.compile(r"\r\n?")
 
 
 def defang(text: str) -> str:
     """Neutralise reserved tags and fences in untrusted text. Idempotent,
-    and the identity on text that contains neither."""
+    and the identity on text that contains neither, line endings aside: CR
+    and CRLF become LF, so a fence line cannot end in a CR (SEC-10)."""
+    text = _CR_RE.sub("\n", text)
     text = _FENCE_SPAN_RE.sub(lambda m: f"=={m.group(1)}==", text)
     text = _FENCE_OPEN_RE.sub("==", text)
     text = _FENCE_LINE_RE.sub(lambda m: f"{m[1]}=={m[2]}=={m[3]}", text)
@@ -57,8 +66,25 @@ def quote_untrusted(tag: str, text: str) -> str:
 
 
 def _one_line(text: str) -> str:
-    """Metadata (URL, title, author) on one line, defanged."""
+    """Metadata (an ID, a reputation) on one line, defanged."""
     return defang(" ".join(text.split()))
+
+
+# The headers' own separators: "URL: ... | Title: ..." and "[peer-reviewed]".
+# Crawled text must not be able to spell them (SEC-10). Replaced before
+# ``defang``, which then sees any "</evidence" a replacement completes.
+_URL_SEPARATORS = str.maketrans({"|": "%7C", "[": "%5B", "]": "%5D"})
+_TEXT_SEPARATORS = str.maketrans("|[]", "/()")
+
+
+def _url(url: str) -> str:
+    """A crawled URL on one line, its header separators percent-encoded."""
+    return _one_line(url.translate(_URL_SEPARATORS))
+
+
+def _text(text: str) -> str:
+    """A crawled title or author on one line, without header separators."""
+    return _one_line(text.translate(_TEXT_SEPARATORS))
 
 
 def _open_evidence(ev: Evidence) -> str:
@@ -117,26 +143,34 @@ def format_evidence_for_prompt(
 
 
 def _format_writer(evidence: list[Evidence]) -> str:
-    """Detailed format with metadata for the writer prompt."""
+    """Detailed format with metadata for the writer prompt.
+
+    The engine's trust fields (Reputation, Type) get a line of their own
+    before the crawled URL, title and author, so that text cannot add to
+    them (SEC-10).
+    """
     lines: list[str] = []
     for ev in evidence:
-        meta_parts = [f"URL: {_one_line(ev.url)}"]
+        meta_parts = [f"URL: {_url(ev.url)}"]
         if ev.title:
-            meta_parts.append(f"Title: {_one_line(ev.title)}")
+            meta_parts.append(f"Title: {_text(ev.title)}")
         if ev.author:
-            meta_parts.append(f"Author: {_one_line(ev.author)}")
+            meta_parts.append(f"Author: {_text(ev.author)}")
         if ev.published_at:
             meta_parts.append(f"Published: {ev.published_at.strftime('%Y-%m-%d')}")
+        trust_parts: list[str] = []
         if ev.source_quality and ev.source_quality.domain_reputation:
             reputation = _one_line(ev.source_quality.domain_reputation)
-            meta_parts.append(f"Reputation: {reputation}")
+            trust_parts.append(f"Reputation: {reputation}")
         if ev.source_quality and ev.source_quality.is_peer_reviewed:
-            meta_parts.append("Type: peer-reviewed")
+            trust_parts.append("Type: peer-reviewed")
         if ev.source_quality and ev.source_quality.is_primary_source:
-            meta_parts.append("Type: primary-source")
+            trust_parts.append("Type: primary-source")
 
         lines.append(_open_evidence(ev))
         lines.append(f"--- EVIDENCE [{_one_line(ev.id)}] ---")
+        if trust_parts:
+            lines.append(" | ".join(trust_parts))
         lines.append(" | ".join(meta_parts))
         lines.append(defang(ev.excerpt))
         lines.append("</evidence>")
@@ -146,7 +180,11 @@ def _format_writer(evidence: list[Evidence]) -> str:
 
 
 def _format_verifier(evidence: list[Evidence], *, quality_tags: bool = True) -> str:
-    """Compact format with quality tags for the verifier prompt."""
+    """Compact format with quality tags for the verifier prompt.
+
+    The tags get a line of their own before the crawled URL, which cannot
+    spell one (SEC-10).
+    """
     lines: list[str] = []
     for ev in evidence:
         tags: list[str] = []
@@ -157,11 +195,10 @@ def _format_verifier(evidence: list[Evidence], *, quality_tags: bool = True) -> 
                 tags.append("primary-source")
             if ev.source_quality.conflict_of_interest:
                 tags.append("potential-COI")
-        header = f"[{_one_line(ev.id)}] (URL: {_one_line(ev.url)})"
-        if tags:
-            header += " [" + "] [".join(tags) + "]"
         lines.append(_open_evidence(ev))
-        lines.append(header)
+        if tags:
+            lines.append("[" + "] [".join(tags) + "]")
+        lines.append(f"[{_one_line(ev.id)}] (URL: {_url(ev.url)})")
         lines.append(defang(ev.excerpt))
         lines.append("</evidence>")
         lines.append("")
