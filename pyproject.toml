@@ -7,6 +7,7 @@ name = "cce"
 version = "0.3.0"
 description = "Evidence-first content curation engine with enforced citations"
 requires-python = ">=3.11"
+authors = [{ name = "Dusk Labs LLC", email = "one@dusk-labs.com" }]
 dependencies = [
     "pydantic>=2.0",
     "pyyaml>=6.0",
