@@ -89,9 +89,28 @@ def error_envelope(
     )
 
 
+# Stated here, not taken from http.HTTPStatus: its phrases for 413 and 422
+# changed in Python 3.13, and the committed schema must not depend on the
+# interpreter that generated it.
+_ERROR_DESCRIPTIONS = {
+    400: "Bad Request",
+    401: "Unauthorized",
+    404: "Not Found",
+    409: "Conflict",
+    413: "Payload Too Large",
+    422: "Validation Error",
+}
+
+
 def error_responses(*status_codes: int) -> dict[int | str, dict[str, Any]]:
     """OpenAPI ``responses`` entries: the error envelope at these statuses."""
-    return {status: {"model": APIEnvelope[None]} for status in status_codes}
+    return {
+        status: {
+            "model": APIEnvelope[None],
+            "description": _ERROR_DESCRIPTIONS[status],
+        }
+        for status in status_codes
+    }
 
 
 # ---------------------------------------------------------------------------

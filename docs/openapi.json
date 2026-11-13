@@ -40,54 +40,54 @@
             }
           },
           "401": {
+            "description": "Unauthorized",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/APIEnvelope_NoneType_"
                 }
               }
-            },
-            "description": "Unauthorized"
+            }
           },
           "422": {
+            "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/APIEnvelope_NoneType_"
                 }
               }
-            },
-            "description": "Unprocessable Entity"
+            }
           },
           "400": {
+            "description": "Bad Request",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/APIEnvelope_NoneType_"
                 }
               }
-            },
-            "description": "Bad Request"
+            }
           },
           "404": {
+            "description": "Not Found",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/APIEnvelope_NoneType_"
                 }
               }
-            },
-            "description": "Not Found"
+            }
           },
           "413": {
+            "description": "Payload Too Large",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/APIEnvelope_NoneType_"
                 }
               }
-            },
-            "description": "Request Entity Too Large"
+            }
           }
         }
       },
@@ -172,34 +172,34 @@
             }
           },
           "401": {
+            "description": "Unauthorized",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/APIEnvelope_NoneType_"
                 }
               }
-            },
-            "description": "Unauthorized"
+            }
           },
           "422": {
+            "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/APIEnvelope_NoneType_"
                 }
               }
-            },
-            "description": "Unprocessable Entity"
+            }
           },
           "400": {
+            "description": "Bad Request",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/APIEnvelope_NoneType_"
                 }
               }
-            },
-            "description": "Bad Request"
+            }
           }
         }
       }
@@ -240,34 +240,34 @@
             }
           },
           "401": {
+            "description": "Unauthorized",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/APIEnvelope_NoneType_"
                 }
               }
-            },
-            "description": "Unauthorized"
+            }
           },
           "422": {
+            "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/APIEnvelope_NoneType_"
                 }
               }
-            },
-            "description": "Unprocessable Entity"
+            }
           },
           "404": {
+            "description": "Not Found",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/APIEnvelope_NoneType_"
                 }
               }
-            },
-            "description": "Not Found"
+            }
           }
         }
       },
@@ -306,34 +306,34 @@
             }
           },
           "401": {
+            "description": "Unauthorized",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/APIEnvelope_NoneType_"
                 }
               }
-            },
-            "description": "Unauthorized"
+            }
           },
           "422": {
+            "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/APIEnvelope_NoneType_"
                 }
               }
-            },
-            "description": "Unprocessable Entity"
+            }
           },
           "404": {
+            "description": "Not Found",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/APIEnvelope_NoneType_"
                 }
               }
-            },
-            "description": "Not Found"
+            }
           }
         }
       }
@@ -386,44 +386,44 @@
             }
           },
           "401": {
+            "description": "Unauthorized",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/APIEnvelope_NoneType_"
                 }
               }
-            },
-            "description": "Unauthorized"
+            }
           },
           "422": {
+            "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/APIEnvelope_NoneType_"
                 }
               }
-            },
-            "description": "Unprocessable Entity"
+            }
           },
           "404": {
+            "description": "Not Found",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/APIEnvelope_NoneType_"
                 }
               }
-            },
-            "description": "Not Found"
+            }
           },
           "409": {
+            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/APIEnvelope_NoneType_"
                 }
               }
-            },
-            "description": "Conflict"
+            }
           }
         }
       }
@@ -464,34 +464,34 @@
             }
           },
           "401": {
+            "description": "Unauthorized",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/APIEnvelope_NoneType_"
                 }
               }
-            },
-            "description": "Unauthorized"
+            }
           },
           "422": {
+            "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/APIEnvelope_NoneType_"
                 }
               }
-            },
-            "description": "Unprocessable Entity"
+            }
           },
           "404": {
+            "description": "Not Found",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/APIEnvelope_NoneType_"
                 }
               }
-            },
-            "description": "Not Found"
+            }
           }
         }
       }
@@ -532,34 +532,34 @@
             }
           },
           "401": {
+            "description": "Unauthorized",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/APIEnvelope_NoneType_"
                 }
               }
-            },
-            "description": "Unauthorized"
+            }
           },
           "422": {
+            "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/APIEnvelope_NoneType_"
                 }
               }
-            },
-            "description": "Unprocessable Entity"
+            }
           },
           "404": {
+            "description": "Not Found",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/APIEnvelope_NoneType_"
                 }
               }
-            },
-            "description": "Not Found"
+            }
           }
         }
       }
@@ -635,24 +635,24 @@
             }
           },
           "401": {
+            "description": "Unauthorized",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/APIEnvelope_NoneType_"
                 }
               }
-            },
-            "description": "Unauthorized"
+            }
           },
           "422": {
+            "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/APIEnvelope_NoneType_"
                 }
               }
-            },
-            "description": "Unprocessable Entity"
+            }
           }
         }
       }

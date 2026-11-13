@@ -210,3 +210,8 @@ def test_openapi_documents_job_statuses_and_error_responses(test_config):
     assert errors("get", "/v1/curate/meta") == set()
     # The framework's {"detail": [...]} 422 shape is no longer returned.
     assert "HTTPValidationError" not in components
+    # Descriptions are stated, not the interpreter's status phrases: Python
+    # 3.13 renamed 413 and 422, and docs/openapi.json is compared in CI.
+    post = schema["paths"]["/v1/curate/jobs"]["post"]["responses"]
+    assert post["413"]["description"] == "Payload Too Large"
+    assert post["422"]["description"] == "Validation Error"
