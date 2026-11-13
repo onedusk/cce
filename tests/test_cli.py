@@ -409,6 +409,57 @@ def test_emit_mdx_topic_with_no_completed_jobs(tmp_path):
     assert "no completed jobs for topic 'ghost-topic'" in result.output
 
 
+@pytest.mark.parametrize("fmt", ["generic", "thnklabs"])
+def test_emit_mdx_all_skips_a_topic_with_no_usable_slug(tmp_path, fmt):
+    """SEC-08: a topic like '???' slugifies to ''. It aborted --all with a
+    traceback after the newer topics were written; it is now skipped by name,
+    the other topics are emitted, and the exit code is 1."""
+    import asyncio as _asyncio
+    from datetime import UTC, datetime
+
+    from cce.jobs.store import JobStore
+    from cce.models.job import JobStatus
+    from tests.conftest import make_curation_request, make_job, make_publish_package
+
+    seeded = [
+        make_job(
+            id=f"job_slug0000000{i}",
+            request=make_curation_request(topic=topic),
+            status=JobStatus.COMPLETED,
+            created_at=datetime(2026, 6, i + 1, tzinfo=UTC),
+        )
+        for i, topic in enumerate(["alpha topic", "???", "omega topic"])
+    ]
+
+    async def _seed() -> None:
+        store = JobStore(db_path=tmp_path / "cli_test.db")
+        await store.connect()
+        try:
+            for job in seeded:
+                await store.create_job(job)
+                await store.store_package(job.id, make_publish_package(job_id=job.id))
+        finally:
+            await store.close()
+
+    _asyncio.run(_seed())
+    target = tmp_path / "content"
+    target.mkdir()
+    args = ["emit-mdx", "--all", "--target", str(target), "--format", fmt]
+
+    dry = runner.invoke(app, [*args, "--dry-run"])
+    assert dry.exit_code == 1, dry.output
+    assert "Would emit: /" not in dry.output
+    assert "skipped job job_slug00000001: topic has no usable slug" in dry.output
+    assert "Would emit: alpha-topic/" in dry.output
+    assert list(target.iterdir()) == []
+
+    result = runner.invoke(app, args)
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SystemExit)
+    assert "skipped job job_slug00000001: topic has no usable slug" in result.output
+    assert sorted(p.name for p in target.iterdir()) == ["alpha-topic", "omega-topic"]
+
+
 # ---------------------------------------------------------------------------
 # curate / status / jobs (M08, T-08.03)
 # ---------------------------------------------------------------------------
@@ -994,3 +1045,132 @@ def test_timeout_must_be_at_least_one_second(command):
     checking it once, and the cancelled task left the job QUEUED for good."""
     result = runner.invoke(app, [*command, "--timeout", "0"])
     assert result.exit_code == 2
+
+
+# ---------------------------------------------------------------------------
+# CR-14: invalid batch entries, one-line errors, status/jobs --config
+# ---------------------------------------------------------------------------
+
+
+def _stub_engine_curate(monkeypatch, curate):
+    """Monkeypatch CurationEngine.embedded with an engine whose curate() is
+    the given coroutine function."""
+    from cce.engine import CurationEngine
+
+    class _Engine:
+        async def curate(self, request):
+            return await curate(request)
+
+        async def close(self) -> None:
+            pass
+
+    async def _fake_embedded(*args, **kwargs):
+        return _Engine()
+
+    monkeypatch.setattr(CurationEngine, "embedded", _fake_embedded)
+
+
+async def _policy_not_found(request):
+    # What CurationEngine.curate raises for an unknown policy id.
+    raise ValueError(f"Policy not found: {request.policy_id}")
+
+
+def test_batch_skips_an_entry_that_fails_validation(tmp_path, monkeypatch):
+    """An entry CurationRequest rejects (a path containing '/') aborted the
+    batch with a traceback; it is now a SKIP line and the rest still run."""
+    from cce.models.job import JobStatus
+    from tests.conftest import make_job
+
+    submitted = []
+
+    class _Handle:
+        def __init__(self, request):
+            self._request = request
+
+        async def wait(self, timeout: float = 600):
+            return make_job(request=self._request, status=JobStatus.COMPLETED)
+
+    async def _curate(request):
+        submitted.append(request.topic)
+        return _Handle(request)
+
+    _stub_engine_curate(monkeypatch, _curate)
+    topics_file = tmp_path / "topics.yaml"
+    topics_file.write_text(
+        "- topic: first\n  paths: [a/b]\n- topic: second\n  paths: [blog]\n"
+    )
+
+    result = runner.invoke(
+        app, ["batch", "--topics-file", str(topics_file), "--policy-id", "p"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "[1/2] SKIP (invalid: paths: Value error, path 'a/b'" in result.output
+    assert submitted == ["second"]
+    assert "[2/2] completed: second" in result.output
+
+
+def test_batch_unknown_policy_is_a_one_line_error(tmp_path, monkeypatch):
+    _stub_engine_curate(monkeypatch, _policy_not_found)
+    topics_file = tmp_path / "topics.yaml"
+    topics_file.write_text("- topic: first\n  paths: [blog]\n")
+
+    result = runner.invoke(
+        app, ["batch", "--topics-file", str(topics_file), "--policy-id", "nope"]
+    )
+    assert result.exit_code == 1, result.output
+    assert "Error: Policy not found: nope" in result.output
+    assert isinstance(result.exception, SystemExit)
+
+
+def test_curate_unknown_policy_is_a_one_line_error(monkeypatch):
+    _stub_engine_curate(monkeypatch, _policy_not_found)
+
+    result = runner.invoke(app, ["curate", "topic", "--policy-id", "nope"])
+    assert result.exit_code == 1, result.output
+    assert "Error: Policy not found: nope" in result.output
+    assert isinstance(result.exception, SystemExit)
+
+
+def test_curate_invalid_path_is_a_one_line_error(monkeypatch):
+    _stub_engine_curate(monkeypatch, _policy_not_found)  # never reached
+
+    result = runner.invoke(
+        app, ["curate", "topic", "--policy-id", "p", "--path", "a/b"]
+    )
+    assert result.exit_code == 1, result.output
+    lines = result.output.splitlines()
+    assert len(lines) == 1 and lines[0].startswith("Error: paths: Value error, path")
+    assert isinstance(result.exception, SystemExit)
+
+
+def test_status_and_jobs_read_the_database_named_by_config(tmp_path, monkeypatch):
+    """A job stored through `cce curate --config x.yaml` could not be read
+    back: status and jobs took no --config."""
+    import asyncio as _asyncio
+
+    from cce.jobs.store import JobStore
+    from tests.conftest import make_curation_request, make_job
+
+    monkeypatch.delenv("CCE_EVIDENCE_SQLITE_PATH")  # env would beat the YAML
+    db_path = tmp_path / "from_config.db"
+    config = tmp_path / "cce.yaml"
+    config.write_text(f"evidence_store:\n  sqlite_path: {db_path}\n")
+    job = make_job(request=make_curation_request(topic="config db topic"))
+
+    async def _seed() -> None:
+        store = JobStore(db_path=db_path)
+        await store.connect()
+        try:
+            await store.create_job(job)
+        finally:
+            await store.close()
+
+    _asyncio.run(_seed())
+
+    result = runner.invoke(app, ["status", job.id, "--config", str(config)])
+    assert result.exit_code == 0, result.output
+    assert "topic: config db topic" in result.output
+
+    result = runner.invoke(app, ["jobs", "--config", str(config)])
+    assert result.exit_code == 0, result.output
+    assert job.id in result.output

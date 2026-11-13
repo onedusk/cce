@@ -21,6 +21,8 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from cce.config.loader import ConfigError, load_config
 from cce.config.markers import HumanizationMarkers, load_markers
 from cce.config.pricing import ModelPricing, load_model_pricing
@@ -94,7 +96,8 @@ class ConfigRegistry:
            (intentional fail-fast — an operator who named a marker file must
            not silently get another; ConfigError so every CLI/app entry
            point renders it as one actionable line, same as missing API
-           keys).
+           keys). So does a marker file with an unknown key or a value that
+           is not a list of strings (CRIT-03).
         6. Model pricing — the packaged table, with the entries of
            ``root / "config" / "model_pricing.yaml"`` on top when that file
            exists. Forgiving: an unreadable override is logged and the
@@ -121,7 +124,8 @@ class ConfigRegistry:
             if candidate.exists():
                 loaded = load_path_configs(candidate)
                 if loaded:
-                    path_configs = loaded
+                    # A copy: the loader caches one dict per path (CR-13).
+                    path_configs = dict(loaded)
                     logger.info(
                         "Path configs loaded from %s: %s",
                         candidate,
@@ -141,12 +145,9 @@ class ConfigRegistry:
         if engine.humanization.enabled:
             configured = engine.humanization.markers_path
             if configured is not None:
-                try:
-                    markers = load_markers(root / configured)
-                except FileNotFoundError as e:
-                    raise ConfigError(str(e)) from e
+                markers = _load_markers_file(root / configured)
             elif (root / _MARKERS_OVERRIDE).exists():
-                markers = load_markers(root / _MARKERS_OVERRIDE)
+                markers = _load_markers_file(root / _MARKERS_OVERRIDE)
                 logger.info("Humanization markers from %s", root / _MARKERS_OVERRIDE)
             else:
                 markers = load_markers()
@@ -176,6 +177,22 @@ class ConfigRegistry:
         except KeyError:
             known = ", ".join(sorted(self.path_configs)) or "(none loaded)"
             raise KeyError(f"Unknown path {path_id!r}. Known paths: {known}") from None
+
+
+def _load_markers_file(path: Path) -> HumanizationMarkers:
+    """``load_markers(path)`` with a missing or invalid file as ConfigError."""
+    try:
+        return load_markers(path)
+    except FileNotFoundError as e:
+        raise ConfigError(str(e)) from e
+    except ValidationError as e:
+        problems = "; ".join(
+            f"{'.'.join(str(x) for x in err['loc'])}: {err['msg']}"
+            for err in e.errors()
+        )
+        raise ConfigError(
+            f"Invalid humanization markers file {path}: {problems}"
+        ) from e
 
 
 def _load_pricing_forgiving(override: Path) -> dict[str, ModelPricing]:

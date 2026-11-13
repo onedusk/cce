@@ -117,6 +117,24 @@ async def test_path_configs_fall_back_to_default(tmp_path: Path):
     assert sorted(registry.path_configs) == ["blog"]
 
 
+async def test_registries_do_not_share_one_path_configs_dict(tmp_path: Path):
+    """CR-13: load_path_configs is cached per path; each registry gets its
+    own copy, so a path added to one is not visible in another."""
+    _write_path_configs(tmp_path, "default.yaml", ["blog"])
+    engine = EngineConfig(
+        llm=LLMConfig(api_key=""),
+        humanization=HumanizationConfig(enabled=False),
+    )
+
+    first = ConfigRegistry.load(tmp_path, engine=engine)
+    second = ConfigRegistry.load(tmp_path, engine=engine)
+    first.path_configs["tenant-a-only"] = first.path_configs["blog"]
+
+    assert first.path_configs is not second.path_configs
+    assert sorted(second.path_configs) == ["blog"]
+    assert sorted(ConfigRegistry.load(tmp_path, engine=engine).path_configs) == ["blog"]
+
+
 # ---------------------------------------------------------------------------
 # Dead-params fix: explicit dirs are honored again
 # ---------------------------------------------------------------------------

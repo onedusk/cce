@@ -206,3 +206,34 @@ def test_explicit_markers_path_that_is_missing_still_fails_fast(tmp_path):
 
     with pytest.raises(ConfigError, match="markers file not found"):
         _registry_in(tmp_path, markers_path=Path("config/nope.yaml"))
+
+
+# --- CRIT-03: a marker value that is not a list is a load error -------------
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        'hedging_phrases: "research suggests"\n',  # a scalar, not a list
+        "hedging_phrase: [research suggests]\n",  # a misspelled key
+    ],
+)
+def test_malformed_markers_file_is_a_load_error(tmp_path, body):
+    """A string value used to load as a list of its characters (every draft
+    then failed the style gate) and a misspelled key was dropped silently."""
+    from pydantic import ValidationError
+
+    from cce.config.loader import ConfigError
+
+    (tmp_path / "config").mkdir()
+    override = tmp_path / "config" / "humanization_markers.yaml"
+    override.write_text(body)
+
+    with pytest.raises(ValidationError):
+        load_markers(override)
+    # Both ways the registry reaches the file: picked up from the working
+    # directory, and named by humanization.markers_path.
+    with pytest.raises(ConfigError, match="humanization_markers.yaml"):
+        _registry_in(tmp_path)
+    with pytest.raises(ConfigError, match="humanization_markers.yaml"):
+        _registry_in(tmp_path, markers_path=Path("config/humanization_markers.yaml"))

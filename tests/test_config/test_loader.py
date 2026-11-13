@@ -523,3 +523,18 @@ def test_unselectable_quality_gate_profile_is_warned(monkeypatch, tmp_path, capl
     )
     load_config(config_file)
     assert "quality_gate.hihg is not one of" in caplog.text
+
+
+def test_engine_version_defaults_to_the_installed_package_version(
+    monkeypatch, tmp_path
+):
+    """OPS-14: lineage named 0.1.0 whatever release was installed. The
+    default is now the cce distribution's version; YAML still overrides it."""
+    from importlib.metadata import version
+
+    _clear_env(monkeypatch)
+    assert load_config().engine_version == version("cce")
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("engine_version: 9.9.9-custom\n")
+    assert load_config(config_file).engine_version == "9.9.9-custom"
