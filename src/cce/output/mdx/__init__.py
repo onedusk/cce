@@ -25,11 +25,17 @@ from cce.output.mdx.meta import merge_topic_meta
 # strips them from the body and reports the descriptions in meta.json so
 # operators can see what was missing without readers seeing literal
 # placeholder text in published copy.
-_GAP_RE = re.compile(r"\[INSUFFICIENT EVIDENCE:\s*([^\]]*)\]", re.DOTALL)
+# The description is optional (COR-12) and ends at a line break or an
+# opening bracket (SEC-13): an unclosed marker matches nothing, so it can't
+# take the next paragraph or citation with it.
+_GAP_RE = re.compile(r"\[INSUFFICIENT EVIDENCE(?::[ \t]*([^\]\[\r\n]*))?\]")
 
 
 def _strip_evidence_gaps(content: str) -> tuple[str, list[str]]:
     """Remove [INSUFFICIENT EVIDENCE: ...] markers; return cleaned content + descriptions.
+
+    An unclosed marker, or one with a bracket or line break inside, is not a
+    marker and stays in the text.
 
     Inline markers leave a trailing punctuation hole in their host sentence
     (e.g. "the mechanisms are ."). That's acceptable: the alternative is
@@ -40,7 +46,7 @@ def _strip_evidence_gaps(content: str) -> tuple[str, list[str]]:
     gaps: list[str] = []
 
     def _collect(m: re.Match) -> str:
-        text = m.group(1).strip()
+        text = (m.group(1) or "").strip()
         if text:
             gaps.append(text)
         return ""
@@ -80,6 +86,19 @@ def safe_child_dir(root: Path, parent: Path, name: str) -> Path:
             "not a single directory name"
         )
     return child
+
+
+def safe_write_text(path: Path, text: str) -> None:
+    """Write a file emit owns, refused when ``path`` is a symlink (SEC-12):
+    ``safe_child_dir`` checks the directory, but ``write_text`` follows a
+    link at the file itself, which can point outside the target directory.
+    """
+    if path.is_symlink():
+        raise ValueError(
+            f"refusing to write outside the target directory: {path.name!r} is "
+            "a symlink"
+        )
+    path.write_text(text, encoding="utf-8")
 
 
 def slugify(text: str) -> str:
@@ -159,13 +178,13 @@ def emit_mdx(
             curated_at=curated_at,
             citation_key=citation_key,
         )
-        (path_dir / "page.mdx").write_text(mdx_content, encoding="utf-8")
+        safe_write_text(path_dir / "page.mdx", mdx_content)
         files_written += 1
         paths_written.append(unit.path)
 
     # Write _evidence.json
     evidence_json = export_evidence(package.units, evidence_by_id)
-    (topic_dir / "_evidence.json").write_text(evidence_json, encoding="utf-8")
+    safe_write_text(topic_dir / "_evidence.json", evidence_json)
     files_written += 1
 
     # Merge meta.json

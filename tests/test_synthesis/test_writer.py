@@ -349,6 +349,9 @@ async def test_write_with_feedback():
     user_msg = llm.calls[0]["messages"][0].content
     assert "VERIFIER FEEDBACK" in user_msg
     assert "Fix claim X" in user_msg
+    # The gap marker is named in the system prompt's form (COR-12).
+    assert "[INSUFFICIENT EVIDENCE: " in user_msg
+    assert "[INSUFFICIENT EVIDENCE]" not in user_msg
 
 
 @pytest.mark.integration

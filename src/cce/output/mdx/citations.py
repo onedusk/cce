@@ -76,6 +76,8 @@ def build_citation_index(
     replaced with [^?] and omitted from the citation list. Multiple evidence
     IDs that resolve to the same canonical source URL share one footnote
     index; the citation entry's `id` is the first-seen (representative) id.
+    A ``[^`` already in ``content`` is written as ``&#91;^``, which renders
+    as the same text but is no footnote.
     """
     if citation_key not in ("url", "evidence"):
         raise ValueError(
@@ -111,5 +113,11 @@ def build_citation_index(
         )
         return f"[^{index}]"
 
+    # Footnote syntax already in the draft is the model's, not ours (SEC-05):
+    # a literal [^1] would read as verified citation 1, and a "[^7]: ..."
+    # definition as a source no evidence backs. "[" as a character reference
+    # can't open a footnote, whatever backslashes precede it, so every "[^"
+    # left in the body is one _replace wrote.
+    content = content.replace("[^", "&#91;^")
     transformed = EV_MARKER_RE.sub(_replace, content)
     return CitationResult(content=transformed, citations=tuple(citations))

@@ -26,7 +26,7 @@ MIN_SUBSTANTIVE_WORDS = 15  # min words for a paragraph to be checked for citati
 # The writer's gap marker, in the grammar emit strips from the page
 # (output/mdx _GAP_RE), so a draft the gate calls empty is one emit would
 # write as an empty page.
-_GAP_MARKER_RE = re.compile(r"\[INSUFFICIENT EVIDENCE:\s*([^\]]*)\]", re.DOTALL)
+_GAP_MARKER_RE = re.compile(r"\[INSUFFICIENT EVIDENCE(?::[ \t]*([^\]\[\r\n]*))?\]")
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +44,9 @@ def _strip_headings(text: str) -> str:
 
 
 def _published_text(content: str) -> str:
-    """The body as emit publishes it: gap markers removed. A citation the
-    writer put inside a gap marker goes with it, so it can't count here."""
+    """The body as emit publishes it: gap markers removed. An unclosed
+    marker, or one with a citation inside, is not a marker for emit either
+    and stays in the text."""
     return _GAP_MARKER_RE.sub("", content)
 
 
@@ -108,12 +109,12 @@ class QualityGate:
 
         Decision logic:
         1. If every inline citation marker resolves to ``evidence`` AND at
-           least one does AND the draft has text besides headings and gap
-           markers AND confidence >= pass_threshold AND citation density is
-           met -> PASS
+           least one does AND the draft has no literal footnote syntax
+           (``[^``) AND it has text besides headings and gap markers AND
+           confidence >= pass_threshold AND citation density is met -> PASS
         2. If we haven't hit max iterations AND there are fixable issues
-           (including unresolved markers, a draft with no citation or no
-           text, and a citation density miss) -> FAIL (rewrite)
+           (including unresolved markers, footnote syntax, a draft with no
+           citation or no text, and a citation density miss) -> FAIL (rewrite)
         3. Otherwise -> REVIEW (needs human)
 
         ``evidence`` is the set the draft was written and verified against
@@ -128,6 +129,10 @@ class QualityGate:
         # density check below counts markers, so phantom IDs could otherwise
         # meet the threshold while citing nothing real.
         unresolved = self._unresolved_markers(unit, evidence)
+
+        # Footnote syntax is emit's output, never the writer's (SEC-05): on
+        # the page a literal [^1] would read as a verified citation.
+        footnotes = unit.content.count("[^")
 
         # No citation, no ship: a draft with no marker that resolves, or with
         # nothing left once headings and gap markers are removed, never
@@ -160,12 +165,18 @@ class QualityGate:
                 f"bracket: {' '.join(f'[{m}]' for m in multi_id)}. Use one marker "
                 f"per source, e.g. [ev:ID1][ev:ID2]."
             )
+        if footnotes:
+            feedback_parts.append(
+                f"{footnotes} literal footnote marker(s) ('[^') resolve to no "
+                f"evidence. Remove them and any footnote definitions: cite "
+                f"only with [ev:ID] markers."
+            )
 
         if empty_draft:
             feedback_parts.append(
-                "The draft has no text once headings and [INSUFFICIENT EVIDENCE] "
-                "markers are removed. Write what the evidence supports and cite "
-                "it with [ev:ID] markers."
+                "The draft has no text once headings and [INSUFFICIENT EVIDENCE: "
+                "...] markers are removed. Write what the evidence supports and "
+                "cite it with [ev:ID] markers."
             )
         elif uncited_draft and not unresolved:
             feedback_parts.append(
@@ -183,7 +194,8 @@ class QualityGate:
         if report.uncited > 0:
             feedback_parts.append(
                 f"{report.uncited} factual claim(s) have no citations. "
-                f"Add [ev:ID] citations or mark as [INSUFFICIENT EVIDENCE]."
+                f"Add [ev:ID] citations or mark as [INSUFFICIENT EVIDENCE: "
+                f"<description of what's missing>]."
             )
 
         if report.leakage > 0:
@@ -223,6 +235,7 @@ class QualityGate:
         # Decision logic
         if (
             not unresolved
+            and not footnotes
             and not uncited_draft
             and not empty_draft
             and confidence >= self._config.pass_threshold
@@ -238,6 +251,7 @@ class QualityGate:
             )
         elif iteration < self._config.max_writer_iterations and (
             bool(unresolved)
+            or bool(footnotes)
             or uncited_draft
             or empty_draft
             or not citation_ok

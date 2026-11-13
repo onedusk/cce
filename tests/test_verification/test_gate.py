@@ -113,6 +113,9 @@ def test_gate_feedback_uncited():
     result = _evaluate(uncited=2)
     assert "2" in result.feedback
     assert "no citations" in result.feedback
+    # The writer is shown the marker in the form its system prompt asks for.
+    assert "[INSUFFICIENT EVIDENCE: " in result.feedback
+    assert "[INSUFFICIENT EVIDENCE]" not in result.feedback
 
 
 def test_gate_feedback_leakage():
@@ -529,6 +532,7 @@ def _evaluate_high(content: str, *, iteration: int = 1) -> GateResult:
             "# Sleep\n\n[INSUFFICIENT EVIDENCE: nothing in the sources]",
             "no text once headings",
         ),
+        ("# Sleep\n\n[INSUFFICIENT EVIDENCE]", "no text once headings"),
         ("# Sleep", "no text once headings"),
         (
             "# Sleep [ev:ev_a]\n\n[INSUFFICIENT EVIDENCE: nothing in the sources]",
@@ -548,6 +552,7 @@ def _evaluate_high(content: str, *, iteration: int = 1) -> GateResult:
     ],
     ids=[
         "gap-only",
+        "gap-only-no-description",
         "heading-only",
         "cited-heading-gap-only-body",
         "short-uncited-paragraphs",
@@ -624,21 +629,26 @@ def test_gate_gap_marker_grammar_matches_emit():
     )
 
 
-@pytest.mark.parametrize(
-    "content",
-    [
-        # The citation sits inside the gap marker; emit strips the marker up to
-        # the first "]", taking the citation with it.
-        "# Sleep\n\n[INSUFFICIENT EVIDENCE: no data on naps [ev:ev_a]]",
-        # Gap marker plus a bare citation: the page would be a footnote alone.
-        "# Sleep\n\n[INSUFFICIENT EVIDENCE: nothing on naps]\n\n[ev:ev_a]",
-    ],
-)
-def test_gate_reads_the_text_emit_publishes(content):
-    """Review of COR-05: a citation that emit removes with the gap marker,
-    or a page that is only a footnote marker, is no citation."""
-    result = _evaluate_high(content)
+def test_gate_reads_the_text_emit_publishes():
+    """Review of COR-05: a page that is only a footnote marker once emit has
+    removed the gap marker is no citation."""
+    result = _evaluate_high(
+        "# Sleep\n\n[INSUFFICIENT EVIDENCE: nothing on naps]\n\n[ev:ev_a]"
+    )
     assert result.decision != GateDecision.PASS
+
+
+def test_unclosed_gap_marker_does_not_hide_the_next_paragraph_from_the_gate():
+    """SEC-13: an unclosed marker used to match up to the next "]", so the
+    gate (like emit) dropped the cited paragraph after it and called the
+    draft uncited."""
+    result = _evaluate(
+        content="# Sleep\n\nDosage [INSUFFICIENT EVIDENCE: no data on dosage.\n\n"
+        f"{_UNCITED_PARA} [ev:test_001].",
+        confidence_score=1.0,
+    )
+
+    assert "no citation marker that resolves" not in result.feedback
 
 
 def test_a_line_starting_with_a_hash_number_is_prose_not_a_heading():

@@ -7,6 +7,8 @@ directly, reach the sink unvalidated: the sink refuses them itself.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from cce.output.mdx import emit_mdx, safe_child_dir
@@ -67,3 +69,40 @@ def test_symlink_out_of_the_target_is_refused(tmp_path):
 def test_ordinary_names_still_emit(fmt, tmp_path):
     EMITTERS[fmt](_package("learn"), tmp_path, topic_slug="sleep-hygiene")
     assert (tmp_path / "sleep-hygiene" / "learn" / "page.mdx").is_file()
+
+
+@pytest.mark.parametrize("fmt", sorted(EMITTERS))
+@pytest.mark.parametrize("name", ["learn/page.mdx", "_evidence.json"])
+@pytest.mark.parametrize("dangling", [False, True], ids=["existing", "dangling"])
+def test_file_symlink_destination_is_refused(fmt, name, dangling, tmp_path):
+    """SEC-12: the directory was checked but the write followed a page.mdx or
+    _evidence.json planted as a symlink to a file outside the target."""
+    target = tmp_path / "content"
+    (target / "topic" / "learn").mkdir(parents=True)
+    outside = tmp_path / "outside.txt"
+    if not dangling:
+        outside.write_text("ORIGINAL")
+    (target / "topic" / name).symlink_to(outside.resolve())  # absolute target
+
+    with pytest.raises(ValueError, match="outside the target directory"):
+        EMITTERS[fmt](_package("learn"), target, topic_slug="topic")
+
+    assert not outside.exists() if dangling else outside.read_text() == "ORIGINAL"
+
+
+@pytest.mark.parametrize("fmt", sorted(EMITTERS))
+def test_symlinked_meta_json_is_replaced_without_being_read(fmt, tmp_path):
+    """SEC-12: an existing meta.json that is a symlink had its target's
+    content merged into the new meta.json."""
+    target = tmp_path / "content"
+    (target / "topic").mkdir(parents=True)
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"keep": 1}')
+    meta_path = target / "topic" / "meta.json"
+    meta_path.symlink_to(outside.resolve())
+
+    EMITTERS[fmt](_package("learn"), target, topic_slug="topic")
+
+    assert not meta_path.is_symlink()
+    assert "keep" not in json.loads(meta_path.read_text())
+    assert outside.read_text() == '{"keep": 1}'

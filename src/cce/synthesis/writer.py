@@ -228,7 +228,8 @@ point is correct.
 === END FEEDBACK ===
 
 Address the feedback above. Fix unsupported claims, fill gaps where evidence \
-exists, and mark remaining gaps as [INSUFFICIENT EVIDENCE].
+exists, and mark remaining gaps as \
+[INSUFFICIENT EVIDENCE: <description of what's missing>].
 """
 
         messages = [LLMMessage(role="user", content=user_prompt)]
