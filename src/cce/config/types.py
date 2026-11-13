@@ -7,6 +7,7 @@ env vars or config files directly.
 
 from __future__ import annotations
 
+from importlib.metadata import version
 from pathlib import Path
 from typing import Final, Literal
 
@@ -448,7 +449,7 @@ class ImpliedClaimsConfig(BaseModel):
     counter_evidence_search_limit: int = Field(
         default=10,
         ge=1,
-        description="Max evidence items fetched when checking the dismissed side.",
+        description="Max counter-evidence IDs kept on an implied-claim annotation.",
     )
 
 
@@ -517,4 +518,7 @@ class EngineConfig(BaseModel):
             "past a passing check still run."
         ),
     )
-    engine_version: str = Field(default="0.1.0")
+    engine_version: str = Field(
+        default_factory=lambda: version("cce"),
+        description="Recorded on lineage; the installed cce version unless set.",
+    )

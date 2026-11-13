@@ -78,7 +78,8 @@ def _derive_title(content: str) -> str:
         if stripped.startswith("#"):
             title = stripped.lstrip("#").strip()
             if title:
-                return title
+                # Metadata is raw text: undo the body's footnote escape (SEC-05).
+                return title.replace("&#91;^", "[^")
     return ""
 
 

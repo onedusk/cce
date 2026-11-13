@@ -23,6 +23,7 @@ from cce.components import (
     ComponentSet,
     build_components,
     build_pipeline,
+    close_components,
 )
 from cce.config.loader import load_config
 from cce.config.registry import ConfigRegistry
@@ -414,6 +415,7 @@ def test_componentset_completeness_snapshot():
         "scorer",
         "editor",
         "implied_claims",
+        "owned",
     ]
     assert all(
         f.default is dataclasses.MISSING and f.default_factory is dataclasses.MISSING
@@ -663,3 +665,131 @@ async def test_build_pipeline_rejects_components_plus_overrides(tmp_path: Path):
     components = build_components(config, registry, overrides=overrides)
     with pytest.raises(ValueError, match="not both"):
         build_pipeline(config, registry, None, components, overrides=overrides)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# CRIT-04: closing the providers the factory built
+# ---------------------------------------------------------------------------
+
+
+def _own_providers_config(tmp_path: Path) -> EngineConfig:
+    """Writer, verifier and editor each on their own provider, embedding on."""
+    from cce.config.types import EditorConfig
+
+    return _b3_config(tmp_path, verifier_model="claude-opus-5").model_copy(
+        update={
+            "embedding": EmbeddingConfig(enabled=True),
+            "humanization": HumanizationConfig(
+                enabled=True, editor=EditorConfig(effort="medium")
+            ),
+        }
+    )
+
+
+async def test_close_components_closes_each_built_provider(tmp_path: Path):
+    """CRIT-04: every provider build_components constructed is recorded once
+    (the editor's own is reachable only through the Editor) and closed."""
+    config = _own_providers_config(tmp_path)
+    components = build_components(config, ConfigRegistry.load(Path("."), engine=config))
+
+    assert components.editor is not None
+    built = [
+        components.llm,
+        components.verifier_llm,
+        components.editor._llm,
+        components.embedding,
+    ]
+    assert len({id(p) for p in built}) == 4
+    assert sorted(map(id, components.owned)) == sorted(map(id, built))
+
+    await close_components(components)
+
+    assert all(llm._client.is_closed() for llm in built[:3])
+    assert components.embedding._client.is_closed
+    await close_components(components)  # a second call is a no-op
+
+
+async def test_roles_sharing_one_provider_record_it_once(tmp_path: Path):
+    config = _b3_config(tmp_path, verifier_model=None)
+    components = build_components(config, ConfigRegistry.load(Path("."), engine=config))
+
+    assert components.verifier_llm is components.llm
+    assert components.owned == [components.llm]
+
+
+async def test_injected_providers_are_not_recorded_for_closing(tmp_path: Path):
+    """CRIT-04: injected providers stay the caller's to close."""
+    config = _b3_config(tmp_path, verifier_model=None).model_copy(
+        update={"embedding": EmbeddingConfig(enabled=True)}
+    )
+    components = build_components(
+        config,
+        ConfigRegistry.load(Path("."), engine=config),
+        overrides=ComponentOverrides(
+            llm=MockLLMProvider(),
+            crawl_adapter=MockCrawlAdapter(),
+            embedding=MockEmbeddingProvider(),
+        ),
+    )
+
+    assert components.owned == []
+
+
+async def test_embedded_close_closes_the_providers_it_built(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """CRIT-04: CurationEngine.close() closes the HTTP clients of the
+    providers embedded() built from config."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test-key")
+    monkeypatch.delenv("CCE_EVIDENCE_SQLITE_PATH", raising=False)
+    config_yaml = _write_config_yaml(
+        tmp_path, embedding_enabled=True, humanization_enabled=False
+    )
+    engine = await CurationEngine.embedded(
+        config_path=str(config_yaml), policies_dir=str(tmp_path / "no-policies")
+    )
+    assert engine._pipeline is not None
+    llm = engine._pipeline._writer._llm
+    embedding = engine._pipeline._discoverer._embedding
+    assert not llm._client.is_closed()
+    assert not embedding._client.is_closed
+
+    await engine.close()
+
+    assert llm._client.is_closed()
+    assert embedding._client.is_closed
+    await engine.close()  # a second close is a no-op
+
+
+async def test_embedded_close_leaves_injected_providers_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """CRIT-04: a provider passed in ``overrides`` is the caller's to close."""
+    monkeypatch.delenv("CCE_EVIDENCE_SQLITE_PATH", raising=False)
+    monkeypatch.delenv("CCE_VERIFIER_MODEL", raising=False)
+    config_yaml = _write_config_yaml(
+        tmp_path, embedding_enabled=True, humanization_enabled=False
+    )
+    closed: list[str] = []
+
+    class _ClosableLLM(MockLLMProvider):
+        async def close(self) -> None:
+            closed.append("llm")
+
+    class _ClosableEmbedding(MockEmbeddingProvider):
+        async def close(self) -> None:
+            closed.append("embedding")
+
+    engine = await CurationEngine.embedded(
+        config_path=str(config_yaml),
+        policies_dir=str(tmp_path / "no-policies"),
+        overrides=ComponentOverrides(
+            llm=_ClosableLLM(),
+            crawl_adapter=MockCrawlAdapter(),
+            embedding=_ClosableEmbedding(),
+        ),
+    )
+    await engine.close()
+
+    assert closed == []

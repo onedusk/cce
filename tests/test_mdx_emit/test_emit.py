@@ -7,7 +7,8 @@ import json
 import pytest
 
 from cce.models.content import Citation, ContentScores
-from cce.output.mdx import EmitResult, emit_mdx, slugify
+from cce.output.mdx import EmitResult, _strip_evidence_gaps, emit_mdx, slugify
+from cce.output.mdx.thnklabs import emit_thnklabs
 from tests.conftest import make_content_unit, make_evidence, make_publish_package
 
 pytestmark = pytest.mark.integration
@@ -237,3 +238,64 @@ class TestEmitMdx:
         pkg = _package_with_paths("learn")
         with pytest.raises(ValueError, match="Either topic_slug or topic_name"):
             emit_mdx(pkg, tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Gap-marker grammar (COR-12, SEC-13): one function, shared by both emitters
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("marker", "gaps"),
+    [
+        ("[INSUFFICIENT EVIDENCE]", []),
+        ("[INSUFFICIENT EVIDENCE:]", []),
+        ("[INSUFFICIENT EVIDENCE: no data on naps]", ["no data on naps"]),
+        ("[INSUFFICIENT EVIDENCE:no data on naps]", ["no data on naps"]),
+    ],
+    ids=["no-colon", "empty-description", "description", "no-space"],
+)
+def test_gap_marker_is_stripped_with_or_without_a_description(marker, gaps):
+    """COR-12: the feedback prompts used to ask for the colon-less form,
+    which emit left on the page."""
+    cleaned, found = _strip_evidence_gaps(f"Sleep helps memory [ev:ev_a]. {marker}")
+
+    assert cleaned == "Sleep helps memory [ev:ev_a]."
+    assert found == gaps
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "Dosage [INSUFFICIENT EVIDENCE: no data.\n\nA verified claim [ev:ev_a].",
+        "Dosage [INSUFFICIENT EVIDENCE: no data. A verified claim [ev:ev_a].",
+        "Dosage [INSUFFICIENT EVIDENCE\n\nA verified claim [ev:ev_a].",
+        # A lone CR ends a line for MDX (escape.py), so it ends the marker too.
+        "Dosage [INSUFFICIENT EVIDENCE: no data.\r\rThe next paragraph.] Tail.",
+    ],
+    ids=["next-paragraph", "same-line", "no-colon", "lone-cr"],
+)
+def test_unclosed_gap_marker_matches_nothing(content):
+    """SEC-13: the match used to run to the next "]", the end of the
+    following citation, and take the prose in between with it."""
+    assert _strip_evidence_gaps(content) == (content, [])
+
+
+@pytest.mark.parametrize("emit", [emit_mdx, emit_thnklabs], ids=["generic", "client"])
+def test_unclosed_gap_marker_leaves_the_next_paragraph_on_the_page(emit, tmp_path):
+    unit = make_content_unit(
+        path="learn",
+        content=(
+            "## T\n\nFirst para [INSUFFICIENT EVIDENCE: no data on dosage.\n\n"
+            "Second paragraph with a verified claim [ev:ev_a]. Third sentence stays."
+        ),
+        citations=[Citation(evidence_id="ev_a", url="https://a.com")],
+    )
+    pkg = make_publish_package(
+        units=[unit], evidence=[make_evidence(id="ev_a", url="https://a.com")]
+    )
+    emit(pkg, tmp_path, topic_slug="t")
+
+    mdx = (tmp_path / "t" / "learn" / "page.mdx").read_text()
+    assert "Second paragraph with a verified claim [^1]. Third sentence stays." in mdx
+    assert "evidenceGaps" not in json.loads((tmp_path / "t" / "meta.json").read_text())

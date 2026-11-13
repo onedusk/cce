@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING
 
 from cce.config.registry import ConfigRegistry
 from cce.config.types import EngineConfig, LLMConfig, RoleLLMSettings
@@ -31,6 +32,10 @@ from cce.synthesis.editor import Editor
 from cce.synthesis.implied_claims import ImpliedClaimChecker
 from cce.synthesis.scoring import Scorer
 from cce.tagging.base import TaxonomyPlugin
+
+if TYPE_CHECKING:
+    from cce.discovery.ollama import OllamaEmbeddingProvider
+    from cce.llm.anthropic import AnthropicProvider
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +54,9 @@ class ComponentSet:
     scorer: Scorer | None
     editor: Editor | None
     implied_claims: ImpliedClaimChecker | None
+    # The providers build_components constructed itself, each once and never
+    # an injected one: what close_components closes (CRIT-04).
+    owned: list[AnthropicProvider | OllamaEmbeddingProvider]
 
 
 @dataclass(frozen=True)
@@ -128,13 +136,20 @@ def build_components(
         if o.crawl_adapter is not None
         else FirecrawlAdapter(config.crawl)
     )
+    owned: list[AnthropicProvider | OllamaEmbeddingProvider] = []
+
+    def _anthropic(llm_config: LLMConfig) -> AnthropicProvider:
+        provider = AnthropicProvider(llm_config)
+        owned.append(provider)
+        return provider
+
     # One provider per role with its own settings (model, max_tokens,
     # thinking, effort over `llm`); a role without any shares the writer's.
     # The writer's provider also serves the implied-claim checker.
     llm: LLMProvider = (
         o.llm
         if o.llm is not None
-        else AnthropicProvider(_role_llm_config(config.llm, config.writer))
+        else _anthropic(_role_llm_config(config.llm, config.writer))
     )
 
     def _role_provider(name: str, role: RoleLLMSettings) -> LLMProvider:
@@ -149,7 +164,7 @@ def build_components(
             role_config.thinking,
             role_config.effort,
         )
-        return AnthropicProvider(role_config)
+        return _anthropic(role_config)
 
     verifier_llm: LLMProvider = (
         o.verifier_llm
@@ -164,6 +179,7 @@ def build_components(
         try:
             provider = OllamaEmbeddingProvider(config.embedding)
             embedding_provider = provider
+            owned.append(provider)
             logger.info("Embedding provider ready: %s", config.embedding.model)
         except (EmbeddingUnavailableError, Exception) as e:
             logger.warning("Embedding provider unavailable: %s", e)
@@ -246,7 +262,21 @@ def build_components(
         scorer=scorer,
         editor=editor,
         implied_claims=implied_claim_checker,
+        owned=owned,
     )
+
+
+async def close_components(components: ComponentSet) -> None:
+    """Close the HTTP clients of the providers ``build_components`` built
+    for this set (CRIT-04).
+
+    For whoever built the set, once nothing runs on it any more. Injected
+    providers (``ComponentOverrides``) are not closed: they stay the
+    caller's. A second call is a no-op.
+    """
+    for provider in components.owned:
+        await provider.close()
+    components.owned.clear()
 
 
 def build_pipeline(

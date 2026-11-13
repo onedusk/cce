@@ -680,6 +680,33 @@ async def test_failed_model_lookup_falls_back(mock_cls: MagicMock, caplog) -> No
 
 
 @patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
+async def test_failed_model_lookup_is_retried_on_the_next_call(
+    mock_cls: MagicMock,
+) -> None:
+    """COR-15: one failed lookup must not pin the fallback for the process."""
+    from cce.llm import anthropic as provider_module
+
+    provider_module._MODEL_MAX_TOKENS.clear()
+    mock_client = MagicMock()
+    route_stream_to_create(mock_client)
+    mock_client.messages.create = AsyncMock(return_value=_mock_response())
+    mock_client.models.retrieve = AsyncMock(
+        side_effect=[ConnectionError("offline"), MagicMock(max_tokens=128000)]
+    )
+    mock_cls.return_value = mock_client
+    provider = AnthropicProvider(_config().model_copy(update={"max_tokens": None}))
+
+    sent = []
+    for _ in range(3):
+        await provider.complete([LLMMessage(role="user", content="hi")])
+        sent.append(mock_client.messages.create.call_args[1]["max_tokens"])
+
+    assert sent == [provider_module.FALLBACK_MAX_TOKENS, 128000, 128000]
+    assert mock_client.models.retrieve.await_count == 2
+    provider_module._MODEL_MAX_TOKENS.clear()
+
+
+@patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
 @pytest.mark.parametrize(
     "model",
     ["claude-sonnet-4-6", "claude-haiku-4-5", "claude-sonnet-5", "claude-opus-5"],
@@ -713,3 +740,16 @@ async def test_request_keywords_are_ones_the_installed_sdk_accepts(
     assert "temperature" not in call_kwargs
     if model in ("claude-sonnet-4-6", "claude-haiku-4-5"):
         assert call_kwargs["extra_body"] == {"temperature": 0.1}
+
+
+@patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
+async def test_close_closes_the_sdk_client(mock_cls: MagicMock) -> None:
+    """CRIT-04: the provider can release its HTTP client."""
+    mock_client = MagicMock()
+    mock_client.close = AsyncMock()
+    mock_cls.return_value = mock_client
+    provider = AnthropicProvider(_config())
+
+    await provider.close()
+
+    mock_client.close.assert_awaited_once_with()

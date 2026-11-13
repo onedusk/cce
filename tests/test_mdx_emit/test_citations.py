@@ -404,3 +404,70 @@ class TestEvidenceKeyed:
             unit, self._deck(), topic_slug="t", citation_key="evidence"
         )
         assert '"locator": "page:3"' in page and '"locator": "page:7"' in page
+
+
+class TestPreExistingFootnoteSyntax:
+    """SEC-05: footnote syntax already in the draft is the model's, not
+    emit's. It is escaped before real markers are substituted, so the only
+    live [^N] on the page are the ones emit wrote."""
+
+    pytestmark = pytest.mark.unit
+
+    FORGED = (
+        "A real claim [ev:ev_a]. A forged one [^1]. Another [^7].\n\n"
+        "[^7]: Fabricated Institute (2026), https://evil.example/study"
+    )
+
+    def test_forged_reference_and_definition_are_not_live(self):
+        result = build_citation_index(self.FORGED, _make_lookup("ev_a"))
+
+        assert re.findall(r"\[\^[^\]]*\]", result.content) == ["[^1]"]
+        assert result.content.startswith("A real claim [^1]. A forged one &#91;^1].")
+        assert "\n\n&#91;^7]: Fabricated Institute" in result.content
+        assert [c.index for c in result.citations] == [1]
+
+    @pytest.mark.parametrize("backslashes", [1, 2, 3])
+    def test_backslashes_before_a_forged_reference_cannot_revive_it(self, backslashes):
+        """Escaping with a backslash would turn the model's ``\\[^7]`` into
+        ``\\\\[^7]``: a literal backslash followed by a live reference."""
+        content = "A real claim [ev:ev_a]. Forged " + "\\" * backslashes + "[^7]."
+        result = build_citation_index(content, _make_lookup("ev_a"))
+
+        assert re.findall(r"\[\^[^\]]*\]", result.content) == ["[^1]"]
+
+    def test_emitters_own_markers_survive(self):
+        """Real, repeated and unknown markers render as before, next to a
+        forged reference with the same number."""
+        result = build_citation_index(
+            "One [ev:ev_a] two [ev:ev_b] again [ev:ev_a] gone [ev:ev_x] forged [^2].",
+            _make_lookup("ev_a", "ev_b"),
+        )
+
+        assert result.content == (
+            "One [^1] two [^2] again [^1] gone [^?] forged &#91;^2]."
+        )
+
+    def test_clean_content_is_unchanged(self):
+        content = "No markers, a [link](https://a.example) and a caret ^ alone."
+        assert build_citation_index(content, {}).content == content
+
+    def test_page_metadata_keeps_the_raw_text(self):
+        """Only the body is escaped: the title and excerpt in the metadata
+        block are derived as they were before the escape."""
+        from cce.output.mdx.thnklabs import format_thnklabs_page
+
+        unit = make_content_unit(
+            content="## Naps [^1]\n\nNaps help [^1], says one source [ev:ev_a]."
+        )
+        lookup = _make_lookup("ev_a")
+        generic = format_mdx_page(unit, lookup, "job_1")
+        client = format_thnklabs_page(unit, lookup, topic_slug="t")
+
+        for mdx in (generic, client):
+            head, body = mdx.split("\n\n", 1)
+            assert '"title": "Naps [^1]"' in head
+            assert "&#91;" not in head
+            assert body.startswith(
+                "## Naps &#91;^1]\n\nNaps help &#91;^1], says one source [^1]."
+            )
+        assert '"excerpt": "Naps help , says one source ."' in client

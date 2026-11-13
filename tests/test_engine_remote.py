@@ -9,6 +9,7 @@ Covers the JobCreateRequest wire mapping and every remote JobHandle branch
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
@@ -200,7 +201,16 @@ async def test_package_returns_none_when_absent(engine: CurationEngine):
     assert await handle.package() is None
 
 
-async def test_cancel_deletes_job(engine: CurationEngine):
+async def test_cancel_deletes_job(
+    engine: CurationEngine, remote_pipeline: Pipeline, monkeypatch
+):
+    """A job still running is cancelled and deleted (held running: the mock
+    pipeline could otherwise finish before cancel() looks at the job)."""
+
+    async def _never_finishes(request, policy, **kwargs):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(remote_pipeline, "run", _never_finishes)
     handle = await engine.curate(make_curation_request())
     await handle.cancel()
 
@@ -208,6 +218,20 @@ async def test_cancel_deletes_job(engine: CurationEngine):
         await handle.status()
     assert exc_info.value.response.status_code == 404
     assert await handle.package() is None
+
+    await handle.cancel()  # a job already gone: still silent
+
+
+async def test_cancel_leaves_a_finished_job_and_its_package(engine: CurationEngine):
+    """CR-04: cancel() after the job finished (a cleanup path) is a no-op,
+    as in embedded mode, instead of deleting the job and its package."""
+    handle = await engine.curate(make_curation_request())
+    assert (await handle.wait(timeout=10)).status is JobStatus.COMPLETED
+
+    await handle.cancel()
+
+    assert (await handle.status()).status is JobStatus.COMPLETED
+    assert await handle.package() is not None
 
 
 async def test_retry_requeues_terminal_job(engine: CurationEngine):

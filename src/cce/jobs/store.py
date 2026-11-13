@@ -7,7 +7,10 @@ connection. Schema is version-managed independently via the
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -70,6 +73,7 @@ class JobStore:
     def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
         self._db: aiosqlite.Connection | None = None
+        self._write_lock = asyncio.Lock()
 
     async def connect(self) -> None:
         """Open the database and ensure the schema exists."""
@@ -95,32 +99,49 @@ class JobStore:
         except Exception:
             return False
 
+    @asynccontextmanager
+    async def _write(self) -> AsyncIterator[aiosqlite.Connection]:
+        """Run one write and commit it; roll it back if it fails (OPS-05).
+
+        A failed write otherwise leaves its transaction open on the shared
+        connection, where the next read pins a snapshot that fails every
+        later write once another connection commits. One write at a time:
+        the rollback would discard a concurrent task's uncommitted statement.
+        """
+        assert self._db is not None
+        async with self._write_lock:
+            try:
+                yield self._db
+                await self._db.commit()
+            except BaseException:
+                await self._db.rollback()
+                raise
+
     # -- Job CRUD --
 
     async def create_job(self, job: Job) -> None:
         """Insert a new job."""
-        assert self._db is not None
         now = datetime.now(UTC).isoformat()
-        await self._db.execute(
-            """
-            INSERT INTO jobs
-                (id, status, topic, policy_id, request_json,
-                 job_json, created_at, updated_at, completed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                job.id,
-                job.status.value,
-                job.request.topic,
-                job.request.policy_id,
-                job.request.model_dump_json(),
-                job.model_dump_json(),
-                job.created_at.isoformat(),
-                now,
-                job.completed_at.isoformat() if job.completed_at else None,
-            ),
-        )
-        await self._db.commit()
+        async with self._write() as db:
+            await db.execute(
+                """
+                INSERT INTO jobs
+                    (id, status, topic, policy_id, request_json,
+                     job_json, created_at, updated_at, completed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    job.id,
+                    job.status.value,
+                    job.request.topic,
+                    job.request.policy_id,
+                    job.request.model_dump_json(),
+                    job.model_dump_json(),
+                    job.created_at.isoformat(),
+                    now,
+                    job.completed_at.isoformat() if job.completed_at else None,
+                ),
+            )
 
     async def get_job(self, job_id: str) -> Job | None:
         """Fetch a job by ID, or None if not found."""
@@ -138,23 +159,22 @@ class JobStore:
 
         Sets ``job.updated_at`` to now, in the stored JSON and the column.
         """
-        assert self._db is not None
         job.updated_at = datetime.now(UTC)
-        await self._db.execute(
-            """
-            UPDATE jobs
-            SET status = ?, job_json = ?, updated_at = ?, completed_at = ?
-            WHERE id = ?
-            """,
-            (
-                job.status.value,
-                job.model_dump_json(),
-                job.updated_at.isoformat(),
-                job.completed_at.isoformat() if job.completed_at else None,
-                job.id,
-            ),
-        )
-        await self._db.commit()
+        async with self._write() as db:
+            await db.execute(
+                """
+                UPDATE jobs
+                SET status = ?, job_json = ?, updated_at = ?, completed_at = ?
+                WHERE id = ?
+                """,
+                (
+                    job.status.value,
+                    job.model_dump_json(),
+                    job.updated_at.isoformat(),
+                    job.completed_at.isoformat() if job.completed_at else None,
+                    job.id,
+                ),
+            )
 
     async def list_jobs(
         self,
@@ -211,26 +231,24 @@ class JobStore:
 
     async def delete_job(self, job_id: str) -> bool:
         """Delete a job and its associated package. Returns False if not found."""
-        assert self._db is not None
-        await self._db.execute("DELETE FROM packages WHERE job_id = ?", (job_id,))
-        cursor = await self._db.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
-        await self._db.commit()
+        async with self._write() as db:
+            await db.execute("DELETE FROM packages WHERE job_id = ?", (job_id,))
+            cursor = await db.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
         return cursor.rowcount > 0
 
     # -- Package CRUD --
 
     async def store_package(self, job_id: str, package: PublishPackage) -> None:
         """Store a completed pipeline output."""
-        assert self._db is not None
         now = datetime.now(UTC).isoformat()
-        await self._db.execute(
-            """
-            INSERT OR REPLACE INTO packages (job_id, package_json, created_at)
-            VALUES (?, ?, ?)
-            """,
-            (job_id, package.model_dump_json(), now),
-        )
-        await self._db.commit()
+        async with self._write() as db:
+            await db.execute(
+                """
+                INSERT OR REPLACE INTO packages (job_id, package_json, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (job_id, package.model_dump_json(), now),
+            )
 
     async def get_package(self, job_id: str) -> PublishPackage | None:
         """Fetch the package for a job, or None if not found."""
@@ -245,21 +263,19 @@ class JobStore:
 
     async def delete_package(self, job_id: str) -> None:
         """Remove a job's package (a retry must not serve the last run's)."""
-        assert self._db is not None
-        await self._db.execute("DELETE FROM packages WHERE job_id = ?", (job_id,))
-        await self._db.commit()
+        async with self._write() as db:
+            await db.execute("DELETE FROM packages WHERE job_id = ?", (job_id,))
 
     # -- API Key CRUD --
 
     async def store_api_key(self, key_hash: str, label: str | None = None) -> None:
         """Store a hashed API key."""
-        assert self._db is not None
         now = datetime.now(UTC).isoformat()
-        await self._db.execute(
-            "INSERT INTO api_keys (key_hash, label, created_at) VALUES (?, ?, ?)",
-            (key_hash, label, now),
-        )
-        await self._db.commit()
+        async with self._write() as db:
+            await db.execute(
+                "INSERT INTO api_keys (key_hash, label, created_at) VALUES (?, ?, ?)",
+                (key_hash, label, now),
+            )
 
     async def verify_api_key(self, key_hash: str) -> bool:
         """Check if a hashed API key exists."""
@@ -283,11 +299,10 @@ class JobStore:
 
     async def delete_api_key(self, key_hash: str) -> bool:
         """Delete an API key. Returns False if not found."""
-        assert self._db is not None
-        cursor = await self._db.execute(
-            "DELETE FROM api_keys WHERE key_hash = ?", (key_hash,)
-        )
-        await self._db.commit()
+        async with self._write() as db:
+            cursor = await db.execute(
+                "DELETE FROM api_keys WHERE key_hash = ?", (key_hash,)
+            )
         return cursor.rowcount > 0
 
     # -- Schema --

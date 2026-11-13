@@ -31,6 +31,7 @@ from cce.output.mdx import (
     EmitResult,
     _strip_evidence_gaps,
     safe_child_dir,
+    safe_write_text,
     slugify,
 )
 from cce.output.mdx.citations import (
@@ -69,6 +70,8 @@ def _derive_excerpt(body: str, limit: int = 200) -> str:
         text = block.strip()
         if not text or text.startswith("#"):
             continue
+        # Metadata is raw text: undo the body's footnote escape (SEC-05).
+        text = text.replace("&#91;^", "[^")
         text = re.sub(r"\s+", " ", _FOOTNOTE_RE.sub("", text)).strip()
         if not text:
             continue
@@ -200,12 +203,12 @@ def emit_thnklabs(
             curated_at=curated_at,
             citation_key=citation_key,
         )
-        (path_dir / "page.mdx").write_text(mdx_content, encoding="utf-8")
+        safe_write_text(path_dir / "page.mdx", mdx_content)
         files_written += 1
         paths_written.append(unit.path)
 
-    (topic_dir / "_evidence.json").write_text(
-        export_evidence(package.units, evidence_by_id), encoding="utf-8"
+    safe_write_text(
+        topic_dir / "_evidence.json", export_evidence(package.units, evidence_by_id)
     )
     files_written += 1
 

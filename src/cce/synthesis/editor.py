@@ -92,8 +92,9 @@ suggests X may be effective" to "X works" where the evidence is strong.
 - For genuine-alternative contrastive frames ("Unlike X, Y does Z" — Y is a \
 real alternative to X with independent evidence), apply the spectrum \
 principle: acknowledge where the dismissed side is valid in context. When the \
-caller provides implied-claim annotations, use them to cite the counter-evidence \
-directly instead of a vague qualifier.
+caller provides implied-claim annotations, they mark frames where the evidence \
+supports the dismissed side: acknowledge it in words, without adding a citation \
+marker.
 - For parasitic contrastive frames ("X is not A. It is B" where B is a \
 degraded or reframed form of A — e.g. "not wisdom. It is the illusion of \
 it"), collapse to the direct claim: "X is B". Do not add hedges. Do not \
@@ -163,8 +164,8 @@ class Editor:
                 focus the rewrite on metrics that actually failed.
             annotations: Rewrite hints from the ImpliedClaimChecker (H4/M04).
                 Each string points at a contrastive frame with counter-evidence;
-                the Editor uses them to apply the spectrum principle with
-                specific evidence references.
+                the Editor uses them to apply the spectrum principle. They
+                name no evidence IDs: an added marker is citation drift.
         """
         original_citations = _extract_citation_ids(unit.content)
         word_count_before = _word_count(unit.content)

@@ -28,7 +28,7 @@ from cce.llm.base import (
     UnparseableResponseError,
     sum_usage,
 )
-from cce.models.content import ContentLineage, ContentScores, ContentUnit
+from cce.models.content import Citation, ContentLineage, ContentScores, ContentUnit
 from cce.models.evidence import DiscoveryResult, Evidence
 from cce.models.job import Job, JobError, JobProgress, JobStage, JobStatus, StageRecord
 from cce.models.package import PackageLineage, PublishPackage
@@ -36,6 +36,7 @@ from cce.models.paths import PathConfig
 from cce.models.request import CurationRequest
 from cce.models.style import StyleScores
 from cce.models.verification import PathVerification
+from cce.parsing import EV_MARKER_RE, resolve_evidence_id
 from cce.policy.types import SourcePolicy
 from cce.synthesis.editor import Editor
 from cce.synthesis.implied_claims import ImpliedClaimAnnotation, ImpliedClaimChecker
@@ -630,7 +631,8 @@ class Pipeline:
                     job,
                     JobStatus.FAILED,
                     stage=failed_stage,
-                    error_msg=str(e),
+                    # A bare TimeoutError() has an empty str() (COR-16).
+                    error_msg=str(e) or type(e).__name__,
                     error_code=code,
                     error_stage=error_stage,
                 ),
@@ -1105,6 +1107,10 @@ class Pipeline:
                 for key in _tokens:
                     _tokens[key] += writer_output.token_usage.get(key) or 0
 
+            # Recorded before the empty-draft break: the cost estimate is
+            # built from stage records, and that call was paid for (OPS-12).
+            self._record_write_stage(job, path, iteration, write_start, writer_output)
+
             if not writer_output.has_content:
                 _log.warning("Writer produced no content for path '%s'", path)
                 if unit is None:
@@ -1116,8 +1122,6 @@ class Pipeline:
             assert writer_output.unit is not None
             unit = writer_output.unit
             writer_gaps = list(writer_output.gaps)
-
-            self._record_write_stage(job, path, iteration, write_start, writer_output)
 
             # Score (humanization M02)
             unit, style_scores = self._score_draft(unit, path, job)
@@ -1186,7 +1190,7 @@ class Pipeline:
                 token_usage=_tokens,
             )
 
-            unit = self._apply_verification_scores(unit, report, ev_lookup)
+            unit = self._apply_verification_scores(unit, report, ev_lookup, path_lookup)
 
             # Gate decision
             gate_result = gate.evaluate(unit, report, iteration, evidence=path_evidence)
@@ -1481,11 +1485,35 @@ class Pipeline:
 
     @staticmethod
     def _apply_verification_scores(
-        unit: ContentUnit, report: VerificationReport, ev_lookup: dict[str, Evidence]
+        unit: ContentUnit,
+        report: VerificationReport,
+        ev_lookup: dict[str, Evidence],
+        path_lookup: dict[str, Evidence],
     ) -> ContentUnit:
-        """Fold verification scores + aggregated evidence tags into the unit."""
+        """Fold verification scores + aggregated evidence tags into the unit.
+
+        Runs after the edit step, so the content is final: ``citations`` is
+        rebuilt from its markers that resolve to the path's evidence
+        (``path_lookup``), in order of first appearance, and
+        ``source_diversity`` recomputed from them as the writer does
+        (COR-13). The writer's list is the model's ``citations_used``, which
+        can disagree with the markers the page's footnotes are built from.
+        A marker that doesn't resolve is skipped here and left in the
+        content, for the gate (no PASS) and emit (``[^?]``).
+        """
+        cited: dict[str, Citation] = {}
+        for match in EV_MARKER_RE.finditer(unit.content):
+            eid, ev = resolve_evidence_id(match.group(1) or match.group(2), path_lookup)
+            if ev is not None:
+                cited.setdefault(eid, Citation(evidence_id=eid, url=ev.url))
+        citations = list(cited.values())
+        available = {ev.url for ev in path_lookup.values()}
+        diversity = (
+            len({c.url for c in citations}) / len(available) if available else 0.0
+        )
+
         # Aggregate tags from cited evidence
-        cited_ids = {c.evidence_id for c in unit.citations}
+        cited_ids = set(cited)
         aggregated_tags = sorted(
             {
                 tag
@@ -1499,11 +1527,13 @@ class Pipeline:
         # T-07.05 `draft_source` flag) carry through model_copy — the previous
         # 9-field ContentUnit reconstruction would silently reset any field
         # it didn't enumerate (finding 1.5).
-        return unit.model_copy(update={"tags": aggregated_tags}).with_scores(
+        return unit.model_copy(
+            update={"tags": aggregated_tags, "citations": citations}
+        ).with_scores(
             ContentScores(
                 confidence=report.confidence_score,
                 coverage=report.pass_rate,
-                source_diversity=unit.scores.source_diversity,
+                source_diversity=diversity,
             )
         )
 
@@ -1538,7 +1568,7 @@ class Pipeline:
         ):
             job.completed_at = datetime.now(UTC)
 
-        if error_msg:
+        if error_msg is not None:
             job.error = JobError(
                 code=error_code,
                 message=error_msg,
@@ -1568,7 +1598,13 @@ class PipelineResult:
 
     @property
     def succeeded(self) -> bool:
+        """COMPLETED only: a passed run held for approval
+        (``publish_policy: human``) is ``ready_for_approval``, not this."""
         return self.package is not None and self.job.status == JobStatus.COMPLETED
+
+    @property
+    def ready_for_approval(self) -> bool:
+        return self.job.status == JobStatus.READY_FOR_APPROVAL
 
     @property
     def needs_review(self) -> bool:

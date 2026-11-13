@@ -21,7 +21,9 @@ the repository owner rather than in a public issue.
   local SSRF surface. Which hosts may be used is set by the source policy's
   `domains_allow` / `domains_deny`; a request's `constraints` can narrow
   that further (its deny list adds to the policy's, its allow list must
-  also match), never widen it.
+  also match), never widen it. The URL a crawl result reports (a redirect
+  target, a child page an adapter adds) passes the same checks before it
+  becomes evidence.
 
 ## MDX output (`emit-mdx`)
 
@@ -37,6 +39,9 @@ model-written text:
   text; inside code spans and fences references aren't decoded, so code
   containing those characters shows the reference. Clean prose is unchanged
   byte for byte.
+- Footnote syntax already in a draft (`[^`) is written as `&#91;^`, which
+  renders as the same text but is no footnote: the only footnote references
+  on a page are the ones emit made from `[ev:ID]` markers.
 - A crawled title in the rebuilt "Curated Resources" list is also kept to one
   line, with `\`, backticks, `*`, `[`, `]` and `>` escaped, so it can't
   close the bold around it or make a markdown link, code span or new block.
@@ -47,7 +52,9 @@ Implementation: `src/cce/output/mdx/escape.py`.
 
 `emit-mdx` writes only inside its target directory: a topic slug or path
 that isn't a single plain directory name is refused, at the request and
-again at the write.
+again at the write. A `page.mdx` or `_evidence.json` that is a symlink is
+refused, and a symlinked `meta.json` (or its temporary file) is replaced
+without being read or written through.
 
 **Still the consumer's job:**
 
@@ -73,9 +80,14 @@ you render them in (HTML, MDX, SQL, a shell).
 **What CCE does.** Crawled and model-written text reaches a prompt only
 inside an element the prompt builder writes itself: `<evidence id="...">`
 for each excerpt (with its URL, title and author on one line) and `<draft>`
-for a draft or draft fragment. The text is first defanged so it can't open
-or close one of those elements or forge one of the prompts' `=== ... ===`
-fences, which also keeps the prompt-cache split in place. The writer,
+for a draft or draft fragment. The trust fields the engine derives
+(reputation, peer-reviewed, primary source, conflict of interest) are on a
+line of their own before that one, and the URL, title and author cannot
+contain `|`, `[` or `]`, so crawled text cannot add to them. The text is
+first defanged so it can't open or close one of those elements or forge one
+of the prompts' `=== ... ===` fences (CR line endings are normalised, so a
+fence line can't hide behind one), which also keeps the prompt-cache split
+in place. The writer,
 verifier, editor and implied-claim prompts each state that this text is
 data, never instructions, and that only the `id` attributes of `<evidence>`
 elements identify evidence. The delimiters are deterministic (no nonce), so
@@ -87,10 +99,15 @@ cached prompt prefixes stay byte-stable. Implementation:
 - A citation marker whose ID is not in the path's evidence (what the writer
   was shown) blocks a PASS at the quality gate.
 - A draft with no citation marker that resolves to the path's evidence, or
-  with no text besides headings and `[INSUFFICIENT EVIDENCE: ...]` markers,
-  never gets a PASS at the quality gate, whatever the verifier reported.
-- The writer keeps only `citations_used` and `evidence_map` IDs that
-  resolve to the path's evidence, and `_evidence.json` lists only those.
+  with no text besides headings and gap markers (`[INSUFFICIENT EVIDENCE]`,
+  with or without `: description`), never gets a PASS at the quality gate,
+  whatever the verifier reported.
+- Literal footnote syntax (`[^`) in a draft blocks a PASS, and so does a
+  gap marker emit could not strip (unclosed, or with a citation marker or a
+  line break inside).
+- A unit's citations, and so `_evidence.json`, are the markers in the final
+  draft that resolve to the path's evidence. The writer's `evidence_map`
+  keeps only IDs that resolve to it.
 - On the page, a marker whose ID is not in the run's evidence renders as
   `[^?]` and is left out of the page's citations. (`cce emit-mdx` emits a
   job that didn't complete only with `--job ... --force`.)
@@ -107,7 +124,8 @@ cached prompt prefixes stay byte-stable. Implementation:
   retried once, then fails the job. The editor's reply is delimited
   markdown: unreadable, or with different citation markers, it is discarded
   and the writer's draft kept. The implied-claim checker gives no hint for
-  an unreadable reply.
+  an unreadable reply or one that names no topic, and its hints name no
+  evidence IDs.
 
 **Residual risk.** A model that follows injected text can still cite a real
 but unrelated evidence ID, and a verifier can still mark an injected claim

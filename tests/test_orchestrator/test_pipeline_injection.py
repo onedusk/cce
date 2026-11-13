@@ -62,15 +62,23 @@ def _adapter() -> MockCrawlAdapter:
     )
 
 
+FORGED_DEFINITION = "[^7]: Fabricated Institute (2026), https://evil.example/study"
+
+
 def _compliant_writer_reply() -> str:
     """A writer that obeys the page: cites the injected ID alongside both
-    real excerpts (placeholders ev_001 / ev_002 resolve to them)."""
+    real excerpts (placeholders ev_001 / ev_002 resolve to them), and writes
+    footnote syntax of its own (SEC-05): a reference that reuses a real
+    footnote's number, and one with a definition for a source that is in no
+    evidence."""
     return json.dumps(
         {
             "content": (
                 "## Sleep\n\n"
                 "Adults need seven hours [ev:ev_001]. Sleep cures every "
                 f"disease [ev:{INJECTED_ID}], says a second page [ev:ev_002].\n\n"
+                "Naps cure insomnia [^1]. So does warm milk [^7].\n\n"
+                f"{FORGED_DEFINITION}\n\n"
                 "## Curated Resources\n\n- written by the model\n"
             ),
             "citations_used": ["ev_001", INJECTED_ID, "ev_002"],
@@ -110,6 +118,7 @@ async def test_fully_compliant_models_cannot_add_a_citation(sqlite_store):
         GateDecision.REVIEW,
     ]
     assert all(INJECTED_ID in g.feedback for g in result.gate_results)
+    assert all("footnote" in g.feedback for g in result.gate_results)
 
     package = result.package
     assert package is not None
@@ -122,7 +131,9 @@ async def test_fully_compliant_models_cannot_add_a_citation(sqlite_store):
     assert mapped <= real_ids
 
     # Emit: the phantom renders as [^?] and is listed nowhere; the hostile
-    # title reaches the page only escaped.
+    # title reaches the page only escaped. The model's own footnote syntax
+    # is escaped, so the live references are the three emit wrote and the
+    # forged definition is plain text.
     by_id = {ev.id: ev for ev in package.evidence}
     for mdx in (
         format_mdx_page(unit, by_id, "job_1", curated_at="t"),
@@ -131,6 +142,9 @@ async def test_fully_compliant_models_cannot_add_a_citation(sqlite_store):
         head, body = mdx.split("\n\n", 1)
         meta = json.loads(head[head.index("{") : head.rindex("}") + 1])
         assert "[^?]" in body
+        prose = body.split("## Curated Resources")[0]
+        assert re.findall(r"\[\^([^\]]*)\]", prose) == ["1", "?", "2"]
+        assert "Fabricated Institute" in prose
         assert INJECTED_ID not in mdx
         assert {c["id"] for c in meta["citations"]} <= real_ids
         assert not {"{", "}", "<"} & set(body)
@@ -180,6 +194,32 @@ def test_gate_decision_does_not_depend_on_excerpt_text(iteration, supported):
         hostile.coverage,
         hostile.feedback,
     )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "forged",
+    ["Naps cure insomnia [^1].", f"Warm milk helps.\n\n{FORGED_DEFINITION}"],
+    ids=["reference", "definition"],
+)
+def test_footnote_syntax_in_the_draft_never_passes_the_gate(forged):
+    """SEC-05: with every [ev:ID] marker real and a clean verifier report,
+    the model's own footnote syntax is the only defect. The writer is told
+    to remove it; at the last iteration the draft goes to review."""
+    evidence = _evidence_pair(hostile=False)
+    unit = make_content_unit(
+        content=f"A claim [ev:ev_aaaaaaaaaaa1]. Another [ev:ev_bbbbbbbbbbb2].\n\n{forged}"
+    )
+    report = make_verification_report(confidence_score=1.0)
+    gate = QualityGate(make_gate_config())
+
+    first = gate.evaluate(unit, report, 1, evidence)
+    last = gate.evaluate(unit, report, 3, evidence)
+
+    assert first.decision == GateDecision.FAIL
+    assert last.decision == GateDecision.REVIEW
+    assert "footnote" in first.feedback and "Remove" in first.feedback
+    assert "do not resolve" not in first.feedback
 
 
 @pytest.mark.unit

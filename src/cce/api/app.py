@@ -5,12 +5,15 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from http import HTTPStatus
 from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from cce.api.auth import auth_dependency, make_auth_dependency
 from cce.api.middleware import (
@@ -19,8 +22,13 @@ from cce.api.middleware import (
     get_request_id,
     install_body_size_limit,
 )
-from cce.api.schemas import error_envelope
-from cce.components import build_pipeline
+from cce.api.schemas import error_envelope, error_responses
+from cce.components import (
+    ComponentSet,
+    build_components,
+    build_pipeline,
+    close_components,
+)
 from cce.config.loader import ConfigError, load_config, validate_required_keys
 from cce.config.registry import ConfigRegistry
 from cce.config.types import EngineConfig
@@ -65,6 +73,8 @@ async def lifespan(app: FastAPI):
     registry: ConfigRegistry | None = None
 
     # -- Pipeline --
+    # The set this lifespan built: its providers are closed at shutdown.
+    components: ComponentSet | None = None
     pipeline = overrides.get("pipeline")
     if pipeline is None:
         # Production branch only (tests inject a pipeline): fail fast with
@@ -72,12 +82,13 @@ async def lifespan(app: FastAPI):
         # ADR-006). SystemExit instead of letting ConfigError propagate —
         # Starlette formats propagated lifespan exceptions as full tracebacks
         # in uvicorn's log; the operator should see one actionable line.
-        # The registry load and the providers built in _build_pipeline (e.g.
+        # The registry load and the providers built in build_components (e.g.
         # thinking: disabled on a model that rejects it) raise ConfigError too.
         try:
             validate_required_keys(config)
             registry = ConfigRegistry.load(Path("."), engine=config)
-            pipeline = _build_pipeline(config, evidence_store, registry)
+            components = build_components(config, registry)
+            pipeline = build_pipeline(config, registry, evidence_store, components)
         except ConfigError as e:
             logger.error("Configuration error: %s", e)
             raise SystemExit(1) from None
@@ -157,6 +168,10 @@ async def lifespan(app: FastAPI):
                 "Marked %d orphaned RUNNING job(s) as FAILED", len(running_jobs)
             )
 
+    # 3. Close the HTTP clients of the providers built here (CRIT-04)
+    if components is not None:
+        await close_components(components)
+
     if "evidence_store" in locally_created:
         await evidence_store.close()
     if "job_store" in locally_created:
@@ -183,10 +198,18 @@ def create_app(
     if config is None:
         config = load_config()
 
+    # With auth on, health and meta are the whole public set: the docs pages
+    # and the schema URL are not served (SEC-09). app.openapi() still works.
+    docs_urls: dict[str, Any] = (
+        {"docs_url": None, "redoc_url": None, "openapi_url": None}
+        if config.api.require_auth
+        else {}
+    )
     app = FastAPI(
         title="Content Curation Engine",
         version=config.engine_version,
         lifespan=lifespan,
+        **docs_urls,
     )
 
     # Store config and overrides for the lifespan to consume
@@ -248,13 +271,57 @@ def create_app(
             ).model_dump(),
         )
 
+    # Framework errors use the envelope too (CR-07): 401 from auth, unknown
+    # route, wrong method.
+    @app.exception_handler(StarletteHTTPException)
+    async def _http_exception(
+        request: Request, exc: StarletteHTTPException
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=error_envelope(
+                code=HTTPStatus(exc.status_code).name.lower(),
+                message=str(exc.detail),
+                request_id=get_request_id(),
+            ).model_dump(),
+            headers=exc.headers,
+        )
+
+    # Request validation: the message names each rule by location, never the
+    # rejected input (pinned context can be confidential).
+    @app.exception_handler(RequestValidationError)
+    async def _request_validation(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=422,
+            content=error_envelope(
+                code="invalid_request",
+                message="; ".join(
+                    f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}"
+                    for err in exc.errors()
+                ),
+                request_id=get_request_id(),
+            ).model_dump(),
+        )
+
     # Route registration
     from cce.api.routes.evidence import router as evidence_router
     from cce.api.routes.jobs import router as jobs_router
     from cce.api.routes.meta import router as meta_router
 
-    app.include_router(jobs_router, dependencies=[Depends(auth_dependency)])
-    app.include_router(evidence_router, dependencies=[Depends(auth_dependency)])
+    # 401 comes from the auth dependency; 422 is declared on every route so
+    # the schema shows the envelope, not FastAPI's default validation body.
+    app.include_router(
+        jobs_router,
+        dependencies=[Depends(auth_dependency)],
+        responses=error_responses(401, 422),
+    )
+    app.include_router(
+        evidence_router,
+        dependencies=[Depends(auth_dependency)],
+        responses=error_responses(401, 422),
+    )
     app.include_router(meta_router)  # intentionally unauthed (health, meta)
 
     return app

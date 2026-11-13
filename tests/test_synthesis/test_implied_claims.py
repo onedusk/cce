@@ -194,7 +194,11 @@ async def test_dismissed_topic_extraction_uses_zero_temperature(markers):
     assert llm.calls[0]["temperature"] == 0.0
 
 
-async def test_annotation_rewrite_hint_includes_first_five_evidence_ids(markers):
+async def test_annotation_rewrite_hint_names_no_evidence_ids(markers):
+    """COR-08: the editor may not add a citation marker (its drift check
+    discards a rewrite that does), so the hint describes the counter-evidence
+    by count and asks for an acknowledgement without one. The IDs stay on
+    the annotation."""
     counter = _counter(8)
     cited = counter + _unrelated(2)
     checker, _llm = _make_checker(markers=markers)
@@ -204,11 +208,53 @@ async def test_annotation_rewrite_hint_includes_first_five_evidence_ids(markers)
         cited_evidence=cited,
     )
 
-    # Hint truncates evidence id list to 5 (Stage 2 implementation)
     hint = annotations[0].rewrite_hint
-    assert all(ev.id in hint for ev in counter[:5])
-    # The 6th id should not be present
-    assert counter[5].id not in hint
+    assert "ev_" not in hint
+    assert "[" not in hint
+    assert "8 excerpt(s)" in hint
+    assert "Do not add a citation marker" in hint
+    assert annotations[0].counter_evidence_ids == [ev.id for ev in counter]
+
+
+async def test_release_valve_ratio_uses_every_match_not_the_capped_list(markers):
+    """COR-08: the matches were cut to counter_evidence_search_limit (10)
+    before the ratio was taken, so a pool above 66 items could never clear
+    the 0.15 valve (10 / 80 = 0.125), even when every item supports the
+    dismissed side. The limit now only caps the IDs kept on the annotation."""
+    counter = _counter(80)
+    checker, _llm = _make_checker(markers=markers)
+
+    annotations = await checker.check(
+        "Unlike sleeping pills, CBT-I works.", cited_evidence=counter
+    )
+
+    assert len(annotations) == 1
+    assert annotations[0].counter_evidence_ids == [ev.id for ev in counter[:10]]
+    assert "80 excerpt(s)" in annotations[0].rewrite_hint
+
+
+@pytest.mark.parametrize("topic", [None, 5, ["sleeping pills"], "   "])
+async def test_no_hint_when_the_dismissed_topic_is_not_a_non_empty_string(
+    markers, topic
+):
+    """COR-08: a null topic became the text 'None' (and 5 became '5'), which
+    was then matched against the excerpts and quoted in a hint."""
+    llm = MockLLMProvider(
+        [LLMResponse(content=json.dumps({"dismissed_topic": topic}), model="mock")]
+    )
+    checker = ImpliedClaimChecker(
+        llm=llm, config=ImpliedClaimsConfig(enabled=True), markers=markers
+    )
+    cited = [
+        make_evidence(excerpt="None of the 5 trials of sleeping pills found harm.")
+    ]
+
+    annotations = await checker.check(
+        "Unlike sleeping pills, CBT-I works.", cited_evidence=cited
+    )
+
+    assert annotations == []
+    assert len(llm.calls) == 1
 
 
 async def test_check_returns_empty_when_no_frames_detected(markers):

@@ -115,6 +115,31 @@ async def test_provider_config_error_exits_with_one_log_line(tmp_path, caplog):
     assert "claude-fable-5" in caplog.text
 
 
+async def test_lifespan_closes_the_providers_it_built(tmp_path):
+    """CRIT-04: shutdown closes the HTTP clients of the providers the
+    lifespan built from config."""
+    from cce.api.app import create_app
+    from cce.config.types import (
+        CrawlConfig,
+        EmbeddingConfig,
+        EngineConfig,
+        EvidenceStoreConfig,
+        LLMConfig,
+    )
+
+    config = EngineConfig(
+        llm=LLMConfig(api_key="k"),
+        crawl=CrawlConfig(api_key="k"),
+        evidence_store=EvidenceStoreConfig(sqlite_path=tmp_path / "ev.db"),
+        embedding=EmbeddingConfig(enabled=False),
+    )
+    app = create_app(config)
+    async with app.router.lifespan_context(app):
+        llm = app.state.pipeline._writer._llm
+        assert not llm._client.is_closed()
+    assert llm._client.is_closed()
+
+
 async def test_lifespan_logs_the_effective_publish_policy(
     test_config, job_store, evidence_store, mock_pipeline, test_policies, caplog
 ):

@@ -52,7 +52,9 @@ def merge_topic_meta(
             scaffolding in published copy. ``None`` clears the field entirely.
     """
     existing: dict = {}
-    if meta_path.exists():
+    # A symlinked meta.json is not read (SEC-12: its target can be a file
+    # outside the target directory); os.replace below swaps the link itself.
+    if meta_path.exists() and not meta_path.is_symlink():
         existing = json.loads(meta_path.read_text(encoding="utf-8"))
 
     cce_data: dict = {
@@ -78,6 +80,9 @@ def merge_topic_meta(
     # Atomic write: write to temp file then rename to avoid corrupting
     # editorial content if the process crashes mid-write.
     tmp_path = meta_path.with_suffix(".json.tmp")
+    # A planted meta.json.tmp link would be written through (SEC-12).
+    if tmp_path.is_symlink():
+        tmp_path.unlink()
     tmp_path.write_text(
         json.dumps(existing, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
