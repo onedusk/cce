@@ -614,9 +614,9 @@ async def test_trio_empty_content_path_routes_to_review(sqlite_store):
     # Empty path produced nothing publishable; the other two passed.
     assert {u.path for u in result.package.units} == {"learn", "apply"}
     assert result.job.status == JobStatus.REVIEW_REQUIRED
-    # Per-path counts attribute the empty path to zero iterations (no WRITE
-    # record is appended when the writer returns no content).
-    assert _per_path_iteration_counts(result.job, _TRIO) == [1, 0, 1]
+    # The empty path's writer call counts as its one iteration: the WRITE
+    # record is appended even when the writer returns no content (OPS-12).
+    assert _per_path_iteration_counts(result.job, _TRIO) == [1, 1, 1]
     # The empty path never reached the verifier.
     assert ("verifier", "explore") not in llm.calls
 

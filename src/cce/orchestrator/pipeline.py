@@ -1106,6 +1106,10 @@ class Pipeline:
                 for key in _tokens:
                     _tokens[key] += writer_output.token_usage.get(key) or 0
 
+            # Recorded before the empty-draft break: the cost estimate is
+            # built from stage records, and that call was paid for (OPS-12).
+            self._record_write_stage(job, path, iteration, write_start, writer_output)
+
             if not writer_output.has_content:
                 _log.warning("Writer produced no content for path '%s'", path)
                 if unit is None:
@@ -1117,8 +1121,6 @@ class Pipeline:
             assert writer_output.unit is not None
             unit = writer_output.unit
             writer_gaps = list(writer_output.gaps)
-
-            self._record_write_stage(job, path, iteration, write_start, writer_output)
 
             # Score (humanization M02)
             unit, style_scores = self._score_draft(unit, path, job)
