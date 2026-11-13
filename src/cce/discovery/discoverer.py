@@ -511,6 +511,18 @@ class Discoverer:
             ):
                 logger.debug("Skipping empty or failed crawl: %s", result.url)
                 continue
+            # An adapter may report a redirected URL or add child pages: the
+            # URL a result is stored under passes the same checks as a
+            # candidate, or it is a failed crawl too (SEC-03).
+            if not (
+                self._passes_policy(result.url, effective_policy)
+                and self._passes_constraints(result.url, constraints)
+            ):
+                logger.warning(
+                    "Skipping crawl result outside the source policy: %.80r",
+                    result.url,
+                )
+                continue
 
             good_results += 1
             extracted, n_chunks = self._extract_evidence_counted(
