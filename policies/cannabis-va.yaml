@@ -1,0 +1,37 @@
+id: cannabis-va
+name: Cannabis in Virginia (Government and Academic Sources)
+# Strict allowlist: label, lab-testing and legal claims must come from
+# regulators, legislatures and universities, not retailers, law-firm
+# summaries or advocacy pages. Suffix entries match any .gov/.edu host.
+domains_allow:
+  - .gov
+  - .edu
+# Consumer-health pages pull the articles toward health claims.
+domains_deny:
+  - medlineplus.gov
+  - nccih.nih.gov
+reputation:
+  require_peer_reviewed: false
+  require_primary_source: false
+  trusted_institutions:
+    - .gov
+    - .edu
+  block_marketing: true
+  marketing_phrases:
+    - sponsored
+    - advertisement
+    - promoted
+    - affiliate
+    - buy now
+    - sign up free
+    - limited time offer
+  primary_source_suffixes:
+    - .gov
+    - .edu
+  penalize_conflict_of_interest: true
+recency:
+  # Virginia's retail law (2026) and the federal hemp change (2025-26)
+  # make older legal pages actively wrong.
+  max_age_days: 730
+  prefer_recent: true
+max_sources_per_run: 35

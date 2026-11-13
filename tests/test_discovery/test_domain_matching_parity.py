@@ -66,12 +66,17 @@ NEUTRAL = [
 ]
 
 
-def _is_expected_fix(variant: str, in_allow: bool, in_deny: bool) -> bool:
+def _is_expected_fix(variant: str, in_allow: bool, in_deny: bool, entry: str) -> bool:
     # A deny entry's text inside another label no longer blocks the host.
     if variant == "prefix_lookalike" and in_deny:
         return True
     # An allow entry no longer admits lookalikes or hosts it only prefixes.
     if in_allow and variant in ("prefix_lookalike", "trailing_label"):
+        return True
+    # A suffix allow entry (".gov") now also admits the bare suffix as a host
+    # ("https://gov/p"); the substring matcher needed the dot in the netloc.
+    # No public site has a one-label host, so no real URL changes sides.
+    if in_allow and "." not in entry and variant in ("exact", "port", "userinfo"):
         return True
     return False
 
@@ -83,18 +88,24 @@ def _rows(policy: SourcePolicy):
         if not entry:
             continue
         for variant, template in VARIANTS.items():
-            yield template.format(e=entry), variant, entry in allow, entry in deny
+            yield (
+                template.format(e=entry),
+                variant,
+                entry in allow,
+                entry in deny,
+                entry,
+            )
     for url in NEUTRAL:
-        yield url, "neutral", False, False
+        yield url, "neutral", False, False, ""
 
 
 @pytest.mark.parametrize("policy", _policies(), ids=lambda p: p.id)
 def test_repo_policies_keep_their_allow_and_deny_results(policy):
     unexpected = []
-    for url, variant, in_allow, in_deny in _rows(policy):
+    for url, variant, in_allow, in_deny, entry in _rows(policy):
         old = _old_passes_policy(url, policy)
         new = Discoverer._passes_policy(url, policy)
-        if old != new and not _is_expected_fix(variant, in_allow, in_deny):
+        if old != new and not _is_expected_fix(variant, in_allow, in_deny, entry):
             unexpected.append((url, variant, old, new))
     assert unexpected == []
 
@@ -110,7 +121,7 @@ def test_parity_table_actually_exercises_the_fixes():
     diffs = [
         variant
         for policy in _policies()
-        for url, variant, in_allow, in_deny in _rows(policy)
+        for url, variant, _in_allow, _in_deny, _entry in _rows(policy)
         if _old_passes_policy(url, policy) != Discoverer._passes_policy(url, policy)
     ]
     assert "prefix_lookalike" in diffs

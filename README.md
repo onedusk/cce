@@ -140,3 +140,9 @@ Precedence: environment variables > optional YAML config file > built-in default
 - **Taxonomies:** `taxonomies/` -- YAML taxonomy definitions for evidence classification.
 - **Path configs:** `path_configs/` -- YAML output path definitions (tone, structure, depth per path).
 - **Engine config:** Environment variables or a YAML config file passed via `--config`. See `docs/configuration.md` and `.env.example`.
+
+## License
+
+Copyright 2026 Dusk Labs LLC. All rights reserved except as granted in [LICENSE](LICENSE).
+
+CCE is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE). Any commercial use, including running CCE inside or behind a paid product or service, requires a separate written commercial license from Dusk Labs LLC (one@dusk-labs.com).
