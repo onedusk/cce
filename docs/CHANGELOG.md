@@ -5,6 +5,88 @@ All notable changes to the Content Curation Engine (CCE).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] audit 2026-10-02: low-severity fixes
+
+The 26 low findings of the 2026-10-02 audit (`docs/internal/`, local). Several change behaviour on purpose; each entry says how.
+
+### Fixed: a finished job could be seen without its package, or lose it to one store error (COR-14, OPS-05)
+- A finished run's package is stored before its terminal status, so a job is never seen COMPLETED, REVIEW_REQUIRED or READY_FOR_APPROVAL without its package.
+- The package and terminal-status writes are retried up to three times on a locked database. A run whose write-back still fails keeps its own status and error instead of FAILED at `discover`. A run that did not fail and whose package could not be stored is recorded FAILED with `pipeline_error` at `publish`, stage records kept.
+- `JobStore` runs one write at a time and rolls a failed write back. A failed write used to leave its transaction open on the shared connection, where the next read made every later write fail.
+
+### Fixed: remote cancel() deleted a finished job and its package (CR-04)
+- In remote mode `JobHandle.cancel()` now leaves a job that already finished, and its package, alone. It still cancels and deletes a queued or running job (embedded mode keeps a CANCELLED record).
+
+### Fixed: close() left the engine's HTTP clients open (CRIT-04)
+- `CurationEngine.close()` and the API shutdown now close the HTTP clients of the LLM and embedding providers they built from config. Injected providers stay the caller's. New: `AnthropicProvider.close()`, `cce.components.close_components(components)` for whoever builds a shared `ComponentSet`, and the `ComponentSet.owned` field it reads.
+
+### Fixed: one failed Models API lookup capped output for the whole process (COR-15)
+- A failed lookup of a model's maximum output now falls back to 21000 tokens for that call only. The next call looks it up again, where the fallback used to stay until restart.
+
+### Fixed: a failure with an empty exception message left a job with no error (COR-16)
+- A job that fails on an exception with an empty message (a bare `TimeoutError`) records the exception's type name as its error message.
+
+### Added: PipelineResult.ready_for_approval (CR-16)
+- `PipelineResult.ready_for_approval` is True for a passed run held under `publish_policy: human`. Before, `succeeded`, `needs_review` and `failed` were all False for it. `succeeded` means COMPLETED only.
+
+### Fixed: an empty writer reply was missing from the cost estimate (OPS-12)
+- A writer reply with no draft now gets a WRITE stage record, so the cost estimate covers the same calls as the token totals. The completion log line counts that iteration.
+
+### Fixed: _evidence.json could miss a source the page footnotes (COR-13)
+- A unit's `citations`, and so `_evidence.json`, its tags and `source_diversity`, now follow the citation markers in the final draft that resolve to the path's evidence. They used to follow the model's `citations_used` list, which could omit a source cited inline or list one never cited.
+
+### Fixed: following an implied-claim hint discarded the editor's rewrite (COR-08)
+- Implied-claim hints give the number of supporting excerpts instead of evidence IDs and ask for an acknowledgement with no new citation marker; the editor prompt says the same. The hint used to name IDs to cite, and the editor's citation check (unchanged) then discarded the rewrite.
+- The release-valve ratio counts every match; `counter_evidence_search_limit` now only caps the IDs kept on the annotation. A null or non-string dismissed topic produces no hint.
+
+### Fixed: gap markers without a colon were published; an unclosed one deleted verified text (COR-12, SEC-13)
+- The gap marker is recognised with or without a description (`[INSUFFICIENT EVIDENCE]`, `[INSUFFICIENT EVIDENCE: ...]`) by the quality gate and emit. The gate's feedback and the writer's feedback prompt ask for the colon form.
+- A gap marker no longer matches past a line break or an opening bracket, so an unclosed marker cannot remove the paragraph or citation after it.
+- A marker emit cannot strip (unclosed, or with a citation marker or a line break inside) blocks a PASS at the gate, which asks for a rewrite. A draft whose marker has a citation inside used to have both removed.
+
+### Fixed: emit wrote through file symlinks in the target (SEC-12)
+- Both emitters refuse to write a `page.mdx` or `_evidence.json` that is a symlink. A symlinked `meta.json` is replaced without its target being read, and a symlink planted as `meta.json.tmp` is removed before the write.
+
+### Fixed: footnote syntax written by the model reached the page (SEC-05)
+- A draft containing literal footnote syntax (`[^`) never gets a PASS, and the writer is told to remove it. At emit such syntax is written as `&#91;^`, so the only footnote references on a page are the ones emit generated. A `[^` inside a code span is treated the same way.
+
+### Fixed: REST errors had two shapes; 422 echoed rejected input (CR-07)
+- 401, unknown-route 404, 405 and request-validation 422 responses now use the `{data, error, meta}` envelope (codes `unauthorized`, `not_found`, `method_not_allowed`, `invalid_request`). The 422 message names each failing field and rule and leaves out the rejected values.
+- `JobResponse.status` is typed as the job-status enum and the OpenAPI schema declares the 400/401/404/409/413/422 error responses. docs/openapi.json regenerated.
+
+### Changed: the docs pages are not served while auth is on (SEC-09)
+- With `api.require_auth` true, `/docs`, `/redoc` and `/openapi.json` are no longer served, so health and meta are the only routes that answer without a token. With auth off they are served as before.
+
+### Fixed: /meta listed no path configs or taxonomy (CR-15)
+- `GET /v1/curate/meta` lists the loaded path config ids and the loaded taxonomy id. The `taxonomy_id` and `path_config_id` request fields are described as what they are: lineage labels, not selectors.
+
+### Fixed: CLI tracebacks and a batch that stopped at the first invalid entry (CR-14)
+- `cce batch` skips an entry that fails request validation and runs the rest. `cce curate` and `cce batch` print one `Error:` line (exit 1) for an unknown policy id or an invalid path. `cce status` and `cce jobs` accept `--config`.
+
+### Fixed: one topic with no usable slug aborted emit-mdx --all (SEC-08)
+- `cce emit-mdx` skips a job whose topic has no usable slug (`???`) with `skipped job <id>: topic has no usable slug`, emits the rest and exits 1. `--dry-run` does the same instead of printing `Would emit: /`.
+
+### Fixed: registries shared one path-config dict (CR-13)
+- Each `ConfigRegistry` holds its own copy of the path-config dict, so a path added to one registry no longer appears in others loaded from the same file.
+
+### Fixed: a markers list written as a string loaded as single characters (CRIT-03)
+- A humanization markers file with an unknown key, or a value that is not a list of strings, fails at load with a one-line `ConfigError` naming the file.
+
+### Fixed: engine_version said 0.1.0 on every output (OPS-14)
+- `engine_version` defaults to the installed cce package version (YAML `engine_version` still overrides it), so lineage, MDX `engineVersion` and `/v1/curate/meta` name the release that produced the output. CI no longer overwrites it for the OpenAPI check.
+
+### Fixed: pages an adapter returned under another host became evidence (SEC-03)
+- A crawl result whose reported URL (a redirect target, or a child page an adapter adds) fails the source policy or the request's domain lists is skipped with a warning and counted as a failed crawl.
+
+### Fixed: one unencodable character in a page failed the job (SEC-11)
+- A lone surrogate in a crawled page's markdown, title or author is replaced with `?`.
+
+### Fixed: a crawled title or URL could forge trust fields in a prompt (SEC-10)
+- Evidence headers in the writer and verifier prompts carry the engine's trust fields on their own line, before the crawled URL, title and author, which can no longer contain `|`, `[` or `]`. `defang` normalises CR line endings and neutralises a fence line ending in CR or a no-break space.
+
+### Docs: loading order and the path-config template (CR-18)
+- docs/configuration.md "How loading works" describes the marker lookup as the registry does it and gains the model-pricing step. path_configs/default.yaml names the option that exists (`CurationEngine.embedded(path_configs_path=...)`).
+
 ## [Unreleased] audit 2026-10-02: medium-severity fixes
 
 The 18 remaining medium findings of the 2026-10-02 audit (`docs/internal/`, local). Several change behaviour on purpose; each entry says how.

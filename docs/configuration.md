@@ -26,14 +26,16 @@ engine and the library don't read `.env`: they only consult `os.environ`. Note t
 The engine config file is *opt-in* — nothing is loaded implicitly. Pass it:
 
 - `uv run cce api start --config path/to/config.yaml`
-- `uv run cce emit-mdx --config path/to/config.yaml ...` (and the
-  `cce api key ...` commands accept `--config` the same way)
+- `uv run cce emit-mdx --config path/to/config.yaml ...` (`cce status`,
+  `cce jobs` and the `cce api key ...` commands accept `--config` the same
+  way)
 - `CurationEngine.embedded(config_path="path/to/config.yaml")` from code
 - `load_config("path/to/config.yaml")` directly
 
 Top-level YAML sections mirror `EngineConfig`: `llm`, `writer`, `verifier`,
 `evidence_store`, `crawl`, `embedding`, `quality_gate`, `api`, `humanization`,
-`publish_policy`, `max_tokens_per_job`, `engine_version`. Quality-gate
+`publish_policy`, `max_tokens_per_job`, `engine_version` (default: the
+installed cce package version). Quality-gate
 profiles take `pass_threshold` (renamed from `autopublish_threshold`, which is
 still accepted). `writer.temperature` (default `0.2`) and
 `verifier.temperature` (default `0.1`) are the per-agent sampling
@@ -82,9 +84,11 @@ test in `tests/test_components.py` enforces this).
    `root / humanization.markers_path` when that setting is given;
    `root / "config" / "humanization_markers.yaml"` when the file exists; the
    lists packaged with cce (`src/cce/config/humanization_markers.yaml`).
-   Only an explicit `markers_path` that does not exist raises
-   (`ConfigError`) — the one intentional fail-fast surface (an operator who
-   named a markers file must not silently get other lists).
+   An explicit `markers_path` that does not exist raises `ConfigError` (an
+   operator who named a markers file must not silently get other lists), and
+   so does a markers file, named or found, with an unknown key or a value
+   that is not a list of strings. These are the intentional fail-fast
+   surface of `load()`.
 6. **Model pricing** — the packaged price table
    (`src/cce/config/model_pricing.yaml`), with
    `root / "config" / "model_pricing.yaml"` on top when that file exists.
@@ -169,7 +173,8 @@ checked: if the policy is no longer loaded the retry is still refused (404
 retryable without force once the policy is back. In embedded mode
 `JobHandle.cancel()` on such a job
 records the same `orphaned` failure without re-running it (the API's DELETE
-removes the job instead). Force only a job that no process runs: the CLI and
+removes the job instead; remote-mode `JobHandle.cancel()` sends that DELETE
+only for a job that has not finished). Force only a job that no process runs: the CLI and
 the API can share one SQLite file, and a forced retry of a job another
 process is still running starts a second run of it.
 
@@ -196,7 +201,9 @@ shaped*. Loaded by id at job time, not part of `EngineConfig`:
   block `amazon.com.au`). A request's `constraints.domains_allow` /
   `domains_deny` are matched the same way on top of the policy: a deny entry
   from either drops the URL, and a request allow list narrows the policy's
-  (counted in `urls_dropped_policy`). Its `date_from` / `date_to` take an
+  (counted in `urls_dropped_policy`). The URL a crawl result reports (a
+  redirect target, a child page an adapter adds) passes the same policy and
+  request checks, or the result counts in `crawl_failed`. Its `date_from` / `date_to` take an
   ISO 8601 date or datetime (no offset means UTC; anything else is a
   validation error) and apply to fresh and reused excerpts alike. The REST
   API and remote mode pass all of them through. `reputation` also takes `marketing_phrases`
@@ -245,7 +252,7 @@ effective values when neither env var nor YAML provides one.
 | `ANTHROPIC_MODEL` | — | Fallback alias for `CCE_LLM_MODEL` |
 | `CCE_LLM_API_KEY` | — | Overrides `ANTHROPIC_API_KEY` when set |
 | `CCE_LLM_TEMPERATURE` | `0.2` | Fallback sampling temperature; not sent to models that reject sampling params (Opus 4.7+, Sonnet 5, Fable 5) |
-| `CCE_LLM_MAX_TOKENS` | unset | Per-call output token cap, thinking included. Unset = the model's maximum output, read from the Anthropic Models API once per process (128000 on the 4.6 and 5.x models, 64000 on the 4.5 ones), or 21000 if that lookup fails. Requests are streamed, so the SDK's ~21,333 non-streaming ceiling doesn't apply. A reply that hits the cap fails the job with an `IncompleteResponseError` naming the role and model; if thinking crowds out replies, lower the role's effort |
+| `CCE_LLM_MAX_TOKENS` | unset | Per-call output token cap, thinking included. Unset = the model's maximum output, read from the Anthropic Models API once per process (128000 on the 4.6 and 5.x models, 64000 on the 4.5 ones). If that lookup fails the call uses 21000 and the next call looks it up again. Requests are streamed, so the SDK's ~21,333 non-streaming ceiling doesn't apply. A reply that hits the cap fails the job with an `IncompleteResponseError` naming the role and model; if thinking crowds out replies, lower the role's effort |
 | `CCE_LLM_THINKING` | unset | `adaptive` or `disabled`, sent as `thinking: {type: ...}`. Unset = omit the param (model default: Sonnet 5 / Opus 5 think adaptively, the 4.6 models do not). Never sent to Opus 4.5, Haiku 4.5 or older. `adaptive` also drops `temperature` on the 4.6 models (the API rejects any value but 1 while thinking is on). Otherwise passed through as set, except `disabled` on Fable 5 / Opus 5.5, or on Opus 5 at effort `xhigh`/`max`, which the API rejects: that fails at start-up with a config error naming the model |
 | `CCE_LLM_EFFORT` | unset | `low` / `medium` / `high` / `xhigh` / `max`, sent as `output_config.effort`. Unset = model default. Sent to Opus 4.5 and the 4.6 and later models; omitted on Haiku 4.5, Sonnet 4.5 and older. Opus 4.5 takes only `low`/`medium`/`high` (`xhigh`/`max` there fail at start-up with a config error); `xhigh` needs Opus 4.7+ / Sonnet 5 |
 
@@ -288,12 +295,15 @@ rewrite: `CCE_EDITOR_EFFORT=medium`.
 keep tenants apart in one process: every engine or Pipeline that relies on it
 shares one evidence pool and one job store. For per-tenant separation, give
 each tenant its own stores — `CurationEngine.embedded(evidence_store=...,
-job_store=...)` (injected stores are the caller's to connect and close), or
+job_store=...)` (injected stores and injected providers are the caller's to
+connect and close; `engine.close()` closes what the engine built), or
 one `build_pipeline(config, registry, tenant_store, components)` per tenant.
 Tenants may share one `ComponentSet` only while its crawl adapter is
 tenant-neutral (a web adapter). `CrawlAdapter.search(query, limit)` takes no
 tenant, so a document adapter in a shared set offers one tenant's documents
 to every tenant's run: into its prompts, its package and its evidence store.
+Whoever builds a shared `ComponentSet` closes its providers with
+`cce.components.close_components(components)` once nothing runs on it.
 Give each tenant its own adapter instead:
 `build_pipeline(config, registry, tenant_store, components, crawl_adapter=tenant_composite)`
 replaces the set's adapter for that Pipeline only, and the LLM providers and
@@ -346,7 +356,8 @@ stays in the store but no longer reaches a prompt.
 A failed search (bad key, no credits, rate limit, outage) is counted per
 query in the DISCOVER record's `search_failed`, with `search_error` holding
 the last failure's exception class name (never its message). A page that
-could not be fetched, or answered HTTP 400 or above, counts in
+could not be fetched, answered HTTP 400 or above, or came back under a URL
+outside the source policy or the request's domain lists counts in
 `crawl_failed` and is never stored as evidence. A job that finds no
 evidence after any search or crawl failed fails with error code
 `crawl_unavailable` rather than `pipeline_error`.
@@ -369,7 +380,7 @@ evidence after any search or crawl failed fails with error code
 |----------|---------|---------|
 | `CCE_API_HOST` | `0.0.0.0` | Bind address for `cce api start` (YAML `api.host`; the `--host` flag overrides both) |
 | `CCE_API_PORT` | `8000` | Bind port (YAML `api.port`; the `--port` flag overrides both) |
-| `CCE_API_REQUIRE_AUTH` | `true` | `false` disables bearer auth (dev only) |
+| `CCE_API_REQUIRE_AUTH` | `true` | `false` disables bearer auth (dev only) and serves `/docs`, `/redoc` and `/openapi.json`, which are not served while auth is on |
 | `CCE_API_CORS_ORIGINS` | `*` | Comma-separated allowed origins |
 | `CCE_API_MAX_CONCURRENT_JOBS` | `2` | Parallel pipeline jobs |
 
@@ -411,7 +422,7 @@ modelled.
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `CCE_HUMANIZATION_ENABLED` | `true` | Master switch for scorer/editor/checker (on by default since 2026-06-24; set `false` to skip all three) |
-| `CCE_HUMANIZATION_MARKERS_PATH` | unset | Marker-lists file to use (must exist). Unset = `config/humanization_markers.yaml` in the working directory if present, else the lists packaged with cce |
+| `CCE_HUMANIZATION_MARKERS_PATH` | unset | Marker-lists file to use (must exist and be valid: known keys, each a list of strings). Unset = `config/humanization_markers.yaml` in the working directory if present, else the lists packaged with cce |
 
 Granular humanization thresholds are deliberately YAML-only (reviewable in
 diffs); env vars exist only for the master switch and the marker path.
