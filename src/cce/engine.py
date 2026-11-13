@@ -17,8 +17,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -34,7 +35,7 @@ from cce.jobs.store import JobStore
 from cce.models.job import Job, JobError, JobStage, JobStatus
 from cce.models.package import PublishPackage
 from cce.models.request import CurationRequest
-from cce.orchestrator.pipeline import Pipeline
+from cce.orchestrator.pipeline import Pipeline, PipelineResult
 from cce.policy.types import SourcePolicy
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,28 @@ _TERMINAL_STATUSES = {
     JobStatus.REVIEW_REQUIRED,
     JobStatus.READY_FOR_APPROVAL,
 }
+
+# A finished run's write-back survives a briefly locked database (OPS-05).
+_STORE_WRITE_ATTEMPTS = 3
+_STORE_WRITE_RETRY_DELAY_S = 0.2
+
+
+async def _store_write(write: Callable[..., Awaitable[None]], *args: object) -> None:
+    """Run a job-store write, retrying it on ``sqlite3.OperationalError``."""
+    for attempt in range(1, _STORE_WRITE_ATTEMPTS + 1):
+        try:
+            await write(*args)
+            return
+        except sqlite3.OperationalError as e:
+            if attempt == _STORE_WRITE_ATTEMPTS:
+                raise
+            logger.warning(
+                "Job store write failed (%s), attempt %d of %d",
+                e,
+                attempt,
+                _STORE_WRITE_ATTEMPTS,
+            )
+            await asyncio.sleep(_STORE_WRITE_RETRY_DELAY_S)
 
 
 async def run_pipeline_task(
@@ -65,12 +88,21 @@ async def run_pipeline_task(
     Updates job status through the lifecycle and stores the package whenever
     the pipeline produced one: also for a FAILED job whose earlier paths
     completed (their units only; emit-mdx still refuses it without --force).
+    The package is stored before the terminal status (COR-14), and both
+    writes are retried on ``sqlite3.OperationalError`` (OPS-05). When a
+    write still fails, the run's own status and error are written once more;
+    only a run that did not fail and whose package could not be stored is
+    recorded FAILED (``pipeline_error`` at ``publish``, stage records kept).
 
     ``on_error`` receives the exception that failed the run, in memory, before
     the terminal status is stored (embedded mode hands it to the JobHandle).
     It is never stored: the API passes nothing.
     """
     job: Job | None = None
+    result: PipelineResult | None = None
+    # True once the run's own status and error, now on `job`, are true as
+    # stored: at once for a FAILED run, else when its package is stored.
+    finished = False
     try:
         async with semaphore:
             job = await job_store.get_job(job_id)
@@ -88,12 +120,16 @@ async def run_pipeline_task(
             job.error = result.job.error
             job.stages = result.job.stages
             job.completed_at = result.job.completed_at or datetime.now(UTC)
-            await job_store.update_job(job)
+            finished = job.status is JobStatus.FAILED
 
-            # Store package if produced (remap job_id to our API job ID)
+            # Store package if produced (remap job_id to our API job ID),
+            # before the terminal status: no reader sees a finished job whose
+            # package is still to come (COR-14).
             if result.package:
                 package = result.package.model_copy(update={"job_id": job_id})
-                await job_store.store_package(job_id, package)
+                await _store_write(job_store.store_package, job_id, package)
+            finished = True
+            await _store_write(job_store.update_job, job)
 
     except asyncio.CancelledError:
         if job is None:
@@ -105,18 +141,23 @@ async def run_pipeline_task(
         raise
     except Exception as e:
         logger.exception("Pipeline failed for job %s: %s", job_id, e)
-        if on_error is not None:
+        if on_error is not None and not finished:
             on_error(e)
         if job is None:
             job = await job_store.get_job(job_id)
         if job:
-            job.status = JobStatus.FAILED
-            job.error = JobError(
-                code="pipeline_error",
-                message=str(e),
-                stage=job.stage or JobStage.DISCOVER,
-            )
-            job.completed_at = datetime.now(UTC)
+            # A finished run whose write-back failed keeps its own outcome,
+            # written once more (OPS-05).
+            if not finished:
+                job.status = JobStatus.FAILED
+                job.error = JobError(
+                    code="pipeline_error",
+                    message=str(e),
+                    # A run that returned failed storing its package.
+                    stage=job.stage
+                    or (JobStage.PUBLISH if result else JobStage.DISCOVER),
+                )
+                job.completed_at = datetime.now(UTC)
             await job_store.update_job(job)
     finally:
         # Only this run's own entry: a retry launched while this task was
@@ -249,9 +290,9 @@ class JobHandle:
         when no other process is running the job (OPS-04).
         """
         if self._engine is not None:
-            # A run whose status is already terminal may still be storing its
-            # package: let it finish so it can't land after this retry's
-            # delete_package (review of COR-02).
+            # A run whose status is already terminal may not have returned
+            # yet: let it finish before this retry's delete_package (review
+            # of COR-02; since COR-14 its package is stored before the status).
             tail = (self._running_tasks or {}).get(self._job_id)
             if tail is not None and not tail.done():
                 job = await self.status()
