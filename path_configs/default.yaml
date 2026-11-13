@@ -3,9 +3,9 @@
 # Tier B (2000 / 1500 / 1000 words, 40 / 30 / 20 evidence caps) is the
 # empirically validated sweet spot for this pipeline — see
 # docs/internal/research/content_length_tiers.md for the data. Copy this
-# file to your own <operator>.yaml and point at it via the pipeline's
-# path_configs_path; add operator-specific prompt addenda and section
-# requirements as needed.
+# file to your own <operator>.yaml and point at it via
+# CurationEngine.embedded(path_configs_path=...); add operator-specific
+# prompt addenda and section requirements as needed.
 
 paths:
   - id: learn

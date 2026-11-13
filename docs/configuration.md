@@ -78,10 +78,18 @@ test in `tests/test_components.py` enforces this).
    under the `taxonomies_dir` argument) as `taxonomy_path` when the file
    exists; parsing and plugin construction stay in
    `cce.components.build_components`.
-5. **Markers** — `load_markers(root / humanization.markers_path)` only when
-   `humanization.enabled` is true. A missing markers file raises — the one
-   intentional fail-fast surface (an operator who enabled humanization must
-   not silently ship unscored drafts).
+5. **Markers** — only when `humanization.enabled` is true. The first of:
+   `root / humanization.markers_path` when that setting is given;
+   `root / "config" / "humanization_markers.yaml"` when the file exists; the
+   lists packaged with cce (`src/cce/config/humanization_markers.yaml`).
+   Only an explicit `markers_path` that does not exist raises
+   (`ConfigError`) — the one intentional fail-fast surface (an operator who
+   named a markers file must not silently get other lists).
+6. **Model pricing** — the packaged price table
+   (`src/cce/config/model_pricing.yaml`), with
+   `root / "config" / "model_pricing.yaml"` on top when that file exists.
+   Forgiving: an override that fails to load is logged and skipped, and the
+   packaged prices are used.
 
 `CurationEngine.embedded()`'s `policies_dir` / `taxonomies_dir` /
 `path_configs_path` parameters feed these arguments directly (honored since
