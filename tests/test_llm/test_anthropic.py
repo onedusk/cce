@@ -740,3 +740,16 @@ async def test_request_keywords_are_ones_the_installed_sdk_accepts(
     assert "temperature" not in call_kwargs
     if model in ("claude-sonnet-4-6", "claude-haiku-4-5"):
         assert call_kwargs["extra_body"] == {"temperature": 0.1}
+
+
+@patch("cce.llm.anthropic.anthropic.AsyncAnthropic")
+async def test_close_closes_the_sdk_client(mock_cls: MagicMock) -> None:
+    """CRIT-04: the provider can release its HTTP client."""
+    mock_client = MagicMock()
+    mock_client.close = AsyncMock()
+    mock_cls.return_value = mock_client
+    provider = AnthropicProvider(_config())
+
+    await provider.close()
+
+    mock_client.close.assert_awaited_once_with()

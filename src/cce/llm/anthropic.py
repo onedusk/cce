@@ -244,6 +244,10 @@ class AnthropicProvider:
             stop_reason=response.stop_reason or "",
         )
 
+    async def close(self) -> None:
+        """Close the underlying HTTP client."""
+        await self._client.close()
+
     async def _default_max_tokens(self) -> int:
         """``llm.max_tokens`` if set, else the model's maximum output from the
         Models API (cached per process), else ``FALLBACK_MAX_TOKENS`` for

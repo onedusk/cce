@@ -25,7 +25,13 @@ from pathlib import Path
 
 import httpx
 
-from cce.components import ComponentOverrides, build_pipeline
+from cce.components import (
+    ComponentOverrides,
+    ComponentSet,
+    build_components,
+    build_pipeline,
+    close_components,
+)
 from cce.config.loader import load_config, validate_required_keys
 from cce.config.registry import ConfigRegistry
 from cce.config.types import EngineConfig
@@ -358,6 +364,8 @@ class CurationEngine:
         self._evidence_store: EvidenceStore | None = None
         # Stores this engine opened itself; injected stores stay the caller's.
         self._owned_stores: list[SQLiteEvidenceStore | JobStore] = []
+        # The set embedded() built: close() closes the providers built for it.
+        self._components: ComponentSet | None = None
         self._policies: dict[str, SourcePolicy] = {}
         self._running_tasks: dict[str, asyncio.Task] = {}
         self._semaphore: asyncio.Semaphore | None = None
@@ -381,7 +389,8 @@ class CurationEngine:
         ``policies_dir`` / ``taxonomies_dir`` / ``path_configs_path`` feed
         ``ConfigRegistry.load`` (M06) — the registry owns path selection.
         ``overrides`` injects the caller's LLM provider(s), crawl adapter or
-        embedding provider (B5); an injected provider needs no API key.
+        embedding provider (B5); an injected provider needs no API key and
+        is not closed by ``close()``.
 
         ``evidence_store`` / ``job_store`` (B6) are the supported way to keep
         tenants apart: one engine per tenant, each with its own stores.
@@ -430,8 +439,11 @@ class CurationEngine:
             engine._evidence_store = evidence_store
 
             # Build pipeline through the shared component factory (M05, ADR-001)
+            engine._components = build_components(
+                engine._config, registry, overrides=overrides
+            )
             engine._pipeline = build_pipeline(
-                engine._config, registry, engine._evidence_store, overrides=overrides
+                engine._config, registry, engine._evidence_store, engine._components
             )
         except BaseException:
             await engine.close()  # nobody else can: the engine is never returned
@@ -496,6 +508,8 @@ class CurationEngine:
         for store in self._owned_stores:
             await store.close()
         self._owned_stores.clear()
+        if self._components is not None:
+            await close_components(self._components)
         if self._http_client is not None:
             await self._http_client.aclose()
 
