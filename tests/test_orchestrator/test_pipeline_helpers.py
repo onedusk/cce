@@ -367,20 +367,78 @@ class TestApplyVerificationScores:
         draft_source to its default; model_copy + with_scores must not."""
         ev = make_evidence(tags=["sleep", "memory"])
         unit = make_content_unit(
+            content=f"Sleep helps memory [ev:{ev.id}].",
             citations=[Citation(evidence_id=ev.id, url=ev.url)],
             draft_source="editor",
             style_scores=_style_scores(humanization_pass=True),
         )
         report = make_verification_report()
+        lookup = {ev.id: ev}
 
-        result = Pipeline._apply_verification_scores(unit, report, {ev.id: ev})
+        result = Pipeline._apply_verification_scores(unit, report, lookup, lookup)
 
         assert result.draft_source == "editor"
         assert result.style_scores == unit.style_scores
         assert result.tags == ["memory", "sleep"]
         assert result.scores.confidence == report.confidence_score
         assert result.scores.coverage == report.pass_rate
-        assert result.scores.source_diversity == unit.scores.source_diversity
+        assert result.scores.source_diversity == 1.0
+
+    def test_citations_are_rebuilt_from_the_markers_in_the_content(self):
+        """COR-13: citations came from the model's citations_used list, which
+        can disagree with the markers the page's footnotes are built from.
+        They now follow the markers: first-appearance order, one per ID, in
+        the canonical ID form, and only IDs the path's evidence holds."""
+        a, b, c, unused = (
+            make_evidence(id=f"ev_{n}", url=f"https://{n}.example/x", tags=[n])
+            for n in ("aaa", "bbb", "ccc", "ddd")
+        )
+        beyond_cap = make_evidence(id="ev_eee", tags=["eee"])
+        content = (
+            "Second source first [ev:ev_bbb]. Bare form [ev_aaa]. No prefix "
+            "[ev:ccc]. Repeated [ev:ev_bbb]. Unknown [ev:ev_zzz]. Beyond the "
+            "path's cap [ev:ev_eee]."
+        )
+        unit = make_content_unit(
+            content=content,
+            # What the model listed: one cited ID missing, one never cited.
+            citations=[
+                Citation(evidence_id=a.id, url=a.url),
+                Citation(evidence_id=unused.id, url=unused.url),
+            ],
+        )
+        path_lookup = {ev.id: ev for ev in (a, b, c, unused)}
+        job_lookup = {**path_lookup, beyond_cap.id: beyond_cap}
+
+        result = Pipeline._apply_verification_scores(
+            unit, make_verification_report(), job_lookup, path_lookup
+        )
+
+        assert result.citations == [
+            Citation(evidence_id=ev.id, url=ev.url) for ev in (b, a, c)
+        ]
+        assert result.tags == ["aaa", "bbb", "ccc"]
+        # 3 of the path's 4 source URLs, as the writer computes it.
+        assert result.scores.source_diversity == 0.75
+        # Markers that don't resolve stay in the content, for the gate and emit.
+        assert result.content == content
+
+    def test_no_marker_means_no_citation_and_zero_diversity(self):
+        ev = make_evidence()
+        unit = make_content_unit(
+            content="No marker here.",
+            citations=[Citation(evidence_id=ev.id, url=ev.url)],
+        )
+        report = make_verification_report()
+
+        result = Pipeline._apply_verification_scores(
+            unit, report, {ev.id: ev}, {ev.id: ev}
+        )
+        no_evidence = Pipeline._apply_verification_scores(unit, report, {}, {})
+
+        assert result.citations == []
+        assert result.scores.source_diversity == 0.0
+        assert no_evidence.scores.source_diversity == 0.0
 
 
 # ---------------------------------------------------------------------------

@@ -19,11 +19,13 @@ from cce.orchestrator.pipeline import (
     _per_path_iteration_counts,
 )
 from cce.output.mdx.citations import build_citation_index
+from cce.output.mdx.evidence import export_evidence
 from cce.verification.gate import GateDecision
 from tests.conftest import (
     MockCrawlAdapter,
     MockLLMProvider,
     cite_prompt_evidence,
+    make_crawl_result,
     make_curation_request,
     make_engine_config,
     make_source_policy,
@@ -62,6 +64,61 @@ async def test_pipeline_happy_path(sqlite_store):
     assert result.package is not None
     assert len(result.package.units) == 1
     assert result.job.status == JobStatus.COMPLETED
+
+
+@pytest.mark.integration
+async def test_unit_citations_follow_the_markers_not_citations_used(sqlite_store):
+    """COR-13: the draft cites two sources inline but citations_used lists
+    one. The page footnotes both (from the markers); unit.citations, and so
+    _evidence.json and source_diversity, used to cover only the listed one."""
+    urls = ["https://one.example/a", "https://two.example/a"]
+    adapter = MockCrawlAdapter(
+        search_map={"test topic": urls},
+        url_map={
+            url: make_crawl_result(
+                url=url,
+                markdown=(
+                    f"Source {i} says adults who sleep eight hours remember "
+                    "more of what they studied the day before."
+                ),
+            )
+            for i, url in enumerate(urls)
+        },
+    )
+    writer = json.dumps(
+        {
+            "content": (
+                "Sleep helps memory in adults [ev:ev_001]. A second source "
+                "agrees with that finding [ev:ev_002]."
+            ),
+            "citations_used": ["ev_001"],
+            "evidence_map": [{"claim": "c", "evidence_ids": ["ev_001"]}],
+            "gaps": [],
+        }
+    )
+    pipeline = Pipeline(
+        config=make_engine_config(),
+        crawl_adapter=adapter,
+        evidence_store=sqlite_store,
+        llm=_llm(writer, _verifier_json(supported=10, total=10, gaps=0)),
+    )
+
+    result = await pipeline.run(make_curation_request(), make_source_policy())
+
+    assert result.job.status == JobStatus.COMPLETED
+    [unit] = result.package.units
+    by_id = {ev.id: ev for ev in result.package.evidence}
+    footnoted = [
+        c.id
+        for c in build_citation_index(
+            unit.content, by_id, citation_key="evidence"
+        ).citations
+    ]
+    assert len(footnoted) == 2
+    assert [c.evidence_id for c in unit.citations] == footnoted
+    assert unit.scores.source_diversity == 1.0
+    sidecar = json.loads(export_evidence([unit], by_id, path_order=("blog",)))
+    assert [entry["id"] for entry in sidecar] == footnoted
 
 
 @pytest.mark.integration
