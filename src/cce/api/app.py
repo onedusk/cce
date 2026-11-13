@@ -186,10 +186,18 @@ def create_app(
     if config is None:
         config = load_config()
 
+    # With auth on, health and meta are the whole public set: the docs pages
+    # and the schema URL are not served (SEC-09). app.openapi() still works.
+    docs_urls: dict[str, Any] = (
+        {"docs_url": None, "redoc_url": None, "openapi_url": None}
+        if config.api.require_auth
+        else {}
+    )
     app = FastAPI(
         title="Content Curation Engine",
         version=config.engine_version,
         lifespan=lifespan,
+        **docs_urls,
     )
 
     # Store config and overrides for the lifespan to consume
