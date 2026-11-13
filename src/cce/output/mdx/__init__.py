@@ -25,11 +25,17 @@ from cce.output.mdx.meta import merge_topic_meta
 # strips them from the body and reports the descriptions in meta.json so
 # operators can see what was missing without readers seeing literal
 # placeholder text in published copy.
-_GAP_RE = re.compile(r"\[INSUFFICIENT EVIDENCE:\s*([^\]]*)\]", re.DOTALL)
+# The description is optional (COR-12) and ends at a line break or an
+# opening bracket (SEC-13): an unclosed marker matches nothing, so it can't
+# take the next paragraph or citation with it.
+_GAP_RE = re.compile(r"\[INSUFFICIENT EVIDENCE(?::[ \t]*([^\]\[\n]*))?\]")
 
 
 def _strip_evidence_gaps(content: str) -> tuple[str, list[str]]:
     """Remove [INSUFFICIENT EVIDENCE: ...] markers; return cleaned content + descriptions.
+
+    An unclosed marker, or one with a bracket or line break inside, is not a
+    marker and stays in the text.
 
     Inline markers leave a trailing punctuation hole in their host sentence
     (e.g. "the mechanisms are ."). That's acceptable: the alternative is
@@ -40,7 +46,7 @@ def _strip_evidence_gaps(content: str) -> tuple[str, list[str]]:
     gaps: list[str] = []
 
     def _collect(m: re.Match) -> str:
-        text = m.group(1).strip()
+        text = (m.group(1) or "").strip()
         if text:
             gaps.append(text)
         return ""

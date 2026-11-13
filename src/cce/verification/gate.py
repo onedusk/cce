@@ -26,7 +26,7 @@ MIN_SUBSTANTIVE_WORDS = 15  # min words for a paragraph to be checked for citati
 # The writer's gap marker, in the grammar emit strips from the page
 # (output/mdx _GAP_RE), so a draft the gate calls empty is one emit would
 # write as an empty page.
-_GAP_MARKER_RE = re.compile(r"\[INSUFFICIENT EVIDENCE:\s*([^\]]*)\]", re.DOTALL)
+_GAP_MARKER_RE = re.compile(r"\[INSUFFICIENT EVIDENCE(?::[ \t]*([^\]\[\n]*))?\]")
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +44,9 @@ def _strip_headings(text: str) -> str:
 
 
 def _published_text(content: str) -> str:
-    """The body as emit publishes it: gap markers removed. A citation the
-    writer put inside a gap marker goes with it, so it can't count here."""
+    """The body as emit publishes it: gap markers removed. An unclosed
+    marker, or one with a citation inside, is not a marker for emit either
+    and stays in the text."""
     return _GAP_MARKER_RE.sub("", content)
 
 
@@ -163,9 +164,9 @@ class QualityGate:
 
         if empty_draft:
             feedback_parts.append(
-                "The draft has no text once headings and [INSUFFICIENT EVIDENCE] "
-                "markers are removed. Write what the evidence supports and cite "
-                "it with [ev:ID] markers."
+                "The draft has no text once headings and [INSUFFICIENT EVIDENCE: "
+                "...] markers are removed. Write what the evidence supports and "
+                "cite it with [ev:ID] markers."
             )
         elif uncited_draft and not unresolved:
             feedback_parts.append(
@@ -183,7 +184,8 @@ class QualityGate:
         if report.uncited > 0:
             feedback_parts.append(
                 f"{report.uncited} factual claim(s) have no citations. "
-                f"Add [ev:ID] citations or mark as [INSUFFICIENT EVIDENCE]."
+                f"Add [ev:ID] citations or mark as [INSUFFICIENT EVIDENCE: "
+                f"<description of what's missing>]."
             )
 
         if report.leakage > 0:
