@@ -53,6 +53,12 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
     return dot / (norm_a * norm_b)
 
 
+def _encodable(text: str) -> str:
+    """``text`` with anything UTF-8 cannot encode (a lone surrogate) replaced
+    by "?": one such character in a crawled page failed the job (SEC-11)."""
+    return text.encode("utf-8", "replace").decode("utf-8")
+
+
 _CRAWL_FAILURE_WARN_THRESHOLD = 0.3
 SEARCH_RESULT_LIMIT = 20  # max URLs from search
 MIN_FRAGMENT_SIZE = 50  # min chars for evidence excerpt
@@ -511,6 +517,18 @@ class Discoverer:
             ):
                 logger.debug("Skipping empty or failed crawl: %s", result.url)
                 continue
+            # An adapter may report a redirected URL or add child pages: the
+            # URL a result is stored under passes the same checks as a
+            # candidate, or it is a failed crawl too (SEC-03).
+            if not (
+                self._passes_policy(result.url, effective_policy)
+                and self._passes_constraints(result.url, constraints)
+            ):
+                logger.warning(
+                    "Skipping crawl result outside the source policy: %.80r",
+                    result.url,
+                )
+                continue
 
             good_results += 1
             extracted, n_chunks = self._extract_evidence_counted(
@@ -819,7 +837,7 @@ class Discoverer:
     ) -> tuple[list[Evidence], int]:
         """``_extract_evidence`` plus the number of chunks considered, so the
         caller can count those dropped as too short (B10)."""
-        chunks = self._chunk_content(result.markdown)
+        chunks = self._chunk_content(_encodable(result.markdown))
         now = datetime.now(UTC)
 
         quality = SourceQuality(
@@ -877,8 +895,8 @@ class Discoverer:
                 Evidence(
                     id=f"ev_{uuid.uuid4().hex[:12]}",
                     url=result.url,
-                    title=title or None,
-                    author=author or None,
+                    title=_encodable(title) if title else None,
+                    author=_encodable(author) if author else None,
                     published_at=published_at,
                     retrieved_at=now,
                     excerpt=text,
