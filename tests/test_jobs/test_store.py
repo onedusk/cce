@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import sqlite3
+from pathlib import Path
+
 import pytest
 
 from cce.jobs.store import JOB_SCHEMA_VERSION, JobStore
@@ -231,3 +235,70 @@ async def test_package_verification_survives_the_store(job_store: JobStore):
     loaded = await job_store.get_package("job_ver")
     assert loaded is not None
     assert loaded.verification == pkg.verification
+
+
+# ---------------------------------------------------------------------------
+# Failed writes (OPS-05)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def lock_holder(tmp_path: Path, job_store: JobStore):
+    """A second connection to the store's file; the store gives up on a lock
+    after 50 ms instead of 5 s."""
+    assert job_store._db is not None
+    await job_store._db.execute("PRAGMA busy_timeout=50")
+    holder = sqlite3.connect(tmp_path / "test_jobs.db", isolation_level=None)
+    yield holder
+    holder.close()
+
+
+def _hold_write_lock(holder: sqlite3.Connection) -> None:
+    holder.execute("BEGIN IMMEDIATE")
+    holder.execute("UPDATE jobs SET topic = topic")
+
+
+async def test_failed_write_is_rolled_back(job_store: JobStore, lock_holder):
+    """A write that fails on a locked database leaves no open transaction: a
+    read in it would pin a snapshot that fails every write after the lock
+    holder commits."""
+    job = make_job()
+    await job_store.create_job(job)
+    _hold_write_lock(lock_holder)
+
+    job.status = JobStatus.RUNNING
+    with pytest.raises(sqlite3.OperationalError, match="locked"):
+        await job_store.update_job(job)
+    assert job_store._db is not None
+    assert not job_store._db.in_transaction
+
+    await job_store.get_job(job.id)
+    lock_holder.execute("COMMIT")
+    await job_store.update_job(job)
+
+    stored = await job_store.get_job(job.id)
+    assert stored is not None
+    assert stored.status is JobStatus.RUNNING
+
+
+async def test_failed_write_does_not_discard_a_concurrent_write(
+    job_store: JobStore, lock_holder
+):
+    """Writes are serialised, so the rollback of one task's failed write
+    cannot take another task's uncommitted statement with it."""
+    first, second = make_job(), make_job()
+    await job_store.create_job(first)
+    await job_store.create_job(second)
+    _hold_write_lock(lock_holder)
+
+    async def _failing_write() -> None:
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            await job_store.update_job(first)
+        lock_holder.execute("COMMIT")
+
+    second.status = JobStatus.COMPLETED
+    await asyncio.gather(_failing_write(), job_store.update_job(second))
+
+    stored = await job_store.get_job(second.id)
+    assert stored is not None
+    assert stored.status is JobStatus.COMPLETED

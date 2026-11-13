@@ -244,9 +244,14 @@ class AnthropicProvider:
             stop_reason=response.stop_reason or "",
         )
 
+    async def close(self) -> None:
+        """Close the underlying HTTP client."""
+        await self._client.close()
+
     async def _default_max_tokens(self) -> int:
         """``llm.max_tokens`` if set, else the model's maximum output from the
-        Models API (cached per process), else ``FALLBACK_MAX_TOKENS``."""
+        Models API (cached per process), else ``FALLBACK_MAX_TOKENS`` for
+        this call only."""
         if self._config.max_tokens is not None:
             return self._config.max_tokens
         model = self._config.model
@@ -264,7 +269,8 @@ class AnthropicProvider:
                     type(e).__name__,
                     FALLBACK_MAX_TOKENS,
                 )
-                _MODEL_MAX_TOKENS[model] = FALLBACK_MAX_TOKENS
+                # Not cached: the next call looks the model up again (COR-15).
+                return FALLBACK_MAX_TOKENS
         return _MODEL_MAX_TOKENS[model]
 
     @staticmethod
