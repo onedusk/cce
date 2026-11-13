@@ -50,7 +50,7 @@ class HumanizationMarkers(BaseModel):
         ),
     )
 
-    model_config = {"frozen": True}
+    model_config = {"frozen": True, "extra": "forbid"}
 
     def compiled_contrastive_patterns(
         self,
@@ -76,7 +76,9 @@ def load_markers(path: str | Path | None = None) -> HumanizationMarkers:
     (``cce/config/humanization_markers.yaml``), so an installed wheel works
     with no file in the working directory. With a path, raises
     FileNotFoundError if it is missing — humanization must not silently fall
-    back to another marker set when the operator named one.
+    back to another marker set when the operator named one. Raises pydantic's
+    ValidationError for an unknown key or a value that is not a list of
+    strings (CRIT-03: a string value used to load as single characters).
     """
     if path is None:
         packaged = resources.files("cce.config").joinpath(PACKAGED_MARKERS)
@@ -88,12 +90,4 @@ def load_markers(path: str | Path | None = None) -> HumanizationMarkers:
         with p.open() as f:
             data = yaml.safe_load(f) or {}
 
-    return HumanizationMarkers(
-        suppressed_vocabulary=list(data.get("suppressed_vocabulary", [])),
-        hedging_phrases=list(data.get("hedging_phrases", [])),
-        formulaic_transitions=list(data.get("formulaic_transitions", [])),
-        contrastive_patterns=list(data.get("contrastive_patterns", [])),
-        contrastive_parasitic_patterns=list(
-            data.get("contrastive_parasitic_patterns", [])
-        ),
-    )
+    return HumanizationMarkers.model_validate(data)
