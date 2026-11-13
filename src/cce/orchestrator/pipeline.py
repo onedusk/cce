@@ -1569,7 +1569,13 @@ class PipelineResult:
 
     @property
     def succeeded(self) -> bool:
+        """COMPLETED only: a passed run held for approval
+        (``publish_policy: human``) is ``ready_for_approval``, not this."""
         return self.package is not None and self.job.status == JobStatus.COMPLETED
+
+    @property
+    def ready_for_approval(self) -> bool:
+        return self.job.status == JobStatus.READY_FOR_APPROVAL
 
     @property
     def needs_review(self) -> bool:

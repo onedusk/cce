@@ -58,6 +58,7 @@ async def test_pipeline_happy_path(sqlite_store):
     result = await pipeline.run(make_curation_request(), make_source_policy())
 
     assert result.succeeded is True
+    assert result.ready_for_approval is False
     assert result.package is not None
     assert len(result.package.units) == 1
     assert result.job.status == JobStatus.COMPLETED
@@ -816,6 +817,9 @@ async def test_human_publish_policy_passed_run_awaits_approval(sqlite_store):
     assert result.package is not None
     assert result.package.verification[0].decision == "pass"
     assert result.succeeded is False
+    # CR-16: the run has a true state of its own, not three False ones.
+    assert result.ready_for_approval is True
+    assert (result.needs_review, result.failed) == (False, False)
 
 
 @pytest.mark.integration
