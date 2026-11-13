@@ -178,6 +178,10 @@ async def test_unauthenticated_error_body_carries_request_id(tmp_path: Path):
         assert resp.status_code == 401
         header_id = resp.headers.get("X-Request-ID")
         assert header_id is not None and header_id.startswith("req_")
+        err = resp.json()["error"]
+        assert err["code"] == "unauthorized"
+        assert err["message"] == "Missing authentication token"
+        assert err["request_id"] == header_id
     finally:
         await job_store.close()
         await evidence_store.close()

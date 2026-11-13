@@ -5,12 +5,15 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from http import HTTPStatus
 from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from cce.api.auth import auth_dependency, make_auth_dependency
 from cce.api.middleware import (
@@ -19,7 +22,7 @@ from cce.api.middleware import (
     get_request_id,
     install_body_size_limit,
 )
-from cce.api.schemas import error_envelope
+from cce.api.schemas import error_envelope, error_responses
 from cce.components import build_pipeline
 from cce.config.loader import ConfigError, load_config, validate_required_keys
 from cce.config.registry import ConfigRegistry
@@ -248,13 +251,57 @@ def create_app(
             ).model_dump(),
         )
 
+    # Framework errors use the envelope too (CR-07): 401 from auth, unknown
+    # route, wrong method.
+    @app.exception_handler(StarletteHTTPException)
+    async def _http_exception(
+        request: Request, exc: StarletteHTTPException
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=error_envelope(
+                code=HTTPStatus(exc.status_code).name.lower(),
+                message=str(exc.detail),
+                request_id=get_request_id(),
+            ).model_dump(),
+            headers=exc.headers,
+        )
+
+    # Request validation: the message names each rule by location, never the
+    # rejected input (pinned context can be confidential).
+    @app.exception_handler(RequestValidationError)
+    async def _request_validation(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=422,
+            content=error_envelope(
+                code="invalid_request",
+                message="; ".join(
+                    f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}"
+                    for err in exc.errors()
+                ),
+                request_id=get_request_id(),
+            ).model_dump(),
+        )
+
     # Route registration
     from cce.api.routes.evidence import router as evidence_router
     from cce.api.routes.jobs import router as jobs_router
     from cce.api.routes.meta import router as meta_router
 
-    app.include_router(jobs_router, dependencies=[Depends(auth_dependency)])
-    app.include_router(evidence_router, dependencies=[Depends(auth_dependency)])
+    # 401 comes from the auth dependency; 422 is declared on every route so
+    # the schema shows the envelope, not FastAPI's default validation body.
+    app.include_router(
+        jobs_router,
+        dependencies=[Depends(auth_dependency)],
+        responses=error_responses(401, 422),
+    )
+    app.include_router(
+        evidence_router,
+        dependencies=[Depends(auth_dependency)],
+        responses=error_responses(401, 422),
+    )
     app.include_router(meta_router)  # intentionally unauthed (health, meta)
 
     return app

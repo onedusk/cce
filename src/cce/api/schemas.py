@@ -12,7 +12,7 @@ from typing import Any, Generic, TypeVar
 from pydantic import BaseModel, Field
 
 from cce.models.evidence import Evidence
-from cce.models.job import Job
+from cce.models.job import Job, JobStatus
 from cce.models.request import CurationConstraints, CurationRequest
 
 T = TypeVar("T")
@@ -89,6 +89,11 @@ def error_envelope(
     )
 
 
+def error_responses(*status_codes: int) -> dict[int | str, dict[str, Any]]:
+    """OpenAPI ``responses`` entries: the error envelope at these statuses."""
+    return {status: {"model": APIEnvelope[None]} for status in status_codes}
+
+
 # ---------------------------------------------------------------------------
 # Job schemas
 # ---------------------------------------------------------------------------
@@ -104,7 +109,7 @@ class JobResponse(BaseModel):
     """
 
     id: str
-    status: str
+    status: JobStatus
     topic: str
     policy_id: str
     request: CurationRequest
@@ -204,7 +209,7 @@ def job_to_response(job: Job) -> JobResponse:
     """Convert an internal Job model to the API-facing JobResponse."""
     return JobResponse(
         id=job.id,
-        status=job.status.value,
+        status=job.status,
         topic=job.request.topic,
         policy_id=job.request.policy_id,
         request=job.request,
