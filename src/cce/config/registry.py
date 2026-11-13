@@ -121,7 +121,8 @@ class ConfigRegistry:
             if candidate.exists():
                 loaded = load_path_configs(candidate)
                 if loaded:
-                    path_configs = loaded
+                    # A copy: the loader caches one dict per path (CR-13).
+                    path_configs = dict(loaded)
                     logger.info(
                         "Path configs loaded from %s: %s",
                         candidate,
