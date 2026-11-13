@@ -23,7 +23,12 @@ from cce.api.middleware import (
     install_body_size_limit,
 )
 from cce.api.schemas import error_envelope, error_responses
-from cce.components import build_pipeline
+from cce.components import (
+    ComponentSet,
+    build_components,
+    build_pipeline,
+    close_components,
+)
 from cce.config.loader import ConfigError, load_config, validate_required_keys
 from cce.config.registry import ConfigRegistry
 from cce.config.types import EngineConfig
@@ -68,6 +73,8 @@ async def lifespan(app: FastAPI):
     registry: ConfigRegistry | None = None
 
     # -- Pipeline --
+    # The set this lifespan built: its providers are closed at shutdown.
+    components: ComponentSet | None = None
     pipeline = overrides.get("pipeline")
     if pipeline is None:
         # Production branch only (tests inject a pipeline): fail fast with
@@ -75,12 +82,13 @@ async def lifespan(app: FastAPI):
         # ADR-006). SystemExit instead of letting ConfigError propagate —
         # Starlette formats propagated lifespan exceptions as full tracebacks
         # in uvicorn's log; the operator should see one actionable line.
-        # The registry load and the providers built in _build_pipeline (e.g.
+        # The registry load and the providers built in build_components (e.g.
         # thinking: disabled on a model that rejects it) raise ConfigError too.
         try:
             validate_required_keys(config)
             registry = ConfigRegistry.load(Path("."), engine=config)
-            pipeline = _build_pipeline(config, evidence_store, registry)
+            components = build_components(config, registry)
+            pipeline = build_pipeline(config, registry, evidence_store, components)
         except ConfigError as e:
             logger.error("Configuration error: %s", e)
             raise SystemExit(1) from None
@@ -159,6 +167,10 @@ async def lifespan(app: FastAPI):
             logger.info(
                 "Marked %d orphaned RUNNING job(s) as FAILED", len(running_jobs)
             )
+
+    # 3. Close the HTTP clients of the providers built here (CRIT-04)
+    if components is not None:
+        await close_components(components)
 
     if "evidence_store" in locally_created:
         await evidence_store.close()
